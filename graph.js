@@ -176,7 +176,7 @@ async function ensureLogSheet() {
     await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='A1:F1')/format/font", { color: "#FFFFFF" });
     /* Excel turns a date-like string into a serial number; give the column a
        date format so it reads properly and still sorts as a real date. */
-    const fmt = []; for (let i = 0; i < 1999; i++) fmt.push(["dd/mm/yyyy hh:mm"]);
+    const fmt = []; for (let i = 0; i < 1999; i++) fmt.push(["@"]);   // text: no locale guessing
     await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='A2:A2000')", { numberFormat: fmt });
     const widths = { A: 130, B: 220, C: 70, D: 230, E: 150, F: 190 };
     for (const col in widths)
@@ -195,10 +195,14 @@ async function appendLog(who, job, what, from, to) {
     const next = (used.rowCount || 1) + 1;
     const when = new Date();
     const pad = n => (n < 10 ? "0" : "") + n;
-    const stampStr = pad(when.getDate()) + "/" + pad(when.getMonth() + 1) + "/" + when.getFullYear() +
+    /* ISO order, written as text. "03/09/2026" is read as 9 March by a US-locale
+       Excel and 3 September by an Irish one; this is the same everywhere, and
+       still sorts correctly because ISO sorts lexicographically. */
+    const stampStr = when.getFullYear() + "-" + pad(when.getMonth() + 1) + "-" + pad(when.getDate()) +
                      " " + pad(when.getHours()) + ":" + pad(when.getMinutes());
     await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='A" + next + ":F" + next + "')",
-      { values: [[stampStr, who || "unknown", job, what, String(from == null ? "" : from), String(to == null ? "" : to)]] });
+      { values: [[stampStr, who || "unknown", job, what, String(from == null ? "" : from), String(to == null ? "" : to)]],
+        numberFormat: [["@", "@", "@", "@", "@", "@"]] });
     return true;
   } catch (e) {
     console.warn("log append failed:", e.message);

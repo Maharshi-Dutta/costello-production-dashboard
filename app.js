@@ -115,8 +115,8 @@ function updateChangeBtn() {
 }
 
 /* ---------- load ---------- */
-async function load(reason) {
-  if (busy) return;
+async function load(reason, force) {
+  if (busy && !force) return;
   busy = true;
   setStatus(reason || "reading sheet…", "busy");
   try {
@@ -381,7 +381,7 @@ function renderDrawer() {
         const row = await markReady(j, turningOn);
         noteChange(j.id, "Ready to deliver", turningOn ? "no" : "yes", turningOn ? "yes" : "no");
         toast(j.id + (turningOn ? " marked ready to deliver (row " + row + " set gold)" : " put back into production"));
-        await load("re-reading…");
+        await load("re-reading…", true);
       } catch (e) {
         toast(friendly(e), true);
         mr.disabled = false; renderDrawer();
@@ -397,7 +397,7 @@ function renderDrawer() {
           await setProductStatus(j, name, val);
           noteChange(j.id, cap(name) + " status", PSTAT[was[0] || ""] || "none", PSTAT[val] || "none");
           toast(cap(name) + " → " + (PSTAT[val] || "cleared"));
-          await load("re-reading…");
+          await load("re-reading…", true);
         } catch (e) {
           toast(friendly(e), true);
           sel.disabled = false;
@@ -410,7 +410,10 @@ function renderDrawer() {
 /* ---------- changes window ---------- */
 let cf = { q: "", who: "", src: "" };
 function stamp(v) {
-  if (typeof v === "string" && v.indexOf("/") > 0) return v;      // already dd/mm/yyyy hh:mm from the sheet
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) {   // ISO from the log sheet
+    return v.slice(8, 10) + "/" + v.slice(5, 7) + "  " + v.slice(11, 16);
+  }
+  if (typeof v === "string" && v.indexOf("/") > 0) return v;
   const d = new Date(v), p = n => (n < 10 ? "0" : "") + n;
   return isNaN(d) ? String(v) : p(d.getDate()) + "/" + p(d.getMonth() + 1) + "  " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
