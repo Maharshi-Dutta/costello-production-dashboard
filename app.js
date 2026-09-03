@@ -55,7 +55,30 @@ function applyPending(list) {
 let CHANGES = [];                     // what has changed while this page has been open
 try { CHANGES = JSON.parse(localStorage.getItem("cw_changes") || "[]"); } catch (e) { CHANGES = []; }
 const saveChanges = () => { try { localStorage.setItem("cw_changes", JSON.stringify(CHANGES.slice(0, 400))); } catch (e) {} };
-let state = { q: "", cat: null, sheet: null, sort: "id", sel: null, edit: false };
+let state = { q: "", cat: null, sheet: null, sort: "id", desc: false, sel: null, edit: false,
+              scope: "", view: "flat", picked: {}, collapsed: {}, hidden: {} };
+let VIEWS = {};            // view name -> { job -> {group, order} }  (from the workbook)
+let BLOCKNAMES = [];
+try { state.hidden = JSON.parse(localStorage.getItem("cw_hidden") || "{}"); } catch (e) {}
+try { state.collapsed = JSON.parse(localStorage.getItem("cw_collapsed") || "{}"); } catch (e) {}
+const saveUi = () => { try {
+  localStorage.setItem("cw_hidden", JSON.stringify(state.hidden));
+  localStorage.setItem("cw_collapsed", JSON.stringify(state.collapsed));
+} catch (e) {} };
+const viewNames = () => Object.keys(VIEWS).sort();
+/** which group a job sits in, for a given view: an explicit placement wins,
+    otherwise its natural block from the Production sheet. */
+function groupOf(j, view) {
+  const v = VIEWS[view];
+  if (v && v[j.id] && v[j.id].group !== "") return Number(v[j.id].group);
+  return j.blk;
+}
+function inView(j, view) {
+  if (view === "flat") return true;
+  const v = VIEWS[view] || {};
+  if (view === "Abin") return j.blk >= 0;          // the whole sheet, grouped
+  return !!v[j.id];                                 // custom views: only what was put there
+}
 
 const live = () => ALL.filter(j => j.cat !== "past");
 const byId = id => ALL.find(j => j.id === id);
@@ -159,7 +182,10 @@ async function load(reason, force) {
     const wb = await CW.downloadWorkbook();
     const tDown = performance.now() - t0;
     const prev = ALL;
-    ALL = applyPending(parseWorkbook(wb));   // our own recent writes win over a stale file
+    const parsed = parseWorkbook(wb);
+    BLOCKNAMES = parsed.blockNames || [];
+    ALL = applyPending(parsed);   // our own recent writes win over a stale file
+    ALL.blockNames = BLOCKNAMES;
     const ps = wb.getWorksheet("Production");
     PRODMAP = ps ? mapSheet(ps) : null;
     const m = await CW.lastModified();
@@ -171,6 +197,20 @@ async function load(reason, force) {
     setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
               (held ? " · " + held + " just changed" : " · " + (tAll / 1000).toFixed(1) + "s"));
     $("#srcinfo").textContent = "Production sheet · last edited by " + (m.by || "unknown");
+    BLOCKNAMES = ALL.blockNames || parseWorkbook.__names || [];
+    /* saved views: decisions only, never job data - so they cannot go stale */
+    const vw = wb.getWorksheet("Dashboard Views");
+    if (vw) {
+      const next = {};
+      for (let r = 2; r <= (vw.rowCount || 0); r++) {
+        const row = vw.getRow(r);
+        const t = i => { const v = row.getCell(i).value; return v == null ? "" : (v.text != null ? v.text : String(v)); };
+        const view = t(1).trim(), job = t(2).trim().toUpperCase();
+        if (!view || !job) continue;
+        (next[view] = next[view] || {})[job] = { group: t(3).trim(), order: Number(t(4)) || 0 };
+      }
+      VIEWS = next;
+    }
     /* the shared history lives in the workbook, so everyone sees the same list */
     const logWs = wb.getWorksheet("Dashboard Log");
     if (logWs) {
@@ -256,10 +296,14 @@ async function setProductStatus(job, prodName, status) {
 /* ---------- render ---------- */
 function filtered() {
   const q = state.q.trim().toLowerCase();
+  const scope = state.scope;
   let list = live().filter(j => {
+    if (state.view !== "flat" && !inView(j, state.view)) return false;
+    if (scope && catOf(j) !== scope) return false;
     if (state.cat === "urgent") { if (!j.urg) return false; }
     else if (state.cat === "inprod") { if (["floor", "ready", "office"].indexOf(catOf(j)) < 0) return false; }
     else if (state.cat && catOf(j) !== state.cat) return false;
+    if (state.hidden[catOf(j)]) return false;
     if (state.sheet && j.sheets.indexOf(state.sheet) < 0) return false;
     if (!q) return true;
     return (j.id + " " + j.cust + " " + j.area + " " + j.eir + " " + j.off + " " +
@@ -273,6 +317,7 @@ function filtered() {
     : s === "urgent" ? (a, b) => ((b.urg ? 1 : 0) - (a.urg ? 1 : 0)) || bi(a, b)
     : s === "cat" ? (a, b) => (CATORDER.indexOf(catOf(a)) - CATORDER.indexOf(catOf(b))) || bi(a, b)
     : bi);
+  if (state.desc) list.reverse();
   return list;
 }
 
@@ -300,52 +345,230 @@ function renderTiles() {
 function renderChips() {
   const c = $("#chips"); c.innerHTML = "";
   const all = live();
-  const lab = document.createElement("span"); lab.className = "kick"; lab.textContent = "Sheet"; c.appendChild(lab);
-  const ssel = document.createElement("select"); ssel.className = "txt";
+  const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+
+  c.appendChild(mk("span", "kick", "View"));
+  const vsel = mk("select", "txt");
+  vsel.innerHTML = '<option value="flat">Flat list</option><option value="Abin">Abin — sheet order, grouped</option>' +
+    viewNames().filter(v => v !== "Abin").map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join("");
+  vsel.value = state.view;
+  vsel.onchange = () => { state.view = vsel.value; state.picked = {}; renderAll(); };
+  c.appendChild(vsel);
+
+  c.appendChild(mk("span", "kick", "Sheet"));
+  const ssel = mk("select", "txt");
   ssel.innerHTML = '<option value="">All sheets (' + all.length + ')</option>' +
-    SHEETNAMES.map(s => {
-      const n = all.filter(j => j.sheets.indexOf(s) >= 0).length;
-      return n ? '<option value="' + s + '"' + (state.sheet === s ? " selected" : "") + '>' + s + " (" + n + ")</option>" : "";
-    }).join("");
+    SHEETNAMES.map(s => { const n = all.filter(j => j.sheets.indexOf(s) >= 0).length;
+      return n ? '<option value="' + s + '"' + (state.sheet === s ? " selected" : "") + '>' + s + " (" + n + ")</option>" : ""; }).join("");
   ssel.onchange = () => { state.sheet = ssel.value || null; renderAll(); };
   c.appendChild(ssel);
-  const sp = document.createElement("span"); sp.style.marginLeft = "auto"; sp.className = "kick"; sp.textContent = "Sort by"; c.appendChild(sp);
-  const sort = document.createElement("select"); sort.className = "txt";
+
+  const catsBtn = mk("button", "chip", "Categories…");
+  catsBtn.onclick = () => renderCatMenu(catsBtn);
+  c.appendChild(catsBtn);
+
+  const nsel = Object.keys(state.picked).length;
+  if (nsel) {
+    const b = mk("button", "chip", nsel + " selected — move to…");
+    b.style.cssText = "background:var(--accent);color:#fff;border-color:var(--accent)";
+    b.onclick = () => renderMoveMenu(b);
+    c.appendChild(b);
+    const cl = mk("button", "chip", "clear");
+    cl.onclick = () => { state.picked = {}; renderAll(); };
+    c.appendChild(cl);
+  }
+
+  const sp = mk("span", "kick", "Sort by"); sp.style.marginLeft = "auto"; c.appendChild(sp);
+  const sort = mk("select", "txt");
   sort.innerHTML = SORTS.map(p => '<option value="' + p[0] + '"' + (state.sort === p[0] ? " selected" : "") + '>' + p[1] + "</option>").join("");
-  sort.onchange = () => { state.sort = sort.value; renderRows(); };
+  sort.onchange = () => { state.sort = sort.value; state.desc = false; renderRows(); renderChips(); };
   c.appendChild(sort);
+  const dir = mk("button", "chip", state.desc ? "▼ reversed" : "▲ normal");
+  dir.title = "Click to flip the order";
+  dir.onclick = () => { state.desc = !state.desc; renderRows(); renderChips(); };
+  c.appendChild(dir);
+}
+
+/** Which categories to show. Hiding is per person and remembered. */
+function renderCatMenu(anchor) {
+  const old = $("#catmenu"); if (old) { old.remove(); return; }
+  const cats = [["deliver", "Ready to deliver"], ["floor", "On floor"], ["ready", "Waiting for floor"],
+                ["office", "In office"], ["collect", "Collect & supply"], ["wonttake", "Won't take"],
+                ["secondhand", "Second hand"]];
+  const m = document.createElement("div"); m.id = "catmenu"; m.className = "menu";
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
+  m.innerHTML = '<div class="kick" style="padding:4px 10px 8px">Show which categories</div>' +
+    cats.map(cc => '<label class="mrow"><input type="checkbox" data-k="' + cc[0] + '"' +
+      (state.hidden[cc[0]] ? "" : " checked") + '> ' + cc[1] +
+      ' <span style="color:var(--ink-4)">' + live().filter(j => catOf(j) === cc[0]).length + '</span></label>').join("") +
+    '<div style="display:flex;gap:6px;padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:6px">' +
+    '<button class="chip" id="mall">Show all</button><button class="chip" id="mnone">Hide all</button></div>';
+  document.body.appendChild(m);
+  m.querySelectorAll("input").forEach(i => i.onchange = () => {
+    if (i.checked) delete state.hidden[i.dataset.k]; else state.hidden[i.dataset.k] = 1;
+    saveUi(); renderTiles(); renderRows();
+  });
+  $("#mall").onclick = () => { state.hidden = {}; saveUi(); m.remove(); renderAll(); };
+  $("#mnone").onclick = () => { cats.forEach(cc => state.hidden[cc[0]] = 1); saveUi(); m.remove(); renderAll(); };
+  setTimeout(() => document.addEventListener("click", function off(e) {
+    if (!m.contains(e.target) && e.target !== anchor) { m.remove(); document.removeEventListener("click", off); }
+  }), 0);
+}
+
+/** Move the ticked jobs into a group of a view, or into a brand new view. */
+function renderMoveMenu(anchor) {
+  const old = $("#movemenu"); if (old) { old.remove(); return; }
+  const jobs = Object.keys(state.picked);
+  const m = document.createElement("div"); m.id = "movemenu"; m.className = "menu";
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
+  let opts = "";
+  if (state.view === "Abin" || state.view === "flat") {
+    opts += '<div class="kick" style="padding:4px 10px 6px">Move ' + jobs.length + ' job' + (jobs.length > 1 ? "s" : "") + ' into</div>' +
+      BLOCKNAMES.map((n, i) => '<button class="mrow" data-grp="' + i + '">' + esc(n) + '</button>').join("");
+  }
+  opts += '<div class="kick" style="padding:10px 10px 6px;border-top:1px solid var(--line);margin-top:6px">Or a category of your own</div>' +
+    viewNames().filter(v => v !== "Abin").map(v => '<button class="mrow" data-view="' + esc(v) + '">' + esc(v) + '</button>').join("") +
+    '<button class="mrow" id="newcat" style="color:var(--accent);font-weight:600">+ New category from selection…</button>';
+  m.innerHTML = opts;
+  document.body.appendChild(m);
+  m.querySelectorAll("[data-grp]").forEach(b => b.onclick = async () => {
+    m.remove(); await assignMany(jobs, state.view === "flat" ? "Abin" : state.view, Number(b.dataset.grp));
+  });
+  m.querySelectorAll("[data-view]").forEach(b => b.onclick = async () => {
+    m.remove(); await assignMany(jobs, b.dataset.view, "");
+  });
+  $("#newcat").onclick = async () => {
+    m.remove();
+    const name = prompt("Name for the new category:");
+    if (name && name.trim()) await assignMany(jobs, name.trim(), "");
+  };
+  setTimeout(() => document.addEventListener("click", function off(e) {
+    if (!m.contains(e.target) && e.target !== anchor) { m.remove(); document.removeEventListener("click", off); }
+  }), 0);
+}
+
+async function assignMany(jobs, view, group) {
+  const who = whoAmI();
+  setStatus("saving " + jobs.length + " to " + view + "…", "busy");
+  VIEWS[view] = VIEWS[view] || {};
+  jobs.forEach((id, i) => { VIEWS[view][id] = { group: group === "" ? "" : String(group), order: i }; });
+  state.picked = {}; renderAll();                     // instant
+  let ok = 0;
+  for (let i = 0; i < jobs.length; i++) {
+    try { await CW.saveAssignment(view, jobs[i], group, i, who); ok++; } catch (e) { console.warn(e); }
+  }
+  noteChange(jobs.join(", "), "Moved to " + view + (group === "" ? "" : " / " + (BLOCKNAMES[group] || group)), "", view);
+  toast(ok + " of " + jobs.length + " saved to " + view);
+  setStatus("live");
+}
+
+function rowHtml(j, i, max) {
+  const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
+  const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
+  const picked = !!state.picked[j.id];
+  return '<div class="row' + (state.sel === j.id ? " on" : "") + (green ? " ready" : "") + (picked ? " picked" : "") +
+    '" data-id="' + j.id + '" draggable="true" style="animation-delay:' + Math.min(i * 3, 200) + 'ms">' +
+    '<span class="pickcell"><input type="checkbox" class="pick"' + (picked ? " checked" : "") + '></span>' +
+    '<span class="tab jid" style="font-weight:600;color:' + (j.urg ? "var(--urgent)" : "var(--ink)") + '">' + esc(j.id) + '</span>' +
+    '<span class="ell">' + esc(j.cust || "—") + '</span>' +
+    '<span class="ell" style="color:var(--ink-2)">' + esc(j.area || "—") + '</span>' +
+    '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + st.l + '</span></span>' +
+    '<span class="tab" style="color:var(--ink-2)">' + j.wnd + " / " + j.drs + '</span>' +
+    '<span style="display:flex;align-items:center;gap:8px"><span class="mini" style="width:110px">' +
+      '<i style="width:' + (T ? c.f / T * w : 0) + 'px;background:var(--f)"></i>' +
+      '<i style="width:' + (T ? c.s / T * w : 0) + 'px;background:var(--s)"></i>' +
+      '<i style="width:' + (T ? c.t / T * w : 0) + 'px;background:var(--t)"></i></span>' +
+      '<span class="tab" style="font-size:12px;color:var(--ink-3)">' + T + '</span></span>' +
+    '<span style="display:flex;gap:4px;overflow:hidden">' +
+      j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
+      (j.urg ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
+      (fab ? '<span class="badge" style="background:var(--fab-bg);color:var(--fab)">In fab</span>' : "") +
+    '</span></div>';
+}
+
+function wireRows(scope) {
+  scope.querySelectorAll(".row[data-id]").forEach(el => {
+    el.onclick = e => {
+      if (e.target.classList.contains("pick")) return;
+      state.sel = el.dataset.id; state.edit = false; renderRows(); openDrawer();
+    };
+    const cb = el.querySelector(".pick");
+    if (cb) cb.onchange = () => {
+      if (cb.checked) state.picked[el.dataset.id] = 1; else delete state.picked[el.dataset.id];
+      el.classList.toggle("picked", cb.checked); renderChips();
+    };
+    el.ondragstart = e => {
+      const ids = Object.keys(state.picked).length ? Object.keys(state.picked) : [el.dataset.id];
+      e.dataTransfer.setData("text/plain", ids.join(","));
+      e.dataTransfer.effectAllowed = "move";
+      el.classList.add("dragging");
+    };
+    el.ondragend = () => el.classList.remove("dragging");
+  });
 }
 
 function renderRows() {
-  const list = filtered(), max = Math.max(1, ...list.map(j => tot(comp(j))));
-  $("#rows").innerHTML = list.length ? list.map((j, i) => {
-    const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
-    const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
-    return '<button class="row' + (state.sel === j.id ? " on" : "") + (green ? " ready" : "") +
-      '" data-id="' + j.id + '" style="animation-delay:' + Math.min(i * 4, 260) + 'ms">' +
-      '<span class="tab" style="font-weight:600;color:' + (j.urg ? "var(--urgent)" : "var(--ink)") + '">' + esc(j.id) + '</span>' +
-      '<span class="ell">' + esc(j.cust || "—") + '</span>' +
-      '<span class="ell" style="color:var(--ink-2)">' + esc(j.area || "—") + '</span>' +
-      '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + st.l + '</span></span>' +
-      '<span class="tab" style="color:var(--ink-2)">' + j.wnd + " / " + j.drs + '</span>' +
-      '<span style="display:flex;align-items:center;gap:8px"><span class="mini" style="width:110px">' +
-        '<i style="width:' + (T ? c.f / T * w : 0) + 'px;background:var(--f)"></i>' +
-        '<i style="width:' + (T ? c.s / T * w : 0) + 'px;background:var(--s)"></i>' +
-        '<i style="width:' + (T ? c.t / T * w : 0) + 'px;background:var(--t)"></i></span>' +
-        '<span class="tab" style="font-size:12px;color:var(--ink-3)">' + T + '</span></span>' +
-      '<span style="display:flex;gap:4px;overflow:hidden">' +
-        j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
-        (j.sheets.length > 2 ? '<span class="stn">+' + (j.sheets.length - 2) + '</span>' : "") +
-        (j.urg ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
-        (fab ? '<span class="badge" style="background:var(--fab-bg);color:var(--fab)">In fab</span>' : "") +
-      '</span>' +
-      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" stroke-width="2.2" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button>';
-  }).join("") : '<div class="empty">No job matches that search or filter.</div>';
-  $("#rows").querySelectorAll(".row").forEach(b => b.onclick = () => { state.sel = b.dataset.id; state.edit = false; renderRows(); openDrawer(); });
+  const list = filtered();
+  const max = Math.max(1, ...list.map(j => tot(comp(j))));
+  const host = $("#rows");
+
+  if (state.view === "flat") {
+    host.innerHTML = list.length ? list.map((j, i) => rowHtml(j, i, max)).join("")
+      : '<div class="empty">No job matches that search or filter.</div>';
+    wireRows(host);
+  } else {
+    /* grouped: one collapsible section per block, each with its own search */
+    const groups = {};
+    list.forEach(j => { const g = groupOf(j, state.view); (groups[g] = groups[g] || []).push(j); });
+    const keys = Object.keys(groups).map(Number).sort((x, y) => x - y);
+    const names = BLOCKNAMES.length ? BLOCKNAMES : [];
+    host.innerHTML = keys.length ? keys.map(g => {
+      const name = names[g] || (state.view + " group " + g);
+      const open = !state.collapsed[state.view + "|" + g];
+      const q = (state.gq && state.gq[state.view + "|" + g]) || "";
+      let rows = groups[g];
+      if (q) rows = rows.filter(j => (j.id + " " + j.cust + " " + j.area).toLowerCase().indexOf(q.toLowerCase()) >= 0);
+      return '<div class="grp" data-g="' + g + '">' +
+        '<div class="ghead"><button class="gtog">' + (open ? "▾" : "▸") + '</button>' +
+        '<span class="gname">' + esc(name) + '</span>' +
+        '<span class="gcount">' + rows.length + (q ? " of " + groups[g].length : "") + '</span>' +
+        '<input class="gsearch txt" placeholder="Search in this group…" value="' + esc(q) + '">' +
+        '</div>' + (open ? '<div class="gbody">' +
+          (rows.length ? rows.map((j, i) => rowHtml(j, i, max)).join("")
+                       : '<div class="empty" style="padding:22px">Nothing here.</div>') + '</div>' : "") +
+        '</div>';
+    }).join("") : '<div class="empty">Nothing in this view yet.</div>';
+
+    host.querySelectorAll(".grp").forEach(gEl => {
+      const g = gEl.dataset.g, key = state.view + "|" + g;
+      gEl.querySelector(".gtog").onclick = () => {
+        if (state.collapsed[key]) delete state.collapsed[key]; else state.collapsed[key] = 1;
+        saveUi(); renderRows();
+      };
+      const s = gEl.querySelector(".gsearch");
+      s.oninput = () => { state.gq = state.gq || {}; state.gq[key] = s.value;
+        const p = s.selectionStart; renderRows();
+        const n2 = $("#rows").querySelector('.grp[data-g="' + g + '"] .gsearch');
+        if (n2) { n2.focus(); n2.setSelectionRange(p, p); } };
+      s.onclick = e => e.stopPropagation();
+      gEl.ondragover = e => { e.preventDefault(); gEl.classList.add("dragover"); };
+      gEl.ondragleave = () => gEl.classList.remove("dragover");
+      gEl.ondrop = async e => {
+        e.preventDefault(); gEl.classList.remove("dragover");
+        const ids = (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
+        if (ids.length) await assignMany(ids, state.view, Number(g));
+      };
+      wireRows(gEl);
+    });
+  }
+
   $("#count").textContent = list.length === live().length
     ? "Showing all " + live().length + " jobs on the sheet"
     : "Showing " + list.length + " of " + live().length + " jobs";
 }
+
 function renderAll() { renderTiles(); renderChips(); renderRows(); }
 
 /* ---------- drawer ---------- */

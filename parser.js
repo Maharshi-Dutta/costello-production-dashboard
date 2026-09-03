@@ -115,32 +115,38 @@ function mapSheet(ws) {
   return m;
 }
 
-/** Categories come from the Production sheet's own divider text, not row numbers. */
-function productionCategories(ws) {
-  const cat = {};
-  let cur = null, pending = [];
+/** The Production sheet's own divider rows define its blocks. Everything here is
+    derived live from the sheet, so adding or moving a divider changes the blocks
+    automatically - nothing about the structure is stored anywhere. */
+function productionBlocks(ws) {
+  const cat = {}, blk = {}, names = [], order = {};
+  let idx = 0, seen = 0;
+  names[0] = "Can sell as second hand";
   const maxR = ws.rowCount || 0;
   for (let r = 1; r <= maxR; r++) {
     const row = ws.getRow(r);
     const j = cellText(row.getCell(3)).trim().toUpperCase();
-    let line = '';
-    for (let c = 1; c <= 11; c++) line += ' ' + cellText(row.getCell(c));
+    let line = "";
+    for (let c = 1; c <= 11; c++) line += " " + cellText(row.getCell(c));
     line = norm(line);
-    if (line.indexOf('can sell as second hand') >= 0) { pending.forEach(x => cat[x] = 'secondhand'); pending = []; cur = null; continue; }
-    if (line.indexOf('customers won t take') >= 0 || line.indexOf('customers wont take') >= 0) {
-      pending.forEach(x => { if (!cat[x]) cat[x] = 'active'; }); pending = []; cur = 'wonttake'; continue;
-    }
-    if (line.indexOf('collect or supply only') >= 0) { cur = 'collect'; continue; }
-    if (line.indexOf('not sent to floor') >= 0) { cur = 'active'; continue; }
-    if (JOB_RE.test(j)) { if (cur === null) pending.push(j); else cat[j] = cur; }
+    let hit = null;
+    if (line.indexOf("can sell as second hand") >= 0) hit = null;          // labels the block above
+    else if (line.indexOf("customers won t take") >= 0 || line.indexOf("customers wont take") >= 0)
+      hit = "Ready, customer won't take";
+    else if (line.indexOf("collect or supply only") >= 0) hit = "Collect & supply only";
+    else if (line.indexOf("not sent to floor") >= 0)
+      hit = names.indexOf("Not sent to floor") < 0 ? "Not sent to floor" : "In production";
+    if (hit) { idx++; names[idx] = hit; continue; }
+    if (JOB_RE.test(j)) { blk[j] = idx; order[j] = seen++;
+      cat[j] = idx === 0 ? "secondhand" : idx === 1 ? "wonttake" : idx === 2 ? "collect" : "active"; }
   }
-  pending.forEach(x => { if (!cat[x]) cat[x] = 'active'; });
-  return cat;
+  return { cat, blk, names, order };
 }
 
 function parseWorkbook(wb) {
   const prodSheet = wb.getWorksheet('Production');
-  const PRODCAT = prodSheet ? productionCategories(prodSheet) : {};
+  const B = prodSheet ? productionBlocks(prodSheet) : { cat: {}, blk: {}, names: [], order: {} };
+  const PRODCAT = B.cat;
   const jobs = {};
 
   for (const name of SHEETS) {
@@ -199,7 +205,7 @@ function parseWorkbook(wb) {
     }
   }
 
-  return Object.keys(jobs).sort().map(id => {
+  const result = Object.keys(jobs).sort().map(id => {
     const j = jobs[id];
     const cmtxt = j.notes.map(n => n.t).join(' ');
     const ph = String(j.phone || '').replace(/\D/g, '');
@@ -212,9 +218,13 @@ function parseWorkbook(wb) {
       glass: j.glass, notes: j.notes, sheets: j.sheets, src: j.src,
       urg: URG_RE.test(cmtxt) ? 1 : 0, done: j.done || 0,
       cat: PRODCAT[id] || 'past',
+      blk: (B.blk[id] === undefined ? -1 : B.blk[id]),
+      seq: (B.order[id] === undefined ? 99999 : B.order[id]),
       stage: j.d_floor ? 'floor' : (j.d_ready ? 'ready' : 'office')
     };
   });
+  result.blockNames = B.names;
+  return result;
 }
 
 if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE };

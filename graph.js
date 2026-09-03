@@ -210,6 +210,72 @@ async function appendLog(who, job, what, from, to) {
   }
 }
 
+/* ---- saved views ---------------------------------------------------------
+   Stores only decisions - "someone put job X in group Y" - never job data.
+   Everything about a job is always read live from Production, so this cannot
+   go stale. Addresses VIEWS_SHEET by constant, like the log.               */
+const VIEWS_SHEET = "Dashboard Views";
+const VIEWS_HEADERS = [["View", "Job", "Group", "Order", "Set by", "When"]];
+let viewsReady = false;
+
+async function ensureViewsSheet() {
+  if (viewsReady) return true;
+  const f = await findFile();
+  const ws = await call("GET", f.base + "/worksheets");
+  if (!(ws.value || []).some(w => w.name === VIEWS_SHEET)) {
+    await call("POST", f.base + "/worksheets/add", { name: VIEWS_SHEET });
+    const S = f.base + "/worksheets('" + VIEWS_SHEET + "')";
+    await call("PATCH", S + "/range(address='A1:F1')", { values: VIEWS_HEADERS });
+    await call("PATCH", S + "/range(address='A1:F1')/format/font", { bold: true, color: "#FFFFFF" });
+    await call("PATCH", S + "/range(address='A1:F1')/format/fill", { color: "#17171A" });
+    const widths = { A: 170, B: 80, C: 90, D: 60, E: 220, F: 130 };
+    for (const c in widths)
+      await call("PATCH", S + "/range(address='" + c + ":" + c + "')/format", { columnWidth: widths[c] });
+  }
+  viewsReady = true;
+  return true;
+}
+
+/** Put one job in one group of one view. Updates the existing line if there is
+    one, otherwise appends. Only ever writes to VIEWS_SHEET. */
+async function saveAssignment(view, job, group, order, who) {
+  await ensureViewsSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + VIEWS_SHEET + "')";
+  const used = await call("GET", S + "/usedRange?$select=values,rowCount");
+  const rows = used.values || [];
+  let target = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim() === view && String(rows[i][1] || "").trim().toUpperCase() === job.toUpperCase()) {
+      target = i + 1; break;
+    }
+  }
+  if (!target) target = (used.rowCount || 1) + 1;
+  const d = new Date(), p = n => (n < 10 ? "0" : "") + n;
+  const when = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  await call("PATCH", S + "/range(address='A" + target + ":F" + target + "')", {
+    values: [[view, job, group === null || group === undefined ? "" : String(group), String(order == null ? "" : order), who || "", when]],
+    numberFormat: [["@", "@", "@", "@", "@", "@"]]
+  });
+  return target;
+}
+
+/** Remove a job from a view (blank its line). */
+async function clearAssignment(view, job) {
+  await ensureViewsSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + VIEWS_SHEET + "')";
+  const used = await call("GET", S + "/usedRange?$select=values");
+  const rows = used.values || [];
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || "").trim() === view && String(rows[i][1] || "").trim().toUpperCase() === job.toUpperCase()) {
+      await call("PATCH", S + "/range(address='A" + (i + 1) + ":F" + (i + 1) + "')", { values: [["", "", "", "", "", ""]] });
+      return true;
+    }
+  }
+  return false;
+}
+
 /* ---- writes: always addressed by cell, never by rewriting the file ---- */
 const A1 = n => { let s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
 
@@ -246,5 +312,6 @@ window.CW = {
   initAuth, signIn, signOut, token, findFile, openSession, lastModified,
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
   ensureLogSheet, appendLog, LOG_SHEET,
+  ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
   get account() { return account; }
 };
