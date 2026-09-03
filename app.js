@@ -89,10 +89,15 @@ function diffJobs(prev, next, who, at) {
   return out;
 }
 
+function whoAmI() {
+  const a = CW.account;
+  return (a && (a.username || a.name)) || "unknown";
+}
 function noteChange(job, what, from, to) {
-  CHANGES.unshift({ at: new Date().toISOString(), who: "you (this dashboard)", job, what,
+  CHANGES.unshift({ at: new Date().toISOString(), who: whoAmI(), job, what,
                     from: String(from), to: String(to), src: "dashboard" });
   saveChanges(); updateChangeBtn();
+  CW.appendLog(whoAmI(), job, what, from, to);   // permanent, shared, log sheet only
 }
 function updateChangeBtn() {
   const b = $("#changebtn"); if (!b) return;
@@ -115,8 +120,37 @@ async function load(reason) {
     const t = new Date(m.at);
     setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
     $("#srcinfo").textContent = "Production sheet · last edited by " + (m.by || "unknown");
+    /* the shared history lives in the workbook, so everyone sees the same list */
+    const logWs = wb.getWorksheet("Dashboard Log");
+    if (logWs) {
+      const fromSheet = [];
+      for (let r = 2; r <= (logWs.rowCount || 0); r++) {
+        const row = logWs.getRow(r);
+        const cell = i => {
+          const v = row.getCell(i).value;
+          if (v == null) return "";
+          if (v instanceof Date) {
+            const p = n => (n < 10 ? "0" : "") + n;
+            return p(v.getDate()) + "/" + p(v.getMonth() + 1) + "/" + v.getFullYear() +
+                   " " + p(v.getHours()) + ":" + p(v.getMinutes());
+          }
+          return v.text != null ? v.text : String(v);
+        };
+        if (!cell(3)) continue;
+        fromSheet.push({ at: cell(1), who: cell(2), job: cell(3), what: cell(4),
+                         from: cell(5), to: cell(6), src: "dashboard", shared: true });
+      }
+      fromSheet.reverse();
+      const local = CHANGES.filter(c => !c.shared && c.src !== "dashboard");
+      CHANGES = fromSheet.concat(local);
+      saveChanges();
+    }
     if (prev.length) {
-      const d = diffJobs(prev, ALL, m.by || "someone in Excel", m.at);
+      let d = diffJobs(prev, ALL, m.by || "someone in Excel", m.at);
+      /* a dashboard edit also shows up as a cell difference - don't list it twice */
+      const mine = new Set(CHANGES.filter(c => c.src === "dashboard" &&
+        Date.now() - new Date(c.at).getTime() < 600000).map(c => c.job + "|" + c.what));
+      d = d.filter(c => !mine.has(c.job + "|" + c.what));
       if (d.length) {
         CHANGES = d.concat(CHANGES); saveChanges();
         toast(d.length + " change" + (d.length > 1 ? "s" : "") + " — click Changes to see them");
@@ -365,12 +399,15 @@ function renderDrawer() {
 
 /* ---------- changes window ---------- */
 let cf = { q: "", who: "", src: "" };
-function stamp(iso) {
-  const d = new Date(iso), p = n => (n < 10 ? "0" : "") + n;
-  return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "  " + p(d.getHours()) + ":" + p(d.getMinutes());
+function stamp(v) {
+  if (typeof v === "string" && v.indexOf("/") > 0) return v;      // already dd/mm/yyyy hh:mm from the sheet
+  const d = new Date(v), p = n => (n < 10 ? "0" : "") + n;
+  return isNaN(d) ? String(v) : p(d.getDate()) + "/" + p(d.getMonth() + 1) + "  " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
-function ago(iso) {
-  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+function ago(v) {
+  const d = new Date(v);
+  if (isNaN(d)) return "";
+  const m = Math.round((Date.now() - d) / 60000);
   return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago";
 }
 function renderChanges() {
@@ -400,7 +437,7 @@ function renderChanges() {
       '<span style="font-weight:600;font-size:12.5px">' + esc(c.who) + '</span>' +
       '<span><button class="stn jump" data-j="' + esc(c.job) + '" style="border:0;cursor:pointer">' + esc(c.job) + '</button></span>' +
       '<span><span class="badge" style="background:var(--surface-2);color:var(' + (c.src === "dashboard" ? "--accent" : "--single") + ');margin-right:6px">' +
-        (c.src === "dashboard" ? "Here" : "Excel") + '</span>' + esc(c.what) + '</span>' +
+        (c.shared ? "Logged" : c.src === "dashboard" ? "Here" : "Excel") + '</span>' + esc(c.what) + '</span>' +
       '<span style="font-size:12px">' + (c.from || c.to ?
         '<span style="color:var(--ink-4);text-decoration:line-through">' + esc(c.from || "blank") + '</span> &rarr; ' +
         '<span style="font-weight:600">' + esc(c.to || "blank") + '</span>' : "&mdash;") + '</span></div>').join("")
@@ -409,7 +446,11 @@ function renderChanges() {
     '</div><div class="foot"><span>' + rows.length + ' of ' + CHANGES.length + '</span><span>Click a job number to open it</span></div></div>';
   $("#cscrim").onclick = () => host.remove();
   $("#cclose").onclick = () => host.remove();
-  $("#cclear").onclick = () => { if (confirm("Clear the change list? The sheet is not affected.")) { CHANGES = []; saveChanges(); updateChangeBtn(); host.remove(); } };
+  $("#cclear").onclick = () => {
+    if (confirm("Hide the entries recorded in this browser? The permanent log in the Dashboard Log sheet is NOT touched and will reappear on the next refresh.")) {
+      CHANGES = CHANGES.filter(c => c.shared); saveChanges(); updateChangeBtn(); renderChanges();
+    }
+  };
   const cq = $("#cq");
   cq.oninput = () => { cf.q = cq.value; const p = cq.selectionStart; renderChanges(); const n = $("#cq"); n.focus(); n.setSelectionRange(p, p); };
   $("#cwho").onchange = e => { cf.who = e.target.value; renderChanges(); };
