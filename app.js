@@ -42,6 +42,16 @@ function toast(msg, isErr) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), isErr ? 7000 : 3200);
 }
+/** Turn a Graph error into something a person can act on. */
+function friendly(e) {
+  const m = (e && e.message) || String(e);
+  if (/InvalidSession/i.test(m)) return "The Excel connection timed out and was renewed - please try that again.";
+  if (/no longer on the/i.test(m)) return m;
+  if (/40[13]/.test(m)) return "Excel refused that change - you may not have edit rights on the workbook.";
+  if (/423|locked/i.test(m)) return "The workbook is locked, usually because someone has it open in desktop Excel without AutoSave.";
+  if (/50[0234]|timeout/i.test(m)) return "Excel was busy and did not answer. Try again in a moment.";
+  return "Write failed: " + m.slice(0, 160);
+}
 function setStatus(text, kind) {
   $("#status").textContent = text;
   $("#livedot").className = "dot" + (kind ? " " + kind : "");
@@ -373,7 +383,7 @@ function renderDrawer() {
         toast(j.id + (turningOn ? " marked ready to deliver (row " + row + " set gold)" : " put back into production"));
         await load("re-reading…");
       } catch (e) {
-        toast("Write failed: " + e.message, true);
+        toast(friendly(e), true);
         mr.disabled = false; renderDrawer();
       }
     };
@@ -389,7 +399,7 @@ function renderDrawer() {
           toast(cap(name) + " → " + (PSTAT[val] || "cleared"));
           await load("re-reading…");
         } catch (e) {
-          toast("Write failed: " + e.message, true);
+          toast(friendly(e), true);
           sel.disabled = false;
         }
       };

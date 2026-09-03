@@ -65,9 +65,14 @@ async function headers(extra) {
   return Object.assign(h, extra || {});
 }
 
-/* Graph occasionally 504s while Excel loads a large workbook - retry those. */
+/* Retries: 5xx while Excel loads a big workbook, and - importantly - the
+   InvalidSession 400 that Graph returns once a workbook session goes idle.
+   That one arrives as a 400, so it needs handling separately from server
+   errors: drop the stale session, open a fresh one, and try again. */
+let openingSession = false;
+
 async function call(method, path, body, asBuffer) {
-  let last;
+  let lastStatus = 0, lastText = "", sessionRetried = false;
   for (let a = 0; a < 5; a++) {
     const init = { method, headers: await headers(body ? { "Content-Type": "application/json" } : null) };
     if (body) init.body = JSON.stringify(body);
@@ -78,14 +83,23 @@ async function call(method, path, body, asBuffer) {
       const t = await r.text();
       return t ? JSON.parse(t) : {};
     }
-    last = r;
+    lastStatus = r.status;
+    lastText = await r.text();
+
+    if (!sessionRetried && !openingSession &&
+        (lastText.indexOf("InvalidSession") >= 0 || lastText.indexOf("invalidSessionReCreatable") >= 0)) {
+      sessionRetried = true;
+      sessionId = null;
+      try { await openSession(); } catch (e) { sessionId = null; }  // stateless still works
+      continue;
+    }
     if ([429, 500, 503, 504].indexOf(r.status) >= 0) {
       await new Promise(s => setTimeout(s, 2000 + a * 2500));
       continue;
     }
     break;
   }
-  throw new Error(method + " " + path + " -> " + last.status + " " + (await last.text()).slice(0, 300));
+  throw new Error(method + " " + path.split("/workbook")[1] + " -> " + lastStatus + " " + lastText.slice(0, 200));
 }
 
 /* ---- the workbook ---- */
@@ -112,10 +126,15 @@ async function findFile() {
 
 async function openSession() {
   const f = await findFile();
+  openingSession = true;
   try {
     const s = await call("POST", f.base + "/createSession", { persistChanges: true });
     sessionId = s.id;
-  } catch (e) { sessionId = null; }   // sessions are an optimisation, not a requirement
+  } catch (e) {
+    sessionId = null;      // a session is an optimisation; Graph works without one
+  } finally {
+    openingSession = false;
+  }
   return sessionId;
 }
 
