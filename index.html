@@ -115,6 +115,18 @@
             border-top:1px solid var(--line-soft); background:var(--surface-2); font-size:12px; color:var(--ink-3) }
   .sw { width:12px; height:12px; border-radius:3px; display:inline-block; vertical-align:-2px;
         margin-right:5px; border:1px solid rgba(0,0,0,.2) }
+  .logwin { position:fixed; inset:0; margin:auto; z-index:41; width:min(1060px,96vw); height:min(740px,90vh);
+            background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden;
+            box-shadow:0 24px 70px rgba(0,0,0,.32); display:flex; flex-direction:column; animation:fade .2s ease both }
+  .logfilters { display:flex; gap:8px; padding:12px 16px; border-bottom:1px solid var(--line);
+                background:var(--surface-2); flex-wrap:wrap; align-items:center }
+  .loghead,.logrow { display:grid; grid-template-columns:104px 120px 84px minmax(190px,1.3fr) minmax(160px,1fr);
+                     gap:14px; padding:0 16px; align-items:center }
+  .loghead { height:34px; border-bottom:1.5px solid var(--ink); background:var(--surface-2) }
+  .logrow { padding-top:9px; padding-bottom:9px; border-bottom:1px solid var(--line-soft);
+            font-size:13px; align-items:start; animation:fade .2s ease both }
+  .logrow:hover { background:var(--surface-2) }
+  .logbody { flex:1; overflow-y:auto }
   .empty { padding:56px 20px; text-align:center; color:var(--ink-4) }
 
   .scrim { position:fixed; inset:0; background:rgba(10,10,12,.42); z-index:40; animation:fade .18s ease both }
@@ -178,6 +190,7 @@
   </div>
   <div class="tools">
     <span class="dot" id="livedot"></span><span id="status">starting…</span>
+    <button class="ghost" id="changebtn">Changes</button>
     <button class="ghost" id="refreshbtn">Refresh</button>
     <button class="ghost" id="themebtn">Dark</button>
     <button class="ghost" id="whobtn">…</button>

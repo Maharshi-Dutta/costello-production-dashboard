@@ -17,6 +17,9 @@ const CATORDER = ["deliver", "collect", "wonttake", "secondhand", "floor", "read
 const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep", "Glazing", "Cut & Weld", "PVC Doors", "Smart Slides", "THWS", "Call Log"];
 
 let ALL = [], PRODMAP = null, lastStamp = null, busy = false;
+let CHANGES = [];                     // what has changed while this page has been open
+try { CHANGES = JSON.parse(localStorage.getItem("cw_changes") || "[]"); } catch (e) { CHANGES = []; }
+const saveChanges = () => { try { localStorage.setItem("cw_changes", JSON.stringify(CHANGES.slice(0, 400))); } catch (e) {} };
 let state = { q: "", cat: null, sheet: null, sort: "id", sel: null, edit: false };
 
 const live = () => ALL.filter(j => j.cat !== "past");
@@ -44,6 +47,58 @@ function setStatus(text, kind) {
   $("#livedot").className = "dot" + (kind ? " " + kind : "");
 }
 
+/* ---------- what changed ---------- */
+const CATNAME = { deliver:"Ready to deliver", collect:"Collect & supply", wonttake:"Won't take",
+                  secondhand:"Second hand", floor:"On floor", ready:"Waiting for floor", office:"In office" };
+
+/** Compare two parses of the workbook and describe every difference in plain terms. */
+function diffJobs(prev, next, who, at) {
+  const out = [], pm = {}, nm = {};
+  prev.forEach(j => pm[j.id] = j);
+  next.forEach(j => nm[j.id] = j);
+  const add = (job, what, from, to) => out.push({ at, who, job, what, from: String(from), to: String(to), src: "sheet" });
+
+  next.forEach(n => {
+    const p = pm[n.id];
+    if (!p) { if (n.cat !== "past") add(n.id, "Added to the sheet", "", CATNAME[catOf(n)] || n.cat); return; }
+    if (!!p.done !== !!n.done) add(n.id, "Ready to deliver", p.done ? "yes" : "no", n.done ? "yes" : "no");
+    if (p.cat !== n.cat) add(n.id, "Category", CATNAME[p.cat] || p.cat, CATNAME[n.cat] || n.cat);
+    ["sold","stamp","ivana","ready","floor"].forEach(k => {
+      if ((p.dates[k] || "") !== (n.dates[k] || ""))
+        add(n.id, k === "floor" ? "Sent to floor" : k.charAt(0).toUpperCase() + k.slice(1), p.dates[k] || "blank", n.dates[k] || "cleared");
+    });
+    if (p.wnd !== n.wnd || p.drs !== n.drs) add(n.id, "Quantity wnd/drs", p.wnd + "/" + p.drs, n.wnd + "/" + n.drs);
+    if ((p.cust || "") !== (n.cust || "")) add(n.id, "Customer", p.cust || "blank", n.cust || "blank");
+    const ps = {}, ns = {};
+    p.prods.forEach(x => ps[x.n] = x); n.prods.forEach(x => ns[x.n] = x);
+    Object.keys(ns).forEach(k => {
+      const b = ps[k], c = ns[k];
+      if (!b) { add(n.id, "Product added - " + cap(k), "", c.f + "/" + c.s + "/" + c.t); return; }
+      if (b.f !== c.f || b.s !== c.s || b.t !== c.t)
+        add(n.id, cap(k) + " F/S/T", b.f + "/" + b.s + "/" + b.t, c.f + "/" + c.s + "/" + c.t);
+      const bs = (b.st || [])[0] || "", cs = (c.st || [])[0] || "";
+      if (bs !== cs) add(n.id, cap(k) + " status", PSTAT[bs] || "none", PSTAT[cs] || "none");
+    });
+    Object.keys(ps).forEach(k => { if (!ns[k]) add(n.id, "Product removed - " + cap(k), ps[k].f + "/" + ps[k].s + "/" + ps[k].t, ""); });
+    if (p.notes.length !== n.notes.length) {
+      const old = p.notes.map(x => x.t), fresh = n.notes.filter(x => old.indexOf(x.t) < 0);
+      fresh.forEach(x => add(n.id, "Note added", "", x.t.slice(0, 90)));
+    }
+  });
+  prev.forEach(p => { if (!nm[p.id] && p.cat !== "past") add(p.id, "Removed from the sheet", CATNAME[catOf(p)] || p.cat, ""); });
+  return out;
+}
+
+function noteChange(job, what, from, to) {
+  CHANGES.unshift({ at: new Date().toISOString(), who: "you (this dashboard)", job, what,
+                    from: String(from), to: String(to), src: "dashboard" });
+  saveChanges(); updateChangeBtn();
+}
+function updateChangeBtn() {
+  const b = $("#changebtn"); if (!b) return;
+  b.textContent = CHANGES.length ? "Changes (" + CHANGES.length + ")" : "Changes";
+}
+
 /* ---------- load ---------- */
 async function load(reason) {
   if (busy) return;
@@ -51,6 +106,7 @@ async function load(reason) {
   setStatus(reason || "reading sheet…", "busy");
   try {
     const wb = await CW.downloadWorkbook();
+    const prev = ALL;
     ALL = parseWorkbook(wb);
     const ps = wb.getWorksheet("Production");
     PRODMAP = ps ? mapSheet(ps) : null;
@@ -59,6 +115,14 @@ async function load(reason) {
     const t = new Date(m.at);
     setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
     $("#srcinfo").textContent = "Production sheet · last edited by " + (m.by || "unknown");
+    if (prev.length) {
+      const d = diffJobs(prev, ALL, m.by || "someone in Excel", m.at);
+      if (d.length) {
+        CHANGES = d.concat(CHANGES); saveChanges();
+        toast(d.length + " change" + (d.length > 1 ? "s" : "") + " — click Changes to see them");
+      }
+    }
+    updateChangeBtn();
     renderAll();
     if (state.sel) renderDrawer();
   } catch (e) {
@@ -271,6 +335,7 @@ function renderDrawer() {
       mr.innerHTML = '<span class="spin"></span> writing to Excel…';
       try {
         const row = await markReady(j, turningOn);
+        noteChange(j.id, "Ready to deliver", turningOn ? "no" : "yes", turningOn ? "yes" : "no");
         toast(j.id + (turningOn ? " marked ready to deliver (row " + row + " set gold)" : " put back into production"));
         await load("re-reading…");
       } catch (e) {
@@ -284,7 +349,9 @@ function renderDrawer() {
         const name = rowEl.dataset.p, val = sel.value;
         sel.disabled = true;
         try {
+          const was = (j.prods.find(p => p.n === name) || {}).st || [];
           await setProductStatus(j, name, val);
+          noteChange(j.id, cap(name) + " status", PSTAT[was[0] || ""] || "none", PSTAT[val] || "none");
           toast(cap(name) + " → " + (PSTAT[val] || "cleared"));
           await load("re-reading…");
         } catch (e) {
@@ -294,6 +361,60 @@ function renderDrawer() {
       };
     });
   }
+}
+
+/* ---------- changes window ---------- */
+let cf = { q: "", who: "", src: "" };
+function stamp(iso) {
+  const d = new Date(iso), p = n => (n < 10 ? "0" : "") + n;
+  return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "  " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function ago(iso) {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago";
+}
+function renderChanges() {
+  let host = $("#chost");
+  if (!host) { host = document.createElement("div"); host.id = "chost"; document.body.appendChild(host); }
+  const people = [...new Set(CHANGES.map(c => c.who))].sort();
+  const q = cf.q.trim().toLowerCase();
+  const rows = CHANGES.filter(c =>
+    (!cf.who || c.who === cf.who) && (!cf.src || c.src === cf.src) &&
+    (!q || (c.job + " " + c.what + " " + c.who + " " + c.from + " " + c.to).toLowerCase().indexOf(q) >= 0));
+  const opt = (v, l, cur) => '<option value="' + esc(v) + '"' + (cur === v ? " selected" : "") + '>' + esc(l) + '</option>';
+  host.innerHTML = '<div class="scrim" id="cscrim"></div><div class="logwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Changes</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">Everything that has changed since this page was opened, newest first</div></div>' +
+      '<div style="display:flex;gap:7px"><button class="ghost" id="cclear">Clear</button><button class="ghost" id="cclose">Close</button></div></div>' +
+    '<div class="logfilters">' +
+      '<input class="txt" id="cq" placeholder="Search job, person or field…" value="' + esc(cf.q) + '" style="flex:1;min-width:180px">' +
+      '<select class="txt" id="cwho">' + opt("", "Everyone", cf.who) + people.map(p => opt(p, p, cf.who)).join("") + '</select>' +
+      '<select class="txt" id="csrc">' + opt("", "All sources", cf.src) + opt("sheet", "Changed in Excel", cf.src) + opt("dashboard", "Changed here", cf.src) + '</select>' +
+    '</div>' +
+    '<div class="loghead"><span class="kick">When</span><span class="kick">Who</span><span class="kick">Job</span>' +
+      '<span class="kick">What changed</span><span class="kick">From &rarr; to</span></div>' +
+    '<div class="logbody">' +
+    (rows.length ? rows.map(c =>
+      '<div class="logrow"><span class="tab" style="font-size:12px;color:var(--ink-3)">' + stamp(c.at) +
+        '<div style="font-size:10.5px;color:var(--ink-4)">' + ago(c.at) + '</div></span>' +
+      '<span style="font-weight:600;font-size:12.5px">' + esc(c.who) + '</span>' +
+      '<span><button class="stn jump" data-j="' + esc(c.job) + '" style="border:0;cursor:pointer">' + esc(c.job) + '</button></span>' +
+      '<span><span class="badge" style="background:var(--surface-2);color:var(' + (c.src === "dashboard" ? "--accent" : "--single") + ');margin-right:6px">' +
+        (c.src === "dashboard" ? "Here" : "Excel") + '</span>' + esc(c.what) + '</span>' +
+      '<span style="font-size:12px">' + (c.from || c.to ?
+        '<span style="color:var(--ink-4);text-decoration:line-through">' + esc(c.from || "blank") + '</span> &rarr; ' +
+        '<span style="font-weight:600">' + esc(c.to || "blank") + '</span>' : "&mdash;") + '</span></div>').join("")
+      : '<div class="empty">' + (CHANGES.length ? "Nothing matches those filters." :
+          "Nothing has changed yet. Edit something in Excel or here, and it will be listed with what it was and what it became.") + '</div>') +
+    '</div><div class="foot"><span>' + rows.length + ' of ' + CHANGES.length + '</span><span>Click a job number to open it</span></div></div>';
+  $("#cscrim").onclick = () => host.remove();
+  $("#cclose").onclick = () => host.remove();
+  $("#cclear").onclick = () => { if (confirm("Clear the change list? The sheet is not affected.")) { CHANGES = []; saveChanges(); updateChangeBtn(); host.remove(); } };
+  const cq = $("#cq");
+  cq.oninput = () => { cf.q = cq.value; const p = cq.selectionStart; renderChanges(); const n = $("#cq"); n.focus(); n.setSelectionRange(p, p); };
+  $("#cwho").onchange = e => { cf.who = e.target.value; renderChanges(); };
+  $("#csrc").onchange = e => { cf.src = e.target.value; renderChanges(); };
+  host.querySelectorAll(".jump").forEach(b => b.onclick = () => { host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer(); });
 }
 
 /* ---------- theme ---------- */
@@ -325,6 +446,8 @@ async function start() {
   applyTheme(t);
   $("#themebtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   $("#refreshbtn").onclick = () => load("refreshing…");
+  $("#changebtn").onclick = () => renderChanges();
+  updateChangeBtn();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
