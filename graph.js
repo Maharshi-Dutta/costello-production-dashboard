@@ -17,7 +17,7 @@ function app() {
     auth: {
       clientId: CLIENT_ID,
       authority: "https://login.microsoftonline.com/" + TENANT_ID,
-      redirectUri: window.location.origin + window.location.pathname
+      redirectUri: window.location.origin   // no path: must match the Entra entry exactly
     },
     cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
   });
