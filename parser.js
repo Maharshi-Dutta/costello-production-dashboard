@@ -135,7 +135,8 @@ function productionBlocks(ws) {
       hit = "Ready, customer won't take";
     else if (line.indexOf("collect or supply only") >= 0) hit = "Collect & supply only";
     else if (line.indexOf("not sent to floor") >= 0)
-      hit = names.indexOf("Not sent to floor") < 0 ? "Not sent to floor" : "In production";
+      /* display names only - the sheet's own divider text is never changed */
+      hit = names.indexOf("Ready to fit") < 0 ? "Ready to fit" : "In production";
     if (hit) { idx++; names[idx] = hit; continue; }
     if (JOB_RE.test(j)) { blk[j] = idx; order[j] = seen++;
       cat[j] = idx === 0 ? "secondhand" : idx === 1 ? "wonttake" : idx === 2 ? "collect" : "active"; }
