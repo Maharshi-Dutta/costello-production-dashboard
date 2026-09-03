@@ -22,16 +22,24 @@ let ALL = [], PRODMAP = null, lastStamp = null, busy = false;
    and hold them until the file catches up - otherwise the next refresh reads a
    stale file and appears to undo what you just did. */
 let PENDING = {};
-const PENDING_MS = 150000;
+const PENDING_MS = 180000;
+/* kept in localStorage, not just memory: refreshing the page used to discard
+   these, and the freshly downloaded file is still ~36s behind, so your own
+   change would disappear the moment you pressed F5. */
+try { PENDING = JSON.parse(localStorage.getItem("cw_pending") || "{}"); } catch (e) { PENDING = {}; }
+const savePending = () => { try { localStorage.setItem("cw_pending", JSON.stringify(PENDING)); } catch (e) {} };
 function pend(id, patch) {
   const p = PENDING[id] || (PENDING[id] = { at: 0, prods: {} });
   p.at = Date.now();
   if ("done" in patch) p.done = patch.done;
   if (patch.prod) p.prods[patch.prod.name] = patch.prod.status;
+  savePending();
 }
 function applyPending(list) {
   const now = Date.now();
-  Object.keys(PENDING).forEach(id => { if (now - PENDING[id].at > PENDING_MS) delete PENDING[id]; });
+  let dropped = false;
+  Object.keys(PENDING).forEach(id => { if (now - PENDING[id].at > PENDING_MS) { delete PENDING[id]; dropped = true; } });
+  if (dropped) savePending();
   return list.map(j => {
     const p = PENDING[j.id];
     if (!p) return j;
@@ -159,7 +167,9 @@ async function load(reason, force) {
     const t = new Date(m.at);
     const tAll = Math.round(performance.now() - t0);
     console.log("[dashboard] download " + Math.round(tDown) + "ms, total " + tAll + "ms, " + ALL.length + " jobs");
-    setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " · " + (tAll / 1000).toFixed(1) + "s");
+    const held = Object.keys(PENDING).length;
+    setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+              (held ? " · " + held + " just changed" : " · " + (tAll / 1000).toFixed(1) + "s"));
     $("#srcinfo").textContent = "Production sheet · last edited by " + (m.by || "unknown");
     /* the shared history lives in the workbook, so everyone sees the same list */
     const logWs = wb.getWorksheet("Dashboard Log");
@@ -512,6 +522,27 @@ function renderChanges() {
   host.querySelectorAll(".jump").forEach(b => b.onclick = () => { host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer(); });
 }
 
+/* ---------- keep the page itself up to date ----------
+   GitHub Pages caches index.html for around ten minutes, so a browser can sit
+   on an old build after a deploy. Ask the server directly and offer a reload. */
+async function checkBuild() {
+  try {
+    const el = $("#build");
+    const running = el ? el.textContent.replace("build ", "").trim() : "";
+    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    const latest = (await r.json()).build;
+    if (running && latest && latest !== running && !$("#newver")) {
+      const bar = document.createElement("div");
+      bar.id = "newver"; bar.className = "toast";
+      bar.style.cursor = "pointer";
+      bar.innerHTML = "A newer version of the dashboard is available &nbsp;<b>Reload</b>";
+      bar.onclick = () => location.reload(true);
+      document.body.appendChild(bar);
+    }
+  } catch (e) { /* offline or blocked - not important */ }
+}
+
 /* ---------- theme ---------- */
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -533,6 +564,7 @@ async function start() {
   await CW.openSession();
   await load("first read…");
   setInterval(poll, 12000);
+  checkBuild(); setInterval(checkBuild, 120000);
 }
 
 (async function boot() {

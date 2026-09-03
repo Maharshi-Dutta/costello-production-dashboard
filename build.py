@@ -9,4 +9,5 @@ if 'id="build"' not in h:
     h = h.replace('<span id="srcinfo"></span>',
                   '<span><span id="srcinfo"></span> &middot; <span id="build">build ' + BUILD + '</span></span>')
 io.open('index.html', 'w', encoding='utf8').write(h)
+io.open(chr(118)+chr(101)+chr(114)+chr(115)+chr(105)+chr(111)+chr(110)+chr(46)+chr(106)+chr(115)+chr(111)+chr(110), chr(119), encoding=chr(117)+chr(116)+chr(102)+chr(56)).write(chr(123)+chr(34)+chr(98)+chr(117)+chr(105)+chr(108)+chr(100)+chr(34)+chr(58)+chr(34)+BUILD+chr(34)+chr(125)+chr(10))
 print("stamped build " + BUILD)
