@@ -146,8 +146,10 @@ async function load(reason, force) {
   if (busy && !force) return;
   busy = true;
   setStatus(reason || "reading sheet…", "busy");
+  const t0 = performance.now();
   try {
     const wb = await CW.downloadWorkbook();
+    const tDown = performance.now() - t0;
     const prev = ALL;
     ALL = applyPending(parseWorkbook(wb));   // our own recent writes win over a stale file
     const ps = wb.getWorksheet("Production");
@@ -155,7 +157,9 @@ async function load(reason, force) {
     const m = await CW.lastModified();
     lastStamp = m.at;
     const t = new Date(m.at);
-    setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    const tAll = Math.round(performance.now() - t0);
+    console.log("[dashboard] download " + Math.round(tDown) + "ms, total " + tAll + "ms, " + ALL.length + " jobs");
+    setStatus("live · updated " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " · " + (tAll / 1000).toFixed(1) + "s");
     $("#srcinfo").textContent = "Production sheet · last edited by " + (m.by || "unknown");
     /* the shared history lives in the workbook, so everyone sees the same list */
     const logWs = wb.getWorksheet("Dashboard Log");
@@ -405,8 +409,10 @@ function renderDrawer() {
       const turningOn = !j.done;
       mr.disabled = true;
       mr.innerHTML = '<span class="spin"></span> writing to Excel…';
+      const tw = performance.now();
       try {
         const row = await markReady(j, turningOn);
+        console.log("[dashboard] write took " + Math.round(performance.now() - tw) + "ms");
         pend(j.id, { done: turningOn ? 1 : 0 });
         ALL = applyPending(ALL);
         noteChange(j.id, "Ready to deliver", turningOn ? "no" : "yes", turningOn ? "yes" : "no");
