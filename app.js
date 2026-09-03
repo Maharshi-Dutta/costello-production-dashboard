@@ -17,6 +17,33 @@ const CATORDER = ["deliver", "collect", "wonttake", "secondhand", "floor", "read
 const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep", "Glazing", "Cut & Weld", "PVC Doors", "Smart Slides", "THWS", "Call Log"];
 
 let ALL = [], PRODMAP = null, lastStamp = null, busy = false;
+/* SharePoint takes ~35s to write our change into the downloadable file, while
+   the Excel API reflects it in ~1s. So we apply our own writes locally at once
+   and hold them until the file catches up - otherwise the next refresh reads a
+   stale file and appears to undo what you just did. */
+let PENDING = {};
+const PENDING_MS = 150000;
+function pend(id, patch) {
+  const p = PENDING[id] || (PENDING[id] = { at: 0, prods: {} });
+  p.at = Date.now();
+  if ("done" in patch) p.done = patch.done;
+  if (patch.prod) p.prods[patch.prod.name] = patch.prod.status;
+}
+function applyPending(list) {
+  const now = Date.now();
+  Object.keys(PENDING).forEach(id => { if (now - PENDING[id].at > PENDING_MS) delete PENDING[id]; });
+  return list.map(j => {
+    const p = PENDING[j.id];
+    if (!p) return j;
+    const c = Object.assign({}, j);
+    if ("done" in p) c.done = p.done;
+    c.prods = j.prods.map(x => Object.prototype.hasOwnProperty.call(p.prods, x.n)
+      ? Object.assign({}, x, { st: p.prods[x.n] ? [p.prods[x.n]] : [] }) : x);
+    c.stage = c.done ? "deliver" : (c.dates.floor ? "floor" : (c.dates.ready ? "ready" : "office"));
+    return c;
+  });
+}
+
 let CHANGES = [];                     // what has changed while this page has been open
 try { CHANGES = JSON.parse(localStorage.getItem("cw_changes") || "[]"); } catch (e) { CHANGES = []; }
 const saveChanges = () => { try { localStorage.setItem("cw_changes", JSON.stringify(CHANGES.slice(0, 400))); } catch (e) {} };
@@ -122,7 +149,7 @@ async function load(reason, force) {
   try {
     const wb = await CW.downloadWorkbook();
     const prev = ALL;
-    ALL = parseWorkbook(wb);
+    ALL = applyPending(parseWorkbook(wb));   // our own recent writes win over a stale file
     const ps = wb.getWorksheet("Production");
     PRODMAP = ps ? mapSheet(ps) : null;
     const m = await CW.lastModified();
@@ -151,7 +178,8 @@ async function load(reason, force) {
                          from: cell(5), to: cell(6), src: "dashboard", shared: true });
       }
       fromSheet.reverse();
-      const local = CHANGES.filter(c => !c.shared && c.src !== "dashboard");
+      const inSheet = new Set(fromSheet.map(c => c.job + "|" + c.what + "|" + c.to));
+      const local = CHANGES.filter(c => !c.shared && !inSheet.has(c.job + "|" + c.what + "|" + c.to));
       CHANGES = fromSheet.concat(local);
       saveChanges();
     }
@@ -379,9 +407,13 @@ function renderDrawer() {
       mr.innerHTML = '<span class="spin"></span> writing to Excel…';
       try {
         const row = await markReady(j, turningOn);
+        pend(j.id, { done: turningOn ? 1 : 0 });
+        ALL = applyPending(ALL);
         noteChange(j.id, "Ready to deliver", turningOn ? "no" : "yes", turningOn ? "yes" : "no");
-        toast(j.id + (turningOn ? " marked ready to deliver (row " + row + " set gold)" : " put back into production"));
-        await load("re-reading…", true);
+        toast(j.id + (turningOn ? " marked ready to deliver — row " + row + " is now gold in Excel"
+                                : " put back into production"));
+        renderAll(); renderDrawer();          // instant: don't wait ~35s for the file
+        setTimeout(() => load("checking…", true), 45000);   // reconcile once the file catches up
       } catch (e) {
         toast(friendly(e), true);
         mr.disabled = false; renderDrawer();
@@ -395,9 +427,12 @@ function renderDrawer() {
         try {
           const was = (j.prods.find(p => p.n === name) || {}).st || [];
           await setProductStatus(j, name, val);
+          pend(j.id, { prod: { name: name, status: val } });
+          ALL = applyPending(ALL);
           noteChange(j.id, cap(name) + " status", PSTAT[was[0] || ""] || "none", PSTAT[val] || "none");
           toast(cap(name) + " → " + (PSTAT[val] || "cleared"));
-          await load("re-reading…", true);
+          renderAll(); renderDrawer();
+          setTimeout(() => load("checking…", true), 45000);
         } catch (e) {
           toast(friendly(e), true);
           sel.disabled = false;
@@ -491,7 +526,7 @@ async function start() {
   $("#whobtn").onclick = () => { if (confirm("Sign out of the dashboard?")) CW.signOut(); };
   await CW.openSession();
   await load("first read…");
-  setInterval(poll, 20000);
+  setInterval(poll, 12000);
 }
 
 (async function boot() {
