@@ -12,7 +12,11 @@ const CATS = {
 const STAGE = { floor: { l: "On floor", c: "--single" }, ready: { l: "Waiting", c: "--fab" }, office: { l: "In office", c: "--notsent" } };
 const PSTAT = { "": "—", process: "In fabrication", done: "Process done" };
 const STEPS = [["sold", "Sold"], ["stamp", "Stamp"], ["ivana", "Ivana"], ["ready", "Ready to print"], ["floor", "Sent to floor"]];
-const SORTS = [["id", "Job no"], ["cat", "Category"], ["urgent", "Urgent first"], ["size", "Biggest first"], ["wait", "Longest wait"], ["county", "County"]];
+const SORTS = [["id", "Job no (A-Z)"], ["num", "Job number (ignore letter)"], ["cat", "Category"],
+               ["urgent", "Urgent first"], ["size", "Biggest first"], ["wait", "Longest wait"], ["county", "County"]];
+/* R5244, C4794, S5136 ... sort on the digits alone, so the list runs in job
+   order rather than being grouped by whichever letter the job happens to carry. */
+const jobNum = j => { const m = /(\d+)/.exec(j.id); return m ? parseInt(m[1], 10) : 0; };
 const CATORDER = ["deliver", "collect", "wonttake", "secondhand", "floor", "ready", "office"];
 const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep", "Glazing", "Cut & Weld", "PVC Doors", "Smart Slides", "THWS", "Call Log"];
 
@@ -315,6 +319,7 @@ function filtered() {
     : s === "wait" ? (a, b) => ((a.dates.ready || "9") < (b.dates.ready || "9") ? -1 : 1)
     : s === "county" ? (a, b) => (a.area || "~").localeCompare(b.area || "~") || bi(a, b)
     : s === "urgent" ? (a, b) => ((b.urg ? 1 : 0) - (a.urg ? 1 : 0)) || bi(a, b)
+    : s === "num" ? (a, b) => (jobNum(a) - jobNum(b)) || bi(a, b)
     : s === "cat" ? (a, b) => (CATORDER.indexOf(catOf(a)) - CATORDER.indexOf(catOf(b))) || bi(a, b)
     : bi);
   if (state.desc) list.reverse();
