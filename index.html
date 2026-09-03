@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Costello Production</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪟</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
+    --ink:#17171a; --ink-2:#4d4a44; --ink-3:#6d6a62; --ink-4:#8e8b84;
+    --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#184f95; --accent-soft:#e2ecf8;
+    --fab:#8a6d00; --fab-bg:#fffbe0; --fab-dot:#ffff00;
+    --done:#8a6a1e; --done-bg:#fff6dd; --done-dot:#ffe699;
+    --cut:#2f7d1f; --notsent:#5d5a54; --single:#16437c;
+    --urgent:#b3261e; --urgent-bg:#fbe3e1;
+    --green:#3f8f2c; --green-bg:#e8f5e3; --green-bg2:#dcefd5;
+    --f:#2a78d6; --s:#c25525; --t:#14805a;
+  }
+  :root[data-theme="dark"] {
+    --bg:#16161a; --surface:#1e1e23; --surface-2:#24242a; --line:#33333b; --line-soft:#2b2b32;
+    --ink:#f2f1ee; --ink-2:#c9c6bf; --ink-3:#9a968d; --ink-4:#7a776f;
+    --brand:#0e0e11; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#6aa9ec; --accent-soft:#1d2c40;
+    --fab:#e8e04a; --fab-bg:#33320f; --done:#e0c98a; --done-bg:#332c18;
+    --cut:#6dbf4b; --notsent:#a8a49a; --single:#7fb4e8;
+    --urgent:#f07a72; --urgent-bg:#3b1d1b;
+    --green:#6dbf4b; --green-bg:#1d2c17; --green-bg2:#243a1c;
+    --f:#5598e7; --s:#e07a4a; --t:#35a97c;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
+         font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif }
+  .cond { font-family:"Barlow Condensed",sans-serif; font-variant-numeric:tabular-nums }
+  .tab { font-variant-numeric:tabular-nums }
+  .kick { font-size:10px; letter-spacing:.15em; text-transform:uppercase; font-weight:600; color:var(--ink-4) }
+  button { font:inherit; cursor:pointer }
+  @keyframes rise { from{transform:translateY(9px);opacity:0} to{transform:none;opacity:1} }
+  @keyframes slide { from{transform:translateX(34px);opacity:0} to{transform:none;opacity:1} }
+  @keyframes fade { from{opacity:0} to{opacity:1} }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  @keyframes spin { to { transform:rotate(360deg) } }
+
+  /* ---- gate ---- */
+  #gate { position:fixed; inset:0; background:var(--brand); color:var(--onbrand); z-index:80;
+          display:flex; align-items:center; justify-content:center; }
+  .gatebox { max-width:430px; padding:34px; text-align:left }
+  .gatebox h1 { font-family:"Barlow Condensed",sans-serif; font-size:44px; margin:0 0 6px;
+                text-transform:uppercase; letter-spacing:.02em }
+  .gatebox p { color:#a8a49a; line-height:1.55; margin:0 0 22px; font-size:14px }
+  .signin { background:#fff; color:#17171a; border:0; padding:13px 22px; border-radius:6px;
+            font-size:15px; font-weight:600; display:inline-flex; align-items:center; gap:10px }
+  .signin:hover { opacity:.9 }
+  #gateerr { margin-top:18px; color:#f07a72; font-size:13px; line-height:1.5; white-space:pre-wrap;
+             display:none; background:#2a1a1a; padding:11px 13px; border-radius:5px; border:1px solid #5a2a2a }
+
+  header.top { position:sticky; top:0; z-index:30; background:var(--brand); color:var(--onbrand);
+               padding:11px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap }
+  .brand b { font-family:"Barlow Condensed",sans-serif; font-size:25px; font-weight:700; text-transform:uppercase }
+  .brand span { font-size:12px; color:#a8a49a; margin-left:9px }
+  .searchwrap { flex:1; min-width:220px; max-width:560px; position:relative }
+  .searchwrap>svg { position:absolute; left:13px; top:50%; transform:translateY(-50%) }
+  #q { width:100%; height:42px; padding:0 40px; border-radius:6px; border:1.5px solid var(--brand-line);
+       background:var(--brand-2); color:var(--onbrand); font-size:14.5px; outline:none }
+  #q:focus { border-color:#6aa9ec }
+  .tools { display:flex; align-items:center; gap:7px; font-size:12px; color:#a8a49a; flex-shrink:0 }
+  .ghost { background:var(--brand-2); border:1px solid var(--brand-line); color:#d5d1c8;
+           padding:7px 11px; border-radius:5px; font-size:12.5px; display:inline-flex; align-items:center; gap:6px }
+  .ghost:hover { background:var(--brand-line); color:#fff }
+  .dot { width:7px; height:7px; border-radius:50%; background:#6dbf4b; display:inline-block }
+  .dot.busy { background:#e8c000; animation:pulse 1s ease-in-out infinite }
+  .dot.err { background:#f07a72 }
+
+  .wrap { max-width:1600px; margin:0 auto; padding:14px 20px 40px }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(138px,1fr)); gap:10px }
+  .tile { background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--line);
+          border-radius:5px; padding:10px 13px; text-align:left; animation:rise .3s ease both; color:inherit }
+  .tile:hover { transform:translateY(-2px); box-shadow:0 5px 16px rgba(0,0,0,.10) }
+  .tile[aria-pressed="true"] { border-color:var(--ink); background:var(--surface-2) }
+  .tile .n { font-family:"Barlow Condensed",sans-serif; font-size:28px; font-weight:700; line-height:1;
+             display:block; margin-top:3px; font-variant-numeric:tabular-nums }
+  .bar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:13px 0 11px }
+  .chip { font-size:12px; padding:5px 11px; border-radius:14px; border:1px solid var(--line);
+          background:var(--surface); color:var(--ink-2); white-space:nowrap }
+  .chip[aria-pressed="true"] { background:var(--ink); color:var(--bg); border-color:var(--ink) }
+  select.txt, input.txt { border:1px solid var(--line); border-radius:6px; padding:6px 10px;
+          background:var(--surface); color:var(--ink); font:inherit; font-size:12.5px; outline:none }
+
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:5px; overflow:hidden }
+  .thead,.row { display:grid;
+    grid-template-columns:96px minmax(120px,1.4fr) minmax(84px,1fr) 128px 68px 120px minmax(130px,1.2fr) 22px;
+    gap:12px; align-items:center; padding:0 15px }
+  .thead { height:35px; background:var(--surface-2); border-bottom:1.5px solid var(--ink) }
+  .row { height:44px; border-bottom:1px solid var(--line-soft); cursor:pointer; text-align:left;
+         width:100%; background:none; border-left:0; border-right:0; border-top:0; color:inherit;
+         font:inherit; animation:fade .2s ease both }
+  .row:hover { background:var(--surface-2); box-shadow:inset 3px 0 0 var(--accent) }
+  .row.ready { background:var(--green-bg); box-shadow:inset 3px 0 0 var(--green) }
+  .row.ready:hover { background:var(--green-bg2) }
+  .ell { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .badge { font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+           padding:2px 6px; border-radius:3px; white-space:nowrap; display:inline-block }
+  .stn { font-size:10.5px; padding:2px 7px; border-radius:10px; background:var(--accent-soft);
+         color:var(--single); white-space:nowrap }
+  .mini { height:9px; border-radius:2px; background:var(--line-soft); display:flex; gap:1.5px; overflow:hidden }
+  .mini i { display:block; height:100% }
+  .foot { display:flex; justify-content:space-between; align-items:center; padding:9px 15px;
+          border-top:1px solid var(--line-soft); font-size:12px; color:var(--ink-3); background:var(--surface-2) }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; align-items:center; padding:9px 15px;
+            border-top:1px solid var(--line-soft); background:var(--surface-2); font-size:12px; color:var(--ink-3) }
+  .sw { width:12px; height:12px; border-radius:3px; display:inline-block; vertical-align:-2px;
+        margin-right:5px; border:1px solid rgba(0,0,0,.2) }
+  .empty { padding:56px 20px; text-align:center; color:var(--ink-4) }
+
+  .scrim { position:fixed; inset:0; background:rgba(10,10,12,.42); z-index:40; animation:fade .18s ease both }
+  .drawer { position:fixed; top:0; right:0; height:100%; width:min(640px,96vw); background:var(--surface);
+            border-left:1px solid var(--line); box-shadow:-14px 0 40px rgba(0,0,0,.22); z-index:41;
+            display:flex; flex-direction:column; animation:slide .24s cubic-bezier(.32,.72,.35,1) both }
+  .dhead { background:var(--brand); color:var(--onbrand); padding:14px 18px; display:flex;
+           justify-content:space-between; align-items:flex-start; gap:12px }
+  .dbody { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:17px }
+  .sect { display:flex; flex-direction:column; gap:9px }
+  .steps { display:flex; gap:6px }
+  .step { flex:1; display:flex; flex-direction:column; gap:5px }
+  .stepbar { height:5px; border-radius:3px; background:var(--line) }
+  .dl { display:grid; grid-template-columns:112px 1fr; gap:6px 14px; font-size:13px }
+  .dl dt { color:var(--ink-3) } .dl dd { margin:0; font-weight:500 }
+  .ptab { display:grid; grid-template-columns:1fr 44px 44px 44px 120px; gap:8px; align-items:center;
+          font-size:13px; padding:7px 0; border-bottom:1px solid var(--line-soft) }
+  .note { border-left:3px solid var(--done-dot); background:var(--surface-2); padding:9px 12px; border-radius:0 4px 4px 0 }
+  .btn { background:var(--ink); color:var(--bg); border:0; padding:9px 15px; border-radius:5px; font-size:13px; font-weight:600 }
+  .btn.sec { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
+  .btn:disabled { opacity:.45; cursor:default }
+  .markbtn { background:var(--green); color:#fff; border:0; padding:11px 16px; border-radius:5px;
+             font-size:13.5px; font-weight:600; width:100%; display:flex; align-items:center;
+             justify-content:center; gap:8px }
+  .markbtn.undo { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
+  .markbtn:disabled { opacity:.5; cursor:default }
+  .editbar { background:var(--accent-soft); border:1px solid var(--accent); border-radius:5px;
+             padding:9px 12px; font-size:12.5px; color:var(--ink-2) }
+  .spin { width:13px; height:13px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
+          border-radius:50%; animation:spin .7s linear infinite; display:inline-block }
+  .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70;
+           background:var(--ink); color:var(--bg); padding:11px 18px; border-radius:6px;
+           font-size:13px; box-shadow:0 10px 30px rgba(0,0,0,.3); animation:rise .2s ease both; max-width:90vw }
+  .toast.err { background:#b3261e; color:#fff }
+  @media (max-width:900px){
+    .thead,.row { grid-template-columns:86px 1fr 96px 68px }
+    .thead>:nth-child(n+5),.row>:nth-child(n+5){ display:none }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gatebox">
+    <h1>Production</h1>
+    <p>Live view of the Costello Windows production sheet. Sign in with your Costello
+       account &mdash; you'll see exactly the jobs you can already open in Excel.</p>
+    <button class="signin" id="signinbtn">
+      <svg width="18" height="18" viewBox="0 0 23 23"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/><path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/></svg>
+      Sign in with Microsoft
+    </button>
+    <div id="gateerr"></div>
+  </div>
+</div>
+
+<header class="top" hidden id="topbar">
+  <div class="brand"><b>Production</b><span>Costello Windows &middot; Oakley</span></div>
+  <div class="searchwrap">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8e8b84" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+    <input id="q" placeholder="Search job no, customer, county, eircode or any comment..." autocomplete="off">
+  </div>
+  <div class="tools">
+    <span class="dot" id="livedot"></span><span id="status">starting…</span>
+    <button class="ghost" id="refreshbtn">Refresh</button>
+    <button class="ghost" id="themebtn">Dark</button>
+    <button class="ghost" id="whobtn">…</button>
+  </div>
+</header>
+
+<div class="wrap" hidden id="main">
+  <div class="tiles" id="tiles"></div>
+  <div class="bar" id="chips"></div>
+  <div class="card">
+    <div class="thead">
+      <span class="kick">Job no</span><span class="kick">Customer</span><span class="kick">County</span>
+      <span class="kick">Category</span><span class="kick">Wnd/Drs</span><span class="kick">Components F&middot;S&middot;T</span>
+      <span class="kick">On sheets</span><span></span>
+    </div>
+    <div id="rows"></div>
+    <div class="foot"><span id="count"></span><span id="srcinfo"></span></div>
+    <div class="legend">
+      <strong style="color:var(--ink-2)">Sheet colours:</strong>
+      <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
+      <span><i class="sw" style="background:#ffe699"></i>Ready to deliver &middot; <code>#FFE699</code></span>
+      <span style="color:var(--urgent)">Urgent = the word in the Comment column</span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.1/lib/msal-browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="parser.js"></script>
+<script src="graph.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
