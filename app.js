@@ -305,9 +305,12 @@ function applyTheme(t) {
 
 /* ---------- boot ---------- */
 async function start() {
-  $("#gate").hidden = true;
-  $("#topbar").hidden = false;
-  $("#main").hidden = false;
+  /* belt and braces: set both the attribute and the style, so no stylesheet
+     specificity accident can leave the overlay covering the dashboard */
+  const gate = $("#gate");
+  gate.hidden = true; gate.style.display = "none";
+  $("#topbar").hidden = false; $("#topbar").style.display = "flex";
+  $("#main").hidden = false; $("#main").style.display = "block";
   const a = CW.account;
   $("#whobtn").textContent = (a && (a.username || a.name)) || "signed in";
   $("#whobtn").onclick = () => { if (confirm("Sign out of the dashboard?")) CW.signOut(); };

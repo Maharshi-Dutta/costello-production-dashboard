@@ -31,6 +31,9 @@
     --f:#5598e7; --s:#e07a4a; --t:#35a97c;
   }
   * { box-sizing:border-box }
+  /* an ID/class rule with display: outranks the UA's [hidden] rule, so the
+     sign-in overlay stayed on screen after a successful login. */
+  [hidden] { display:none !important }
   body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
          font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif }
   .cond { font-family:"Barlow Condensed",sans-serif; font-variant-numeric:tabular-nums }
