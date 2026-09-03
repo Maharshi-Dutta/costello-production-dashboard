@@ -161,6 +161,17 @@ function diffJobs(prev, next, who, at) {
   return out;
 }
 
+/** Comments for one job, oldest first. They are stored as log rows, so they are
+    shared with everyone and survive browsers and devices. */
+function commentsFor(id) {
+  return CHANGES.filter(c => c.job === id && c.what === "Comment")
+    .slice().reverse();
+}
+async function addComment(id, text) {
+  noteChange(id, "Comment", "", text);      // local at once, log row behind it
+  toast("Comment added");
+}
+
 function whoAmI() {
   const a = CW.account;
   return (a && (a.username || a.name)) || "unknown";
@@ -490,6 +501,9 @@ function rowHtml(j, i, max) {
       j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
       (j.urg ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
       (fab ? '<span class="badge" style="background:var(--fab-bg);color:var(--fab)">In fab</span>' : "") +
+      (function () { const n = commentsFor(j.id).length;
+        return n ? '<span class="badge" style="background:var(--accent-soft);color:var(--single)">' +
+          n + (n > 1 ? " comments" : " comment") + '</span>' : ""; })() +
     '</span></div>';
 }
 
@@ -632,6 +646,21 @@ function renderDrawer() {
       (Object.keys(j.glass).length ? '<div class="sect"><span class="kick">Glass units</span><div style="display:flex;flex-wrap:wrap;gap:6px">' +
         Object.keys(j.glass).map(k => '<span style="font-size:12.5px;padding:5px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2)">' +
           esc(k.toUpperCase()) + ' <strong class="tab">' + j.glass[k] + '</strong></span>').join("") + '</div></div>' : "") +
+      (function () {
+        const cs = commentsFor(j.id);
+        return '<div class="sect"><span class="kick">Comments (' + cs.length + ')</span>' +
+          (cs.length ? cs.map(c => '<div class="cmt"><div style="display:flex;justify-content:space-between;' +
+              'font-size:11px;color:var(--ink-3);margin-bottom:4px">' +
+              '<strong style="color:var(--ink-2)">' + esc(c.who) + '</strong><span>' + esc(stamp(c.at)) + '</span></div>' +
+              '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">' + esc(c.to) + '</div></div>').join("")
+            : '<div style="font-size:13px;color:var(--ink-4)">No comments on this job yet.</div>') +
+          (ed ? '<textarea id="cbox" rows="2" placeholder="Add a comment for this job…"></textarea>' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">' +
+                '<span style="font-size:11.5px;color:var(--ink-4)">Saved to the Dashboard Log sheet and shared with everyone. The Production sheet is not changed.</span>' +
+                '<button class="btn" id="cadd">Add comment</button></div>'
+              : '<div style="font-size:12px;color:var(--ink-4)">Click <strong>Edit</strong> above to add a comment.</div>') +
+          '</div>';
+      })() +
       (j.notes.length ? '<div class="sect"><span class="kick">From the sheet</span>' +
         j.notes.map(n => '<div class="note"><div class="kick" style="margin-bottom:3px">' + esc(n.k) + ' · ' + esc(n.s) + '</div>' +
           '<div style="font-size:13px;line-height:1.45">' + esc(n.t) + '</div></div>').join("") + '</div>' : "") +
@@ -662,6 +691,15 @@ function renderDrawer() {
         toast(friendly(e), true);
         mr.disabled = false; renderDrawer();
       }
+    };
+    const cadd = $("#cadd");
+    if (cadd) cadd.onclick = async () => {
+      const box = $("#cbox"), t = box.value.trim();
+      if (!t) return;
+      cadd.disabled = true;
+      await addComment(j.id, t);
+      box.value = ""; cadd.disabled = false;
+      renderDrawer(); renderRows();
     };
     host.querySelectorAll(".ptab[data-p]").forEach(rowEl => {
       const sel = rowEl.querySelector(".pst"); if (!sel) return;
