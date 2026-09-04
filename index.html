@@ -179,8 +179,37 @@
   .stepbar { height:5px; border-radius:3px; background:var(--line) }
   .dl { display:grid; grid-template-columns:112px 1fr; gap:6px 14px; font-size:13px }
   .dl dt { color:var(--ink-3) } .dl dd { margin:0; font-weight:500 }
-  .ptab { display:grid; grid-template-columns:1fr 44px 44px 44px 120px; gap:8px; align-items:center;
-          font-size:13px; padding:7px 0; border-bottom:1px solid var(--line-soft) }
+  /* checkpoints: one line per countable thing. Controls are thumb sized (>=40px)
+     because most of the ticking happens on a phone on the factory floor. */
+  .cpsum { font-size:11.5px; color:var(--ink-3); text-align:right }
+  .cphint { font-size:11.5px; color:var(--ink-4); line-height:1.45 }
+  .cpgrp { border:1px solid var(--line-soft); border-radius:5px; overflow:hidden }
+  .cphead { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px;
+            background:var(--surface-2); border-bottom:1px solid var(--line-soft) }
+  .cpgname { font-size:12.5px; font-weight:600 }
+  .cpline { display:grid; grid-template-columns:minmax(84px,1fr) 76px 92px auto; gap:10px;
+            align-items:center; padding:6px 10px; border-bottom:1px solid var(--line-soft) }
+  .cpgrp .cpline:last-child { border-bottom:0 }
+  .cplab { font-size:13px }
+  .cpnum { font-size:12px; color:var(--ink-3); white-space:nowrap }
+  .cpbar { height:9px; border-radius:2px; background:var(--line-soft); overflow:hidden; display:block }
+  .cpbar i { display:block; height:100% }
+  .cpctl { display:flex; align-items:center; gap:6px; justify-content:flex-end }
+  .cpbtn { width:40px; height:40px; border:1px solid var(--line); border-radius:5px;
+           background:var(--surface); color:var(--ink); font-size:17px; line-height:1 }
+  .cpin { width:56px; height:40px; text-align:center; border:1px solid var(--line); border-radius:5px;
+          background:var(--surface); color:var(--ink); font:inherit; font-size:14px; outline:none }
+  .cpall { min-height:40px; padding:0 12px; border:1px solid var(--line); border-radius:5px;
+           background:var(--surface); color:var(--ink-2); font-size:12px; white-space:nowrap }
+  .cpbtn:hover:not(:disabled), .cpall:hover:not(:disabled) { background:var(--surface-2); color:var(--ink) }
+  .cpbtn:disabled, .cpin:disabled, .cpall:disabled { opacity:.45; cursor:default }
+  .cpwho { grid-column:1/-1; font-size:11px; color:var(--ink-4); margin-top:-1px }
+  .badge.cpbadge { background:var(--surface-2); color:var(--ink-3) }
+  @media (max-width:560px){
+    .cpline { grid-template-columns:1fr auto }
+    .cpbar, .cpctl { grid-column:1/-1 }
+    .cpctl { justify-content:flex-start }
+  }
   .note { border-left:3px solid var(--done-dot); background:var(--surface-2); padding:9px 12px; border-radius:0 4px 4px 0 }
   .btn { background:var(--ink); color:var(--bg); border:0; padding:9px 15px; border-radius:5px; font-size:13px; font-weight:600 }
   .btn.sec { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
@@ -245,7 +274,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260904-0954</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260904-1447</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -257,8 +286,9 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260904-0954"></script>
-<script src="graph.js?v=20260904-0954"></script>
-<script src="app.js?v=20260904-0954"></script>
+<script src="parser.js?v=20260904-1447"></script>
+<script src="graph.js?v=20260904-1447"></script>
+<script src="checkpoints.js?v=20260904-1447"></script>
+<script src="app.js?v=20260904-1447"></script>
 </body>
 </html>

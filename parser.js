@@ -47,6 +47,13 @@ function fillOf(cell) {
 
 const GOLD = new Set(['FFE699', 'FFC000']);
 const YELLOW = new Set(['FFFF00']);
+
+/* A job shows up on several sheets; when two of them disagree about a cell's
+   colour the further-along one wins, because a colour is only ever added as
+   work is finished - it is never taken back to mean "less done". */
+const CPRANK = { '': 0, process: 1, done: 2 };
+const cpOf = fill => YELLOW.has(fill) ? 'process' : (GOLD.has(fill) ? 'done' : '');
+const cpBump = (o, k, st) => { if (CPRANK[st] > CPRANK[o[k] || '']) o[k] = st; };
 const norm = v => String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 function cellText(cell) {
@@ -207,6 +214,11 @@ function parseWorkbook(wb) {
     const ws = wb.getWorksheet(name);
     if (!ws) continue;
     const m = mapSheet(ws);
+    /* Checkpoint colours come from the Production sheet alone: it is the only
+       sheet this dashboard writes, so taking the furthest-along colour across
+       all the sheets would make un-ticking something snap straight back from
+       whatever the copy on Production (2) or PA Lam still says. */
+    const cpHere = name === 'Production';
     const maxC = Math.min(ws.columnCount || 150, 150);
     const maxR = ws.rowCount || 0;
     for (let r = 1; r <= maxR; r++) {
@@ -222,15 +234,24 @@ function parseWorkbook(wb) {
       const rowDone = goldSpine >= 10 || goldAll >= 40;
 
       let j = jobs[jid];
-      if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, glass: {}, status: {}, notes: [] }; }
+      if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, glass: {}, status: {}, notes: [],
+                                  cp: { win: '', drs: '', glass: {}, prod: {} } }; }
       j.src[LABEL[name]] = r;
       if (rowDone) j.done = 1;
       if (j.sheets.indexOf(LABEL[name]) < 0) j.sheets.push(LABEL[name]);
 
       for (const k in m.ident) { const v = cellText(row.getCell(m.ident[k])).trim(); if (v && !j[k]) j[k] = v.slice(0, 70); }
       for (const k in m.dates) { const v = cellDate(row.getCell(m.dates[k])); if (v && !j['d_' + k]) j['d_' + k] = v; }
-      for (const k in m.qty) { const v = num(row.getCell(m.qty[k])); if (v && !j[k]) j[k] = v; }
-      for (const k in m.glass) { const v = num(row.getCell(m.glass[k])); if (v) j.glass[k] = Math.max(j.glass[k] || 0, v); }
+      for (const k in m.qty) {
+        const c = row.getCell(m.qty[k]), v = num(c);
+        if (v && !j[k]) j[k] = v;
+        if (cpHere) cpBump(j.cp, k === 'wnd' ? 'win' : 'drs', cpOf(fillOf(c)));
+      }
+      for (const k in m.glass) {
+        const c = row.getCell(m.glass[k]), v = num(c);
+        if (v) j.glass[k] = Math.max(j.glass[k] || 0, v);
+        if (cpHere) cpBump(j.cp.glass, k, cpOf(fillOf(c)));
+      }
 
       for (const pname of m.prodOrder) {
         const cols = m.prod[pname];
@@ -246,6 +267,9 @@ function parseWorkbook(wb) {
           const fill = fillOf(row.getCell(cols[sub]));
           if (YELLOW.has(fill)) { (j.status[pname] = j.status[pname] || {})['process'] = 1; }
           else if (GOLD.has(fill) && !rowDone) { (j.status[pname] = j.status[pname] || {})['done'] = 1; }
+          /* only make an entry when there is a colour, so cp.prod stays small */
+          const cst = cpHere ? cpOf(fill) : '';
+          if (cst) cpBump(j.cp.prod[pname] = j.cp.prod[pname] || {}, sub, cst);
         }
       }
       for (const k in m.notes) {
@@ -263,12 +287,23 @@ function parseWorkbook(wb) {
     const j = jobs[id];
     const cmtxt = j.notes.map(n => n.t).join(' ');
     const ph = String(j.phone || '').replace(/\D/g, '');
+    const prods = Object.keys(j.prods).map(k => ({ n: k, f: j.prods[k][0], s: j.prods[k][1], t: j.prods[k][2], st: Object.keys(j.status[k] || {}) }));
+    /* a whole gold row says the job is finished, so every checkpoint on it is */
+    if (j.done) {
+      if (j.wnd) j.cp.win = 'done';
+      if (j.drs) j.cp.drs = 'done';
+      Object.keys(j.glass).forEach(k => { j.cp.glass[k] = 'done'; });
+      prods.forEach(p => {
+        const o = j.cp.prod[p.n] = j.cp.prod[p.n] || {};
+        ['f', 's', 't'].forEach(s => { if (p[s]) o[s] = 'done'; });
+      });
+    }
     return {
       id, cust: j.cust || '', area: j.area || '', eir: j.eir || '', off: j.off || '',
       colour: j.colour || '', ph3: ph.length >= 3 ? ph.slice(-3) : '',
       wnd: j.wnd || 0, drs: j.drs || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
-      prods: Object.keys(j.prods).map(k => ({ n: k, f: j.prods[k][0], s: j.prods[k][1], t: j.prods[k][2], st: Object.keys(j.status[k] || {}) })),
+      prods: prods, cp: j.cp,
       glass: j.glass, notes: j.notes, sheets: j.sheets, src: j.src,
       urg: URG_RE.test(cmtxt) ? 1 : 0, done: j.done || 0,
       cat: PRODCAT[id] || 'past',

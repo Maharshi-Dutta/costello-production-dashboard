@@ -183,16 +183,38 @@ async function restoreVersion(versionId) {
   return call("POST", f.meta + "/versions/" + versionId + "/restoreVersion", {});
 }
 
+/* ---- one writer at a time per dashboard sheet -----------------------------
+   Every upsert below is "read usedRange, work out the row, write it". Two of
+   those running at once read the same rowCount and write the same row, so one
+   change silently replaces the other. Chaining them per sheet costs nothing
+   (they are a few hundred milliseconds each) and makes that impossible.     */
+const chains = {};
+function serialised(sheet, fn) {
+  const prev = chains[sheet] || Promise.resolve();
+  const next = prev.then(fn, fn);                 // an earlier failure must not stall the queue
+  chains[sheet] = next.catch(() => {});
+  return next;
+}
+/* The ensure*Sheet functions below remember the promise, not a flag: a second
+   caller arriving while the first is still creating the sheet waits for it
+   instead of adding the sheet a second time. A failure clears the memo so the
+   next caller retries. */
+
 /* ---- the audit log -------------------------------------------------------
    HARD RULE: every function below addresses LOG_SHEET and nothing else. The
    sheet name is a constant, never a parameter, so no call site can point this
    at Production or any other sheet.                                          */
 const LOG_SHEET = "Dashboard Log";
 const LOG_HEADERS = [["When", "Who", "Job", "What changed", "From", "To"]];
-let logReady = false;
+let logReady = null;
 
-async function ensureLogSheet() {
-  if (logReady) return true;
+function ensureLogSheet() {
+  if (logReady) return logReady;
+  logReady = makeLogSheet();
+  logReady.catch(() => { logReady = null; });
+  return logReady;
+}
+async function makeLogSheet() {
   const f = await findFile();
   const ws = await call("GET", f.base + "/worksheets");
   const exists = (ws.value || []).some(w => w.name === LOG_SHEET);
@@ -210,7 +232,6 @@ async function ensureLogSheet() {
     for (const col in widths)
       await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='" + col + ":" + col + "')/format", { columnWidth: widths[col] });
   }
-  logReady = true;
   return true;
 }
 
@@ -219,19 +240,22 @@ async function appendLog(who, job, what, from, to) {
   try {
     await ensureLogSheet();
     const f = await findFile();
-    const used = await call("GET", f.base + "/worksheets('" + LOG_SHEET + "')/usedRange?$select=rowCount");
-    const next = (used.rowCount || 1) + 1;
-    const when = new Date();
-    const pad = n => (n < 10 ? "0" : "") + n;
-    /* ISO order, written as text. "03/09/2026" is read as 9 March by a US-locale
-       Excel and 3 September by an Irish one; this is the same everywhere, and
-       still sorts correctly because ISO sorts lexicographically. */
-    const stampStr = when.getFullYear() + "-" + pad(when.getMonth() + 1) + "-" + pad(when.getDate()) +
-                     " " + pad(when.getHours()) + ":" + pad(when.getMinutes());
-    await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='A" + next + ":F" + next + "')",
-      { values: [[stampStr, who || "unknown", job, what, String(from == null ? "" : from), String(to == null ? "" : to)]],
-        numberFormat: [["@", "@", "@", "@", "@", "@"]] });
-    return true;
+    /* queued: two log lines a moment apart would otherwise both take the same row */
+    return await serialised(LOG_SHEET, async () => {
+      const used = await call("GET", f.base + "/worksheets('" + LOG_SHEET + "')/usedRange?$select=rowCount");
+      const next = (used.rowCount || 1) + 1;
+      const when = new Date();
+      const pad = n => (n < 10 ? "0" : "") + n;
+      /* ISO order, written as text. "03/09/2026" is read as 9 March by a US-locale
+         Excel and 3 September by an Irish one; this is the same everywhere, and
+         still sorts correctly because ISO sorts lexicographically. */
+      const stampStr = when.getFullYear() + "-" + pad(when.getMonth() + 1) + "-" + pad(when.getDate()) +
+                       " " + pad(when.getHours()) + ":" + pad(when.getMinutes());
+      await call("PATCH", f.base + "/worksheets('" + LOG_SHEET + "')/range(address='A" + next + ":F" + next + "')",
+        { values: [[stampStr, who || "unknown", job, what, String(from == null ? "" : from), String(to == null ? "" : to)]],
+          numberFormat: [["@", "@", "@", "@", "@", "@"]] });
+      return true;
+    });
   } catch (e) {
     console.warn("log append failed:", e.message);
     return false;   // never let a logging failure block the real edit
@@ -244,10 +268,15 @@ async function appendLog(who, job, what, from, to) {
    go stale. Addresses VIEWS_SHEET by constant, like the log.               */
 const VIEWS_SHEET = "Dashboard Views";
 const VIEWS_HEADERS = [["View", "Job", "Group", "Order", "Set by", "When"]];
-let viewsReady = false;
+let viewsReady = null;
 
-async function ensureViewsSheet() {
-  if (viewsReady) return true;
+function ensureViewsSheet() {
+  if (viewsReady) return viewsReady;
+  viewsReady = makeViewsSheet();
+  viewsReady.catch(() => { viewsReady = null; });
+  return viewsReady;
+}
+async function makeViewsSheet() {
   const f = await findFile();
   const ws = await call("GET", f.base + "/worksheets");
   if (!(ws.value || []).some(w => w.name === VIEWS_SHEET)) {
@@ -260,7 +289,6 @@ async function ensureViewsSheet() {
     for (const c in widths)
       await call("PATCH", S + "/range(address='" + c + ":" + c + "')/format", { columnWidth: widths[c] });
   }
-  viewsReady = true;
   return true;
 }
 
@@ -302,6 +330,93 @@ async function clearAssignment(view, job) {
     }
   }
   return false;
+}
+
+/* ---- checkpoint progress -------------------------------------------------
+   Excel keeps only the colour of a cell, so "6 of 10" has to be written down
+   somewhere: here, one upserted row per (Job, Item). Everything below
+   addresses PROGRESS_SHEET by constant, like the log and the views. */
+const PROGRESS_SHEET = "Dashboard Progress";
+const PROGRESS_HEADERS = [["Job", "Item", "Done", "Total", "Who", "When"]];
+const TEXT6 = [["@", "@", "@", "@", "@", "@"]];
+let progressReady = null;
+
+/* same ISO-order text stamp as the log, for the same locale reason */
+function nowStamp() {
+  const d = new Date(), p = n => (n < 10 ? "0" : "") + n;
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+function ensureProgressSheet() {
+  if (progressReady) return progressReady;
+  progressReady = makeProgressSheet();
+  progressReady.catch(() => { progressReady = null; });
+  return progressReady;
+}
+async function makeProgressSheet() {
+  const f = await findFile();
+  const ws = await call("GET", f.base + "/worksheets");
+  if (!(ws.value || []).some(w => w.name === PROGRESS_SHEET)) {
+    await call("POST", f.base + "/worksheets/add", { name: PROGRESS_SHEET });
+    const S = f.base + "/worksheets('" + PROGRESS_SHEET + "')";
+    await call("PATCH", S + "/range(address='A1:F1')", { values: PROGRESS_HEADERS });
+    await call("PATCH", S + "/range(address='A1:F1')/format/font", { bold: true, color: "#FFFFFF" });
+    await call("PATCH", S + "/range(address='A1:F1')/format/fill", { color: "#17171A" });
+    /* text throughout: a count is not a sum and "2026-09-04 10:42" is not a
+       date Excel should re-interpret in whatever locale it happens to run in */
+    const fmt = []; for (let i = 0; i < 1999; i++) fmt.push(["@", "@", "@", "@", "@", "@"]);
+    await call("PATCH", S + "/range(address='A2:F2000')", { numberFormat: fmt });
+    const widths = { A: 70, B: 210, C: 60, D: 60, E: 220, F: 130 };
+    for (const c in widths)
+      await call("PATCH", S + "/range(address='" + c + ":" + c + "')/format", { columnWidth: widths[c] });
+  }
+  return true;
+}
+
+/** Store one item's count. Updates the existing (Job, Item) line, else appends. */
+async function saveProgress(job, item, done, total, who) {
+  await ensureProgressSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + PROGRESS_SHEET + "')";
+  return serialised(PROGRESS_SHEET, async () => {
+    const used = await call("GET", S + "/usedRange?$select=values,rowCount");
+    const rows = used.values || [];
+    let target = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][0] || "").trim().toUpperCase() === String(job).toUpperCase() &&
+          String(rows[i][1] || "").trim() === String(item)) { target = i + 1; break; }
+    }
+    if (!target) target = (used.rowCount || 1) + 1;
+    await call("PATCH", S + "/range(address='A" + target + ":F" + target + "')", {
+      values: [[job, item, String(done), String(total), who || "", nowStamp()]],
+      numberFormat: TEXT6
+    });
+    return target;
+  });
+}
+
+/** Store several items of one job: one read of the sheet, then all the rows in
+    a single batch - a whole group of taps costs two requests, not two per item. */
+async function saveProgressMany(job, items, who) {
+  await ensureProgressSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + PROGRESS_SHEET + "')";
+  return serialised(PROGRESS_SHEET, async () => {
+    const used = await call("GET", S + "/usedRange?$select=values,rowCount");
+    const rows = used.values || [], at = {};
+    for (let i = 1; i < rows.length; i++)
+      if (String(rows[i][0] || "").trim().toUpperCase() === String(job).toUpperCase())
+        at[String(rows[i][1] || "").trim()] = i + 1;
+    let next = (used.rowCount || 1) + 1;
+    const when = nowStamp();
+    const reqs = (items || []).map(x => {
+      const r = at[x.item] || next++;
+      return { method: "PATCH", url: S + "/range(address='A" + r + ":F" + r + "')",
+               body: { values: [[job, x.item, String(x.done), String(x.total), who || "", when]], numberFormat: TEXT6 } };
+    });
+    if (reqs.length) await batchWrite(reqs);
+    return reqs.length;
+  });
 }
 
 /* ---- writes: always addressed by cell, never by rewriting the file ---- */
@@ -621,6 +736,7 @@ window.CW = {
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
+  ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,
   listVersions, downloadVersion, restoreVersion,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },

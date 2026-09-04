@@ -10,7 +10,6 @@ const CATS = {
   wonttake: { l: "Won't take", c: "--notsent" }, secondhand: { l: "Second hand", c: "--ink-3" }
 };
 const STAGE = { floor: { l: "On floor", c: "--single" }, ready: { l: "Waiting", c: "--fab" }, office: { l: "In office", c: "--notsent" } };
-const PSTAT = { "": "—", process: "In fabrication", done: "Process done" };
 const STEPS = [["sold", "Sold"], ["stamp", "Stamp"], ["ivana", "Ivana"], ["ready", "Ready to print"], ["floor", "Sent to floor"]];
 const SORTS = [["id", "Job no (A-Z)"], ["num", "Job number (ignore letter)"], ["cat", "Category"],
                ["urgent", "Urgent first"], ["size", "Biggest first"], ["wait", "Longest wait"], ["county", "County"]];
@@ -32,31 +31,76 @@ const PENDING_MS = 180000;
    change would disappear the moment you pressed F5. */
 try { PENDING = JSON.parse(localStorage.getItem("cw_pending") || "{}"); } catch (e) { PENDING = {}; }
 const savePending = () => { try { localStorage.setItem("cw_pending", JSON.stringify(PENDING)); } catch (e) {} };
+/* Each held thing carries its own timestamp: ticking a checkpoint must not
+   extend the hold on an unrelated change made two minutes earlier. */
 function pend(id, patch) {
   const p = PENDING[id] || (PENDING[id] = { at: 0, prods: {} });
-  p.at = Date.now();
-  if ("done" in patch) p.done = patch.done;
-  if (patch.prod) p.prods[patch.prod.name] = patch.prod.status;
-  if ("blk" in patch) { if (patch.blk == null) delete p.blk; else p.blk = patch.blk; }
+  const now = Date.now(), was = p.at || now;
+  const t = p.t = p.t || {};
+  /* entries written by an older build have one timestamp for the whole job */
+  if ("done" in p && !t.done) t.done = was;
+  if (p.blk != null && !t.blk) t.blk = was;
+  Object.keys(p.prods || {}).forEach(k => { if (!t["prod:" + k]) t["prod:" + k] = was; });
+  Object.keys(p.cp || {}).forEach(k => { if (!t["cp:" + k]) t["cp:" + k] = was; });
+  p.at = now;
+  if ("done" in patch) { p.done = patch.done; t.done = now; }
+  if (patch.prod) { p.prods[patch.prod.name] = patch.prod.status; t["prod:" + patch.prod.name] = now; }
+  if (patch.cp) {
+    p.cp = p.cp || {};
+    /* null means "stop holding this one" - used when a write failed and the
+       count it replaced was itself unknown, so there is nothing to put back */
+    for (const k in patch.cp) {
+      if (patch.cp[k] == null) { delete p.cp[k]; delete t["cp:" + k]; }
+      else { p.cp[k] = patch.cp[k]; t["cp:" + k] = now; }
+    }
+  }
+  if ("blk" in patch) { if (patch.blk == null) { delete p.blk; delete t.blk; } else { p.blk = patch.blk; t.blk = now; } }
   savePending();
 }
 const blkCat = b => b === 0 ? "secondhand" : b === 1 ? "wonttake" : b === 2 ? "collect" : "active";
-function applyPending(list) {
+const pendEmpty = p => !("done" in p) && p.blk == null &&
+  !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length;
+
+/** `fresh` = this is a newly parsed workbook, so a held count can be compared
+    with what the file now says and let go once the two agree. */
+function applyPending(list, fresh) {
   const now = Date.now();
   let dropped = false;
-  Object.keys(PENDING).forEach(id => { if (now - PENDING[id].at > PENDING_MS) { delete PENDING[id]; dropped = true; } });
-  if (dropped) savePending();
-  return list.map(j => {
+  Object.keys(PENDING).forEach(id => {
+    const p = PENDING[id], t = p.t = p.t || {};
+    const old = k => now - (t[k] || p.at || 0) > PENDING_MS;
+    if ("done" in p && old("done")) { delete p.done; delete t.done; dropped = true; }
+    if (p.blk != null && old("blk")) { delete p.blk; delete t.blk; dropped = true; }
+    Object.keys(p.prods || {}).forEach(k => { if (old("prod:" + k)) { delete p.prods[k]; delete t["prod:" + k]; dropped = true; } });
+    Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
+    if (pendEmpty(p)) { delete PENDING[id]; dropped = true; }
+  });
+  const out = list.map(x => {
+    /* always re-apply to the parsed job, never to an already patched copy:
+       letting a hold go has to give back exactly what the file says */
+    const j = x.raw || x;
     const p = PENDING[j.id];
     if (!p) return j;
+    /* the file has caught up with this tick: stop holding it, so what Excel
+       says takes over again straight away */
+    if (fresh && p.cp) Object.keys(p.cp).forEach(k => {
+      const st = itemState(j, k);
+      if (st && st.done != null && st.done === p.cp[k]) { delete p.cp[k]; delete p.t["cp:" + k]; dropped = true; }
+    });
+    if (pendEmpty(p)) { delete PENDING[j.id]; dropped = true; return j; }
     const c = Object.assign({}, j);
+    c.raw = j;
     if ("done" in p) c.done = p.done;
+    if (p.cp && Object.keys(p.cp).length) { c.cp = cpWithHeld(j, p.cp); c.cpDone = Object.assign({}, p.cp); }
     if (p.blk != null) { c.blk = p.blk; c.cat = blkCat(p.blk); }   // moved in Excel; file still catching up
-    c.prods = j.prods.map(x => Object.prototype.hasOwnProperty.call(p.prods, x.n)
-      ? Object.assign({}, x, { st: p.prods[x.n] ? [p.prods[x.n]] : [] }) : x);
+    c.prods = j.prods.map(y => Object.prototype.hasOwnProperty.call(p.prods, y.n)
+      ? Object.assign({}, y, { st: p.prods[y.n] ? [p.prods[y.n]] : [] }) : y);
     c.stage = c.done ? "deliver" : (c.dates.floor ? "floor" : (c.dates.ready ? "ready" : "office"));
     return c;
   });
+  if (dropped) savePending();
+  if (list.blockNames) out.blockNames = list.blockNames;   // the grouped view reads them off the list
+  return out;
 }
 
 /* Placements in dashboard-only categories get the same treatment: kept here
@@ -144,6 +188,26 @@ function setStatus(text, kind) {
 const CATNAME = { deliver:"Ready to deliver", collect:"Collect & supply", wonttake:"Won't take",
                   secondhand:"Second hand", floor:"On floor", ready:"Waiting for floor", office:"In office" };
 
+const CPWORD = { "": "not started", process: "in fabrication", done: "done" };
+const GROUPDONE = /: (all done|cleared)$/;
+
+/** Drop the differences that describe what this dashboard itself just did, so a
+    change is not listed twice. A group write logs one line ("Glass: all done")
+    but shows up in the sheet as one difference per item ("Glass TG"), so the
+    group's own label covers those too. */
+function dropMine(list, changes, now) {
+  const t = now || Date.now();
+  const recent = (changes || []).filter(c => c.src === "dashboard" && t - new Date(c.at).getTime() < 600000);
+  const mine = new Set(recent.map(c => c.job + "|" + c.what));
+  const groups = recent.filter(c => GROUPDONE.test(c.what))
+    .map(c => ({ job: c.job, up: c.what.replace(GROUPDONE, "").toUpperCase() }));
+  return list.filter(c => {
+    if (mine.has(c.job + "|" + c.what)) return false;
+    const w = String(c.what).toUpperCase();
+    return !groups.some(g => g.job === c.job && (w === g.up || w.indexOf(g.up + " ") === 0));
+  });
+}
+
 /** Compare two parses of the workbook and describe every difference in plain terms. */
 function diffJobs(prev, next, who, at) {
   const out = [], pm = {}, nm = {};
@@ -172,10 +236,14 @@ function diffJobs(prev, next, who, at) {
       if (!b) { add(n.id, "Product added - " + cap(k), "", c.f + "/" + c.s + "/" + c.t); return; }
       if (b.f !== c.f || b.s !== c.s || b.t !== c.t)
         add(n.id, cap(k) + " F/S/T", b.f + "/" + b.s + "/" + b.t, c.f + "/" + c.s + "/" + c.t);
-      const bs = (b.st || [])[0] || "", cs = (c.st || [])[0] || "";
-      if (bs !== cs) add(n.id, cap(k) + " status", PSTAT[bs] || "none", PSTAT[cs] || "none");
     });
     Object.keys(ps).forEach(k => { if (!ns[k]) add(n.id, "Product removed - " + cap(k), ps[k].f + "/" + ps[k].s + "/" + ps[k].t, ""); });
+    /* checkpoint colours, named the same way the dashboard's own log names them,
+       so a tick made here is not also listed as a change spotted in Excel */
+    cpItems(n).forEach(x => {
+      const was = cpStatus(p, x.key), is = cpStatus(n, x.key);
+      if (was !== is) add(n.id, cpLabel(x.key), CPWORD[was], CPWORD[is]);
+    });
     if (p.notes.length !== n.notes.length) {
       const old = p.notes.map(x => x.t), fresh = n.notes.filter(x => old.indexOf(x.t) < 0);
       fresh.forEach(x => add(n.id, "Note added", "", x.t.slice(0, 90)));
@@ -212,6 +280,15 @@ function updateChangeBtn() {
 }
 
 /* ---------- load ---------- */
+/* SharePoint needs about 35 s to put our change into the downloadable file, so
+   every write asks for a re-read afterwards. One timer for all of them: a run
+   of edits should re-read the file once, not once per edit. */
+let reconcileT = null;
+function scheduleReconcile(ms) {
+  if (reconcileT) clearTimeout(reconcileT);
+  reconcileT = setTimeout(() => { reconcileT = null; load("checking…", true); }, ms == null ? 45000 : ms);
+}
+
 async function load(reason, force) {
   if (busy && !force) return;
   busy = true;
@@ -224,7 +301,33 @@ async function load(reason, force) {
     const prev = ALL;
     const parsed = parseWorkbook(wb);
     BLOCKNAMES = parsed.blockNames || [];
-    ALL = applyPending(parsed);   // our own recent writes win over a stale file
+    /* the checkpoint counts, read before the held ticks are applied: a hold is
+       let go the moment the file agrees with it, and that comparison needs the
+       counts from this download, not the ones from the last */
+    const pgw = wb.getWorksheet(CW.PROGRESS_SHEET);
+    if (pgw) {
+      const counts = {};
+      for (let r = 2; r <= (pgw.rowCount || 0); r++) {
+        const row = pgw.getRow(r);
+        const cell = i => {
+          const v = row.getCell(i).value;
+          if (v == null) return "";
+          if (v instanceof Date) {           // Excel may have taken the stamp for a date
+            const q = n => (n < 10 ? "0" : "") + n;
+            return v.getFullYear() + "-" + q(v.getMonth() + 1) + "-" + q(v.getDate()) +
+                   " " + q(v.getHours()) + ":" + q(v.getMinutes());
+          }
+          return v.text != null ? v.text : String(v);
+        };
+        const job = cell(1).trim().toUpperCase(), item = cell(2).trim();
+        if (!job || !item) continue;
+        (counts[job] = counts[job] || {})[item] =
+          { done: Number(cell(3)) || 0, total: Number(cell(4)) || 0, who: cell(5).trim(), when: cell(6).trim() };
+      }
+      cpSetProgress(counts);
+    } else cpSetProgress({});          // no sheet, no counts - never the last download's
+
+    ALL = applyPending(parsed, true);   // our own recent writes win over a stale file
     ALL.blockNames = BLOCKNAMES;
     const ps = wb.getWorksheet("Production");
     PRODMAP = ps ? mapSheet(ps) : null;
@@ -280,10 +383,8 @@ async function load(reason, force) {
     }
     if (prev.length) {
       let d = diffJobs(prev, ALL, m.by || "someone in Excel", m.at);
-      /* a dashboard edit also shows up as a cell difference - don't list it twice */
-      const mine = new Set(CHANGES.filter(c => c.src === "dashboard" &&
-        Date.now() - new Date(c.at).getTime() < 600000).map(c => c.job + "|" + c.what));
-      d = d.filter(c => !mine.has(c.job + "|" + c.what));
+      d = dropMine(d, CHANGES);   // a dashboard edit also shows up as a cell difference
+
       if (d.length) {
         CHANGES = d.concat(CHANGES); saveChanges();
         toast(d.length + " change" + (d.length > 1 ? "s" : "") + " — click Changes to see them");
@@ -311,8 +412,8 @@ async function poll() {
   } catch (e) { /* transient; next tick will retry */ }
 }
 
-/* ---------- writes ---------- */
-const GOLD_HEX = "#FFE699", YELLOW_HEX = "#FFFF00";
+/* ---------- writes ----------
+   GOLD_HEX / YELLOW_HEX / WHITE_HEX live in checkpoints.js, which loads first. */
 
 /* Moving a job between the sheet's own sections moves its row in Excel. The
    list changes at once and holds the new place until the file catches up. */
@@ -345,28 +446,137 @@ async function moveJobsInSheet(ids, idx) {
   }
   setStatus("live");
   if (ok) toast(ok + " of " + ids.length + " moved to " + name + " in Excel");
-  setTimeout(() => load("checking…", true), 45000);
+  scheduleReconcile();
   return ok;
 }
 
 async function markReady(job, on) {
   const row = await CW.rowForJob("Production", job.id);   // re-found every time: rows move
   const addr = "A" + row + ":CL" + row;
-  if (on) await CW.setFill("Production", addr, GOLD_HEX);
-  else await CW.clearFill("Production", addr);
+  /* white, not "no fill": the sheet's cells carry an explicit white fill and
+     clearing them leaves a hole that looks nothing like the rows around it */
+  await CW.setFill("Production", addr, on ? GOLD_HEX : WHITE_HEX);
   return row;
 }
 
-async function setProductStatus(job, prodName, status) {
-  if (!PRODMAP || !PRODMAP.prod[prodName]) throw new Error("That product isn't on the Production sheet.");
-  const cols = PRODMAP.prod[prodName];
-  const row = await CW.rowForJob("Production", job.id);
-  const idx = ["f", "s", "t"].map(k => cols[k]).filter(Boolean);
-  const a = CW.A1(Math.min.apply(null, idx)) + row, b = CW.A1(Math.max.apply(null, idx)) + row;
-  const addr = a + ":" + b;
-  if (status === "process") await CW.setFill("Production", addr, YELLOW_HEX);
-  else if (status === "done") await CW.setFill("Production", addr, GOLD_HEX);
-  else await CW.clearFill("Production", addr);
+/* ---------- checkpoints ----------
+   Ticking work off. The screen changes at once and holds the new count; the
+   write goes out after the taps stop, so a run of + is one write, not five. */
+function cpRefresh(id) {
+  ALL = applyPending(ALL);
+  renderRows();
+  if (state.sel === id) cpPatchSection(byId(id));   // patched in place: a tap must not rebuild the section under the finger
+}
+
+/** Set one item of one job to a count. Clamped, debounced, logged once. */
+function setItemProgress(j, item, newDone) {
+  if (!j || j.done) return;                        // a gold row is finished: no holes in it
+  const s = itemState(j, item);
+  if (!s) return;
+  const want = cpClamp(newDone, s.total);
+  if (want == null) return;                        // blank or not a number: nothing was asked for
+  const cur = s.done == null ? 0 : s.done;
+  if (want === cur && s.done != null) return;
+  const col = cpColumn(item, PRODMAP);
+  if (!col) { toast(cpLabel(item) + " is not a column on the Production sheet.", true); return; }
+  pend(j.id, { cp: { [item]: want } });
+  cpRefresh(j.id);
+  /* from = the count before this burst of taps started, not before this tap.
+     The column and total recorded here are only what the tap saw: the flush
+     works both out again from the sheet it is about to write. */
+  cpBurst(j.id + "|" + item,
+    { job: j.id, item: item, col: col, who: whoAmI(),
+      from: s.done == null ? null : cur, to: want, total: s.total },
+    cpFlushItem);
+}
+
+/** One settled burst (or one replayed from a previous visit). */
+async function cpFlushItem(b) {
+  const j = byId(b.job);
+  const total = j ? cpTotal(j, b.item) : b.total;
+  /* worked out here, never at tap time: a column inserted in Excel in between
+     would otherwise send this fill into somebody else's column */
+  const col = cpColumn(b.item, PRODMAP);
+  try {
+    if (!col || !(total > 0)) {
+      pend(b.job, { cp: { [b.item]: null } });          // nowhere to write it: stop showing it as held
+      cpRefresh(b.job);
+      toast(cpLabel(b.item) + " is not a column on the Production sheet - that tick was not saved.", true);
+      return;
+    }
+    await cpWriteItem({ job: b.job, item: b.item, col: col, done: b.to, total: total,
+                        from: b.from, who: b.who || whoAmI(), log: noteChange });
+    scheduleReconcile();                                  // reconcile once the file catches up
+  } catch (e) {
+    toast(friendly(e), true);
+    /* put the screen back to what the sheet still says. When the count it
+       replaced was unknown there is no number to go back to, so let the hold go
+       and let Excel's colour speak for itself. */
+    pend(b.job, { cp: { [b.item]: b.from == null ? null : b.from } });
+    cpRefresh(b.job);
+  } finally {
+    cpSettled(b.key);
+  }
+}
+
+const CPBUSY = {};        // job|group -> a group write is in the air
+
+/** "All done" / "Clear" for a whole group: windows, doors, glass, or one product. */
+async function setGroupDone(j, group, on) {
+  if (!j || j.done) return;
+  const items = cpItems(j).filter(x => x.group === group);
+  if (!items.length) return;
+  const missing = items.filter(x => !cpColumn(x.key, PRODMAP));
+  if (missing.length) { toast(cpLabel(missing[0].key) + " is not a column on the Production sheet.", true); return; }
+  const before = {}, held = {};
+  items.forEach(x => {
+    const s = itemState(j, x.key);
+    before[x.key] = s && s.done != null ? s.done : null;  // null = it was "in progress, count unknown"
+    held[x.key] = on ? x.total : 0;
+    cpCancelBurst(j.id + "|" + x.key);                    // this write covers the item; drop its own
+  });
+  pend(j.id, { cp: held });
+  CPBUSY[j.id + "|" + group] = 1;                         // no second tap while this one is in the air
+  cpRefresh(j.id);
+  const what = (items[0].groupLabel === "Glass" ? "Glass" : cap(items[0].groupLabel)) + (on ? ": all done" : ": cleared");
+  const to = items.map(x => x.label.toUpperCase() + " " + (on ? x.total : 0)).join(", ");
+  try {
+    /* on the job's own chain, like the item writes: two taps on All done must
+       land in the order they were made, or Excel and the counts disagree */
+    await cpChain(j.id, () => {
+      /* columns worked out here, not when the button was pressed: by now the
+         sheet may have been reorganised under us */
+      const cols = items.map(x => ({ item: x.key, col: cpColumn(x.key, PRODMAP), done: held[x.key], total: x.total }));
+      const gone = cols.find(c => !c.col);
+      if (gone) throw new Error(cpLabel(gone.item) + " is no longer a column on the Production sheet.");
+      return cpWriteGroup({
+        job: j.id, who: whoAmI(), what: what, to: to, log: noteChange, items: cols,
+        before: items.map(x => ({ item: x.key, done: before[x.key], total: x.total }))
+      });
+    });
+    toast(j.id + " · " + what);
+    scheduleReconcile();
+  } catch (e) {
+    toast(friendly(e), true);
+    const back = {};
+    items.forEach(x => { back[x.key] = before[x.key]; });  // null drops the hold entirely
+    pend(j.id, { cp: back });
+  } finally {
+    delete CPBUSY[j.id + "|" + group];
+    cpRefresh(j.id);
+  }
+}
+
+/* Unsent taps must survive the tab closing, and be sent when it comes back. */
+function cpWatchExit() {
+  const go = () => cpFireAll();
+  window.addEventListener("pagehide", go);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") go(); });
+}
+function cpReplayQueue() {
+  const n = cpReplay(cpFlushItem, whoAmI());
+  if (n) toast(n === 1 ? "Sending a checkpoint from earlier" : "Sending " + n + " checkpoints from earlier");
+  return n;
 }
 
 /* ---------- render ---------- */
@@ -541,9 +751,15 @@ async function assignMany(jobs, view, group) {
   setStatus("live");
 }
 
+/** How many of a job's checkpoints are part way through, for the list badge. */
+function cpInProgress(j) {
+  return cpItems(j).filter(x => { const s = itemState(j, x.key); return s && s.status === "process"; }).length;
+}
+
 function rowHtml(j, i, max) {
   const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
   const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
+  const cpn = cpInProgress(j);
   const picked = !!state.picked[j.id];
   return '<div class="row' + (state.sel === j.id ? " on" : "") + (green ? " ready" : "") + (picked ? " picked" : "") +
     '" data-id="' + j.id + '" draggable="true" style="animation-delay:' + Math.min(i * 3, 200) + 'ms">' +
@@ -562,6 +778,7 @@ function rowHtml(j, i, max) {
       j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
       (j.urg ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
       (fab ? '<span class="badge" style="background:var(--fab-bg);color:var(--fab)">In fab</span>' : "") +
+      (cpn ? '<span class="badge cpbadge">' + cpn + ' in progress</span>' : "") +
       (function () { const n = commentsFor(j.id).length;
         return n ? '<span class="badge" style="background:var(--accent-soft);color:var(--single)">' +
           n + (n > 1 ? " comments" : " comment") + '</span>' : ""; })() +
@@ -653,6 +870,136 @@ function renderRows() {
 
 function renderAll() { renderTiles(); renderChips(); renderRows(); }
 
+/* ---------- drawer: checkpoints ---------- */
+const shortWho = w => String(w || "").split("@")[0];
+
+function cpSummaryHtml(j) {
+  const b = { win: [0, 0], drs: [0, 0], glass: [0, 0], prod: [0, 0] };
+  cpItems(j).forEach(x => {
+    const s = itemState(j, x.key); if (!s) return;
+    const k = x.group.indexOf("prod:") === 0 ? "prod" : x.group;
+    b[k][0] += s.done || 0; b[k][1] += s.total;
+  });
+  const part = (l, p) => p[1] ? l + " " + p[0] + "/" + p[1] : "";
+  return [part("Windows", b.win), part("Doors", b.drs), part("Glass", b.glass),
+          part("Frames/Sashes/Transoms", b.prod)].filter(Boolean).join(" · ");
+}
+
+/** One countable line: label, count, bar, - + and a number box. */
+function cpLineHtml(j, it, on, withAll) {
+  const s = itemState(j, it.key); if (!s) return "";
+  const dis = on ? "" : " disabled";
+  const w = cpStored(j.id, it.key);
+  const btn = (t, act, cls) => '<button class="' + cls + '" data-cp="' + esc(it.key) + '" data-act="' + act + '"' + dis + '>' + t + '</button>';
+  return '<div class="cpline" data-cpline="' + esc(it.key) + '" data-cpgroup="' + esc(it.group) + '">' +
+    '<span class="cplab">' + esc(cap(it.label)) + '</span>' +
+    '<span class="cpnum tab">' + cpNumText(s) + '</span>' +
+    '<span class="cpbar"><i style="width:' + cpBarPct(s) + '%;background:var(' + cpBarVar(s) + ')"></i></span>' +
+    '<span class="cpctl">' + btn("&minus;", "dec", "cpbtn") +
+      '<input class="cpin tab" data-cpin="' + esc(it.key) + '" inputmode="numeric" value="' +
+        (s.done == null ? "" : s.done) + '"' + dis + '>' +
+      btn("+", "inc", "cpbtn") +
+      (withAll ? btn(s.status === "done" ? "Clear" : "All done", s.status === "done" ? "none" : "all", "cpall") : "") +
+    '</span>' +
+    (w && w.who ? '<span class="cpwho">' + esc(shortWho(w.who)) +
+      (w.when ? ", " + esc(String(w.when).slice(11, 16)) : "") + '</span>' : "") +
+    '</div>';
+}
+const cpNumText = s => s.done == null ? "in progress" : s.done + " of " + s.total;
+const cpBarPct = s => s.done == null ? 50 : (s.total ? Math.round(s.done / s.total * 100) : 0);
+const cpBarVar = s => s.status === "done" ? "--done" : "--fab";
+const cpBusy = (j, group) => !!CPBUSY[j.id + "|" + group];
+const cpGroupDone = (j, items) => items.every(x => { const st = itemState(j, x.key); return st && st.status === "done"; });
+
+function cpGroupHtml(j, items, name, on, showBtn, perLineAll, allText) {
+  const doneAll = cpGroupDone(j, items);
+  const live = on && !cpBusy(j, items[0].group);
+  return '<div class="cpgrp"><div class="cphead"><span class="cpgname">' + esc(name) + '</span>' +
+    (showBtn ? '<button class="cpall" data-cpgrp="' + esc(items[0].group) + '" data-alltext="' + esc(allText) +
+      '" data-act="' + (doneAll ? "none" : "all") + '"' + (live ? "" : " disabled") + '>' +
+      (doneAll ? "Clear" : esc(allText)) + '</button>' : "") + '</div>' +
+    items.map(x => cpLineHtml(j, x, live, perLineAll)).join("") + '</div>';
+}
+
+function cpSectionHtml(j, ed) {
+  const items = cpItems(j);
+  if (!items.length) return "";
+  /* a gold row is finished work: every checkpoint on it reads as done, so
+     offering "Clear" would only invite someone to punch white holes in it */
+  const locked = !!j.done;
+  const on = ed && !locked;
+  const g = k => items.filter(x => x.group === k);
+  const prodNames = [];
+  items.forEach(x => { if (x.group.indexOf("prod:") === 0 && prodNames.indexOf(x.group) < 0) prodNames.push(x.group); });
+  const hint = locked
+    ? "Marked ready to deliver: all checkpoints are complete. Use Undo above to put the job back into production first."
+    : (ed ? "" : "Click Edit above to tick work off. Only the colour goes into the Production sheet.");
+  return '<div class="sect"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
+      '<span class="kick">Checkpoints</span>' +
+      '<span class="cpsum">' + esc(cpSummaryHtml(j)) + '</span></div>' +
+    (hint ? '<div class="cphint">' + esc(hint) + '</div>' : "") +
+    g("win").map(x => cpLineHtml(j, x, on && !cpBusy(j, "win"), !locked)).join("") +
+    g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked)).join("") +
+    (g("glass").length ? cpGroupHtml(j, g("glass"), "Glass", on, !locked, !locked, "All glass done") : "") +
+    prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked, false, "All done")).join("") +
+    '</div>';
+}
+
+/** Update the open Checkpoints section from the current state, in place. A tap
+    that rebuilt the section would take the button out from under the finger and
+    swallow the next click. */
+function cpPatchSection(j) {
+  const host = $("#dhost");
+  if (!host || !j || !host.querySelectorAll) return;
+  const sum = host.querySelector(".cpsum");
+  if (sum) sum.textContent = cpSummaryHtml(j);
+  const on = state.edit && !j.done;
+  host.querySelectorAll("[data-cpline]").forEach(el => {
+    const s = itemState(j, el.dataset.cpline);
+    if (!s) return;
+    const live = on && !cpBusy(j, el.dataset.cpgroup);
+    if (el.querySelectorAll) el.querySelectorAll("button,input").forEach(c => { c.disabled = !live; });
+    const num = el.querySelector(".cpnum"); if (num) num.textContent = cpNumText(s);
+    const bar = el.querySelector(".cpbar i");
+    if (bar) { bar.style.width = cpBarPct(s) + "%"; bar.style.background = "var(" + cpBarVar(s) + ")"; }
+    const inp = el.querySelector(".cpin");
+    if (inp && inp !== document.activeElement) inp.value = s.done == null ? "" : s.done;
+    const all = el.querySelector(".cpall[data-cp]");
+    if (all) { all.textContent = s.status === "done" ? "Clear" : "All done"; all.dataset.act = s.status === "done" ? "none" : "all"; }
+  });
+  host.querySelectorAll("[data-cpgrp]").forEach(b => {
+    const items = cpItems(j).filter(x => x.group === b.dataset.cpgrp);
+    if (!items.length) return;
+    const doneAll = cpGroupDone(j, items);
+    b.textContent = doneAll ? "Clear" : (b.dataset.alltext || "All done");
+    b.dataset.act = doneAll ? "none" : "all";
+    b.disabled = !(on && !cpBusy(j, b.dataset.cpgrp));
+  });
+}
+
+/** Wire the checkpoint controls of the open drawer. */
+function wireCheckpoints(host, id) {
+  const job = byId(id);
+  if (!job || job.done) return;                    // read-only while the row is gold
+  host.querySelectorAll("[data-cp]").forEach(el => el.onclick = () => {
+    const j = byId(id); if (!j) return;
+    const item = el.dataset.cp, s = itemState(j, item); if (!s) return;
+    const cur = s.done == null ? 0 : s.done;
+    const act = el.dataset.act;
+    setItemProgress(j, item, act === "inc" ? cur + 1 : act === "dec" ? cur - 1 : act === "all" ? s.total : 0);
+  });
+  host.querySelectorAll("[data-cpin]").forEach(el => el.onchange = () => {
+    const j = byId(id); if (!j) return;
+    const item = el.dataset.cpin, s = itemState(j, item);
+    /* an empty or unreadable box is not a zero: put the number back and write nothing */
+    if (cpClamp(el.value, s ? s.total : 0) == null) { if (s) el.value = s.done == null ? "" : s.done; return; }
+    setItemProgress(j, item, el.value);
+  });
+  host.querySelectorAll("[data-cpgrp]").forEach(el => el.onclick = () => {
+    const j = byId(id); if (j) setGroupDone(j, el.dataset.cpgrp, el.dataset.act === "all");
+  });
+}
+
 /* ---------- drawer ---------- */
 function openDrawer() { if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); } renderDrawer(); }
 function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dhost"); if (h) h.remove(); renderRows(); }
@@ -664,6 +1011,10 @@ function renderDrawer() {
   const isCS = /^[CS]\d/.test(j.id);
   const readyName = isCS ? "Collect & supply only" : "Ready to fit";
   const hint = t => '<div style="font-size:11.5px;color:var(--ink-4);margin:-6px 0 12px;line-height:1.4">' + t + '</div>';
+  /* the 12 s poll re-renders the drawer; typing a count into a box must not be
+     wiped out from under the fingers half way through */
+  const act = document.activeElement;
+  const typing = act && act.dataset && act.dataset.cpin ? { item: act.dataset.cpin, val: act.value } : null;
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
@@ -686,6 +1037,7 @@ function renderDrawer() {
           (j.dates[p[0]] ? "var(--ink)" : "var(--ink-4)") + '">' + dshort(j.dates[p[0]]) + '</span>' +
           '<div class="stepbar" style="background:' + (j.dates[p[0]] ? "var(" + st.c + ")" : "var(--line)") + '"></div>' +
           '<span style="font-size:11px;color:var(--ink-3)">' + p[1] + '</span></div>').join("") + '</div></div>' +
+      cpSectionHtml(j, ed) +
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">' +
         [[j.wnd, "windows"], [j.drs, "doors"], [tot(comp(j)), "components"], [j.sheets.length, "sheets"]]
         .map(p => '<div style="background:var(--surface-2);border:1px solid var(--line-soft);border-radius:5px;padding:9px 11px">' +
@@ -696,23 +1048,6 @@ function renderDrawer() {
         '<dt>Phone</dt><dd>' + (j.ph3 ? "•••••• " + esc(j.ph3) : "—") + '</dd>' +
         '<dt>Window colour</dt><dd>' + esc(j.colour || "—") + '</dd>' +
         '<dt>On sheets</dt><dd>' + j.sheets.map(s => '<span class="stn" style="margin-right:4px">' + esc(s) + '</span>').join("") + '</dd></dl></div>' +
-      (j.prods.length ? '<div class="sect"><div style="display:flex;justify-content:space-between;align-items:baseline">' +
-        '<span class="kick">Components</span><span style="font-size:11px;color:var(--ink-3)">Frame · Sashes · Transom</span></div>' +
-        '<div class="ptab" style="border-bottom:1.5px solid var(--ink)"><span class="kick">Product</span>' +
-        '<span class="kick" style="text-align:right">F</span><span class="kick" style="text-align:right">S</span>' +
-        '<span class="kick" style="text-align:right">T</span><span class="kick" style="text-align:right">' + (ed ? "Status" : "") + '</span></div>' +
-        j.prods.map(p => {
-          const s0 = (p.st || [])[0] || "";
-          return '<div class="ptab" data-p="' + esc(p.n) + '"><span>' + esc(cap(p.n)) + '</span>' +
-            '<span class="tab" style="text-align:right;color:var(--f);font-weight:600">' + (p.f || "—") + '</span>' +
-            '<span class="tab" style="text-align:right;color:var(--s);font-weight:600">' + (p.s || "—") + '</span>' +
-            '<span class="tab" style="text-align:right;color:var(--t);font-weight:600">' + (p.t || "—") + '</span>' +
-            (ed ? '<select class="txt pst"><option value=""' + (s0 === "" ? " selected" : "") + '>—</option>' +
-                  '<option value="process"' + (s0 === "process" ? " selected" : "") + '>In fabrication</option>' +
-                  '<option value="done"' + (s0 === "done" ? " selected" : "") + '>Process done</option></select>'
-                : '<span style="text-align:right;font-size:11.5px;color:var(--ink-3)">' + (PSTAT[s0] || "") + '</span>') +
-            '</div>';
-        }).join("") + '</div>' : "") +
       (Object.keys(j.glass).length ? '<div class="sect"><span class="kick">Glass units</span><div style="display:flex;flex-wrap:wrap;gap:6px">' +
         Object.keys(j.glass).map(k => '<span style="font-size:12.5px;padding:5px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2)">' +
           esc(k.toUpperCase()) + ' <strong class="tab">' + j.glass[k] + '</strong></span>').join("") + '</div></div>' : "") +
@@ -736,6 +1071,10 @@ function renderDrawer() {
           '<div style="font-size:13px;line-height:1.45">' + esc(n.t) + '</div></div>').join("") + '</div>' : "") +
     '</div></div>';
 
+  if (typing) {
+    const box = host.querySelector('.cpin[data-cpin="' + typing.item + '"]');
+    if (box) { box.value = typing.val; try { box.focus(); } catch (e) {} }
+  }
   $("#dscrim").onclick = closeDrawer;
   $("#dclose").onclick = closeDrawer;
   $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
@@ -760,7 +1099,7 @@ function renderDrawer() {
            Ready to fit; undo sends it to the bottom of In production */
         const target = sectionIdx(turningOn ? readyName : "In production");
         if (target >= 0 && byId(j.id) && byId(j.id).blk !== target) await moveJobsInSheet([j.id], target);
-        else setTimeout(() => load("checking…", true), 45000);   // reconcile once the file catches up
+        else scheduleReconcile();                                // reconcile once the file catches up
       } catch (e) {
         toast(friendly(e), true);
         mr.disabled = false; renderDrawer();
@@ -775,26 +1114,7 @@ function renderDrawer() {
       box.value = ""; cadd.disabled = false;
       renderDrawer(); renderRows();
     };
-    host.querySelectorAll(".ptab[data-p]").forEach(rowEl => {
-      const sel = rowEl.querySelector(".pst"); if (!sel) return;
-      sel.onchange = async () => {
-        const name = rowEl.dataset.p, val = sel.value;
-        sel.disabled = true;
-        try {
-          const was = (j.prods.find(p => p.n === name) || {}).st || [];
-          await setProductStatus(j, name, val);
-          pend(j.id, { prod: { name: name, status: val } });
-          ALL = applyPending(ALL);
-          noteChange(j.id, cap(name) + " status", PSTAT[was[0] || ""] || "none", PSTAT[val] || "none");
-          toast(cap(name) + " → " + (PSTAT[val] || "cleared"));
-          renderAll(); renderDrawer();
-          setTimeout(() => load("checking…", true), 45000);
-        } catch (e) {
-          toast(friendly(e), true);
-          sel.disabled = false;
-        }
-      };
-    });
+    wireCheckpoints(host, j.id);
   }
 }
 
@@ -1021,9 +1341,14 @@ async function start() {
   $("#main").hidden = false; $("#main").style.display = "block";
   const a = CW.account;
   $("#whobtn").textContent = (a && (a.username || a.name)) || "signed in";
-  $("#whobtn").onclick = () => { if (confirm("Sign out of the dashboard?")) CW.signOut(); };
+  $("#whobtn").onclick = () => {
+    if (!confirm("Sign out of the dashboard?")) return;
+    cpClearQueue();                  // owed taps belong to the person who made them
+    CW.signOut();
+  };
   await CW.openSession();
   await load("first read…");
+  cpReplayQueue();                 // taps this browser owed from a previous visit
   setInterval(poll, 12000);
   checkBuild(); setInterval(checkBuild, 120000);
 }
@@ -1037,6 +1362,7 @@ async function start() {
   $("#changebtn").onclick = () => renderChanges();
   $("#versbtn").onclick = () => renderVersions();
   updateChangeBtn();
+  cpWatchExit();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
