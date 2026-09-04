@@ -48,7 +48,9 @@ function signOut() {
   return app().logoutPopup({ account: account });
 }
 
+let tokenOverride = null;     // rehearsal harness only: a token without the sign-in library
 async function token() {
+  if (tokenOverride) return tokenOverride();
   if (!account) throw new Error("not signed in");
   try {
     const r = await app().acquireTokenSilent({ scopes: SCOPES, account: account });
@@ -334,11 +336,293 @@ async function rowForJob(sheet, jobId) {
   throw new Error("Job " + jobId + " is no longer on the " + sheet + " sheet - it may have been moved or removed.");
 }
 
+
+/* ---- moving a job between sections of the Production sheet ----------------
+   The only structural write in this app. A move is: insert a blank row straight
+   after the target section's last job, copy the job's row into it (values,
+   number formats, fills, fonts, borders, alignment, height), confirm the copy
+   is there, then delete the original. Every step finds rows by job number at
+   that moment - nothing is written by a remembered row number. If anything
+   fails before the delete, the inserted row is removed again, so the sheet is
+   left exactly as it was.                                                   */
+const PROD_SHEET = "Production";
+const ROW_COLS = 90;                                   // A..CL, the sheet's used width
+const lastCol = A1(ROW_COLS);
+
+async function liveBlocks() {
+  const f = await findFile();
+  const r = await call("GET", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='A1:K600')?$select=values");
+  return blocksFromValues(r.values || []);            // parser.js - the same rule as the download
+}
+
+/** Run many small Graph requests as JSON batches (20 per batch), a few batches
+    in flight at a time - Excel queues per session and refuses a flood with 429
+    OperationQueueFull. Returns bodies in input order; throws on any failure. */
+async function batchGet(urls, limit) {
+  const out = new Array(urls.length), starts = [];
+  for (let i = 0; i < urls.length; i += 20) starts.push(i);
+  let next = 0;
+  const worker = async () => {
+    while (next < starts.length) {
+      const s = starts[next++], part = urls.slice(s, s + 20);
+      const res = await batchRun(part.map((u, n) => ({ id: String(n + 1), method: "GET", url: u })));
+      res.forEach((body, n) => { out[s + n] = body; });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit || 3, starts.length) }, worker));
+  return out;
+}
+/** Sequential batches of writes (they share one workbook session). */
+async function batchWrite(reqs) {
+  for (let i = 0; i < reqs.length; i += 20) {
+    const part = reqs.slice(i, i + 20).map((r, n) => Object.assign({ id: String(n + 1) }, r));
+    await batchRun(part);
+  }
+}
+const sleep = ms => new Promise(s => setTimeout(s, ms));
+async function batchRun(reqs) {
+  let sessionRetried = false;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const h = {}; if (sessionId) h["workbook-session-id"] = sessionId;
+    const body = { requests: reqs.map(r => Object.assign({}, r,
+      { headers: Object.assign({}, h, r.body ? { "Content-Type": "application/json" } : {}) })) };
+    const r = await call("POST", "/$batch", body);
+    const byId = {}; (r.responses || []).forEach(x => { byId[x.id] = x; });
+    const bad = reqs.map(q => byId[q.id]).find(x => !x || x.status >= 400);
+    if (!bad) return reqs.map(q => (byId[q.id] || {}).body || {});
+    const txt = JSON.stringify((bad && bad.body) || {});
+    if (!sessionRetried && /InvalidSession|invalidSessionReCreatable/.test(txt)) {
+      sessionRetried = true; sessionId = null; await openSession(); continue;
+    }
+    if (attempt < 5 && (bad.status === 429 || bad.status >= 500 || /OperationQueueFull|tooManyRequests/.test(txt))) {
+      await sleep(1000 + attempt * 1500);          // the queue drains in a second or two
+      continue;                                    // re-running finished items is harmless: same value again
+    }
+    throw new Error("batch item failed: " + (bad ? bad.status : "missing") + " " + txt.slice(0, 200));
+  }
+}
+
+/** Everything about one row that must travel with it. Values come with their
+    number formats in one read. Fills and fonts carry the job's status and the
+    office's colour notes, so they are read live - but per group of cells that
+    the last download says share one fill / one font, each group in a single
+    request. A group that is no longer uniform live is read cell by cell.
+    Either way the result is what is in the sheet at this moment.           */
+const normFont = fo => ({ bold: !!fo.bold, italic: !!fo.italic, size: fo.size || 11, name: fo.name || "Calibri",
+                          color: fo.color || "#000000", underline: fo.underline || "None" });
+async function captureRow(row, tmpl) {
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  const addr = "A" + row + ":" + lastCol + row;
+  const R = (a, b) => S + "/range(address='" + A1(a) + row + ":" + A1(b) + row + "')";
+  const cells = await call("GET", S + "/range(address='" + addr + "')?$select=values,valueTypes,numberFormat,formulas");
+  const T = (tmpl && tmpl.cells && tmpl.cells.length >= ROW_COLS) ? tmpl.cells : null;
+  const flruns = runs(ROW_COLS, c => T ? (T[c - 1].flk || "") : "c" + c, c => null);
+  const fruns = runs(ROW_COLS, c => T ? (T[c - 1].fk || "") : "c" + c, c => null);
+  const urls = [S + "/range(address='" + addr + "')/format?$select=rowHeight"];
+  flruns.forEach(r => urls.push(R(r.from, r.to) + "/format/fill"));
+  fruns.forEach(r => urls.push(R(r.from, r.to) + "/format/font"));
+  const got = await batchGet(urls, 3);
+  const height = (got[0] || {}).rowHeight || null;
+  const fills = new Array(ROW_COLS), fonts = new Array(ROW_COLS), fbFill = [], fbFont = [];
+  flruns.forEach((r, i) => {
+    const fi = got[1 + i] || {};
+    if (fi.color === null || fi.color === undefined) { for (let c = r.from; c <= r.to; c++) fbFill.push(c); }
+    else for (let c = r.from; c <= r.to; c++) fills[c - 1] = fi.color;     // "" = no fill
+  });
+  fruns.forEach((r, i) => {
+    const fo = got[1 + flruns.length + i] || {};
+    const uniform = ["bold", "italic", "size", "name", "color"].every(k => fo[k] !== null && fo[k] !== undefined);
+    if (uniform) { for (let c = r.from; c <= r.to; c++) fonts[c - 1] = normFont(fo); }
+    else for (let c = r.from; c <= r.to; c++) fbFont.push(c);
+  });
+  if (fbFill.length || fbFont.length) {
+    const u2 = fbFill.map(c => R(c, c) + "/format/fill").concat(fbFont.map(c => R(c, c) + "/format/font"));
+    const g2 = await batchGet(u2, 3);
+    fbFill.forEach((c, i) => { fills[c - 1] = (g2[i] || {}).color || ""; });
+    fbFont.forEach((c, i) => { fonts[c - 1] = normFont(g2[fbFill.length + i] || {}); });
+  }
+  return { values: cells.values[0], types: cells.valueTypes[0], numberFormat: cells.numberFormat[0],
+           formulas: cells.formulas[0], fills, fonts, height,
+           reads: urls.length + fbFill.length + fbFont.length, fallback: fbFill.length + fbFont.length };
+}
+
+/* Excel parses what it is given the way it parses typing: "07/04" becomes a
+   date, "9434" a number, "TRUE" a boolean. A text cell that looks like one of
+   those is written with a leading apostrophe - Excel's own way of saying
+   "this is text" - so it comes back exactly as it was. */
+function guardText(v) {
+  const s = String(v);
+  if (/^[=+\-@]/.test(s) || /^\d/.test(s) || /^(true|false)$/i.test(s)) return "'" + s;
+  return s;
+}
+function cellOut(cap, c) {
+  const f = cap.formulas[c], v = cap.values[c], t = cap.types[c];
+  if (typeof f === "string" && f.charAt(0) === "=") return f;
+  if (t === "Empty" || v === "" || v == null) return "";
+  if (t === "String") return guardText(v);
+  return v;                                            // Double, Boolean, Error - as they are
+}
+/** Consecutive cells with the same key -> [{from, to, key, val}] (1-based columns). */
+function runs(n, keyOf, valOf) {
+  const out = [];
+  for (let c = 1; c <= n; c++) {
+    const k = keyOf(c);
+    if (out.length && out[out.length - 1].key === k) out[out.length - 1].to = c;
+    else out.push({ from: c, to: c, key: k, val: valOf(c) });
+  }
+  return out;
+}
+const BORDER_STYLE = { thin: ["Continuous", "Thin"], medium: ["Continuous", "Medium"], thick: ["Continuous", "Thick"],
+  hair: ["Continuous", "Hairline"], dashed: ["Dash", "Thin"], dotted: ["Dot", "Thin"], double: ["Double", "Thick"],
+  mediumDashed: ["Dash", "Medium"], dashDot: ["DashDot", "Thin"], mediumDashDot: ["DashDot", "Medium"],
+  dashDotDot: ["DashDotDot", "Thin"], mediumDashDotDot: ["DashDotDot", "Medium"], slantDashDot: ["SlantDashDot", "Medium"] };
+
+/** Re-assert the bottom edge of the job row just above a row we inserted or
+    deleted. Writing an edge on a neighbour makes Excel move the shared edge
+    onto the written row, and a later deletion of the neighbour takes it away;
+    giving the edge back to the row that stays keeps the line drawn. Only ever
+    writes edges the row's own template already has - never "no border".   */
+async function restoreBottomEdge(row, tmpl) {
+  if (!row || row < 1 || !tmpl || !tmpl.cells || tmpl.cells.length < ROW_COLS) return 0;
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  const R = (a, b) => S + "/range(address='" + A1(a) + row + ":" + A1(b) + row + "')";
+  const T = tmpl.cells, reqs = [];
+  runs(ROW_COLS, c => T[c - 1].bottom ? T[c - 1].bottom.style + "/" + T[c - 1].bottom.color : "", c => T[c - 1].bottom).forEach(r => {
+    if (!r.val) return;
+    const st = BORDER_STYLE[r.val.style] || ["Continuous", "Thin"];
+    reqs.push({ method: "PATCH", url: R(r.from, r.to) + "/format/borders/EdgeBottom", body: { style: st[0], weight: st[1], color: r.val.color || "#000000" } });
+  });
+  if (reqs.length) await batchWrite(reqs);
+  return reqs.length;
+}
+
+async function writeRow(row, cap, tmpl) {
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  const R = (from, to) => S + "/range(address='" + A1(from) + row + ":" + A1(to) + row + "')";
+  const out = []; for (let c = 0; c < ROW_COLS; c++) out.push(cellOut(cap, c));
+  await call("PATCH", R(1, ROW_COLS), { formulas: [out], numberFormat: [cap.numberFormat] });
+  const reqs = [];
+  runs(ROW_COLS, c => cap.fills[c - 1], c => cap.fills[c - 1]).forEach(r =>
+    reqs.push(r.val ? { method: "PATCH", url: R(r.from, r.to) + "/format/fill", body: { color: r.val } }
+                    : { method: "POST", url: R(r.from, r.to) + "/format/fill/clear", body: {} }));
+  runs(ROW_COLS, c => JSON.stringify(cap.fonts[c - 1]), c => cap.fonts[c - 1]).forEach(r =>
+    reqs.push({ method: "PATCH", url: R(r.from, r.to) + "/format/font", body: r.val }));
+  /* the API reports heights rounded to whole pixels (22.15 -> 21.75); the
+     downloaded file has the exact value, so prefer it when we have it */
+  const height = (tmpl && tmpl.height) || cap.height;
+  if (height) reqs.push({ method: "PATCH", url: R(1, ROW_COLS) + "/format", body: { rowHeight: height } });
+  if (tmpl && tmpl.cells && tmpl.cells.length >= ROW_COLS) {
+    const T = tmpl.cells;
+    runs(ROW_COLS, c => (T[c - 1].h || "") + "|" + (T[c - 1].v || "") + "|" + T[c - 1].wrap, c => T[c - 1]).forEach(r => {
+      const b = { wrapText: !!r.val.wrap };
+      if (r.val.h) b.horizontalAlignment = r.val.h.charAt(0).toUpperCase() + r.val.h.slice(1);
+      if (r.val.v) b.verticalAlignment = r.val.v.charAt(0).toUpperCase() + r.val.v.slice(1);
+      reqs.push({ method: "PATCH", url: R(r.from, r.to) + "/format", body: b });
+    });
+    /* Borders. Excel keeps ONE definition per shared edge: writing any edge
+       on a row makes it re-normalise that row and strip the shared edges off
+       its neighbours. So: the landing row gets its bottom edge and verticals
+       from the template (an inserted row does not reliably inherit them),
+       never its top - and the row above it has its own bottom re-asserted
+       afterwards (restoreBottomEdge), so the line between them belongs to
+       the row that stays put if the moved row is later moved on again.     */
+    const sideKey = s => s ? s.style + "/" + s.color : "";
+    runs(ROW_COLS, c => [sideKey(T[c - 1].bottom), sideKey(T[c - 1].left), sideKey(T[c - 1].right)].join("|"), c => T[c - 1]).forEach(r => {
+      const edge = (name, s) => {
+        const st = s ? (BORDER_STYLE[s.style] || ["Continuous", "Thin"]) : null;
+        reqs.push({ method: "PATCH", url: R(r.from, r.to) + "/format/borders/" + name,
+                    body: st ? { style: st[0], weight: st[1], color: s.color || "#000000" } : { style: "None" } });
+      };
+      edge("EdgeBottom", r.val.bottom);
+      edge("EdgeLeft", r.val.left);
+      edge("EdgeRight", r.val.right);
+      if (r.to > r.from) edge("InsideVertical", r.val.right || r.val.left);
+    });
+  }
+  await batchWrite(reqs);
+  return reqs.length;
+}
+
+/** Where a job is right now on the Production sheet, and every section. */
+async function locateJob(jobId) {
+  const B = await liveBlocks();
+  let hit = null;
+  B.blocks.forEach(b => b.jobs.forEach(j => { if (j.id === jobId) hit = { row: j.row, block: b }; }));
+  return { blocks: B, hit };
+}
+
+/** Move one job into a section of the Production sheet (by section index, see
+    blocksFromValues). tmplFor(jobId) returns templateForJob() from the last
+    download (or null) - used for the moved row and for the row it lands under.
+    onStep(text) reports progress. Resolves {moved, from, to, fromRow, row}.  */
+async function moveJobRow(jobId, targetIdx, tmplFor, onStep) {
+  const tmpl = typeof tmplFor === "function" ? tmplFor(jobId) : (tmplFor || null);
+  jobId = String(jobId).trim().toUpperCase();
+  const step = t => { if (onStep) try { onStep(t); } catch (e) {} };
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  const rowOf = n => S + "/range(address='" + n + ":" + n + "')";
+  const L = await locateJob(jobId);
+  const tb = L.blocks.blocks[targetIdx];
+  if (!tb) throw new Error("There is no section " + targetIdx + " on the Production sheet.");
+  if (!L.hit) throw new Error("Job " + jobId + " is not on the Production sheet.");
+  const src = L.hit.row, sb = L.hit.block;
+  if (sb.idx === targetIdx) return { moved: false, from: sb.name, to: tb.name, fromRow: src, row: src };
+  if (!tb.last) throw new Error("The '" + tb.name + "' section has no divider or jobs in Excel right now, so there is nowhere safe to put " + jobId + ". Place one job there in Excel first.");
+  const tgt = tb.last + 1;                             // straight after the section's last job
+  step("reading " + jobId + " (row " + src + ")");
+  const cap = await captureRow(src, tmpl);
+  step("making room in " + tb.name);
+  await call("POST", rowOf(tgt) + "/insert", { shift: "Down" });
+  const srcNow = src + (src >= tgt ? 1 : 0);
+  try {
+    step("writing the copy at row " + tgt);
+    await writeRow(tgt, cap, tmpl);
+    const aboveId = tb.jobs.length ? tb.jobs[tb.jobs.length - 1].id : null;
+    if (aboveId && typeof tmplFor === "function") await restoreBottomEdge(tgt - 1, tmplFor(aboveId));
+    const col = await readColumn(PROD_SHEET, "C1:C600");
+    const at = [];
+    col.forEach((v, i) => { if (String(v[0] == null ? "" : v[0]).trim().toUpperCase() === jobId) at.push(i + 1); });
+    if (at.length !== 2 || at.indexOf(tgt) < 0 || at.indexOf(srcNow) < 0)
+      throw new Error("The sheet changed under " + jobId + " while it was being moved (now at rows " + at.join(", ") + ").");
+  } catch (e) {
+    /* Put the sheet back. Rows may have shifted meanwhile, so never trust a
+       remembered number: re-read the sections and identify our copy as the
+       occurrence of the job inside the target section (the original is in
+       another section). If nothing landed, the inserted row is still blank
+       and sits where the target row went - shifted exactly like the original. */
+    try {
+      const B2 = await liveBlocks(), occ = [];
+      B2.blocks.forEach(b => b.jobs.forEach(j => { if (j.id === jobId) occ.push({ row: j.row, idx: b.idx }); }));
+      const ours = occ.filter(o => o.idx === targetIdx), orig = occ.filter(o => o.idx !== targetIdx);
+      let victim = null;
+      if (ours.length === 1 && orig.length === 1) victim = ours[0].row;
+      else if (occ.length === 1) {
+        const cand = tgt + (occ[0].row - srcNow);
+        const probe = await call("GET", S + "/range(address='A" + cand + ":K" + cand + "')?$select=values");
+        if (((probe.values && probe.values[0]) || []).every(v => v === "" || v == null)) victim = cand;
+      }
+      if (victim == null) throw new Error("could not tell which row is the copy");
+      await call("POST", rowOf(victim) + "/delete", { shift: "Up" });
+    } catch (e2) {
+      throw new Error(e.message + " Could not tidy up (" + e2.message + ") - check the Production sheet for a blank or duplicate row near row " + tgt + ".");
+    }
+    throw e;
+  }
+  step("removing the old row " + srcNow);
+  await call("POST", rowOf(srcNow) + "/delete", { shift: "Up" });
+  /* the job row that used to sit above the old row gets its bottom edge back too */
+  const prev = sb.jobs.filter(j => j.row < src).pop();
+  if (prev && prev.row === src - 1 && typeof tmplFor === "function") await restoreBottomEdge(srcNow - 1, tmplFor(prev.id));
+  return { moved: true, from: sb.name, to: tb.name, fromRow: src, row: tgt - (srcNow < tgt ? 1 : 0) };
+}
+
 window.CW = {
   initAuth, signIn, signOut, token, findFile, openSession, lastModified,
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
   listVersions, downloadVersion, restoreVersion,
+  liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
+  _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   get account() { return account; }
 };

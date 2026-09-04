@@ -37,8 +37,10 @@ function pend(id, patch) {
   p.at = Date.now();
   if ("done" in patch) p.done = patch.done;
   if (patch.prod) p.prods[patch.prod.name] = patch.prod.status;
+  if ("blk" in patch) { if (patch.blk == null) delete p.blk; else p.blk = patch.blk; }
   savePending();
 }
+const blkCat = b => b === 0 ? "secondhand" : b === 1 ? "wonttake" : b === 2 ? "collect" : "active";
 function applyPending(list) {
   const now = Date.now();
   let dropped = false;
@@ -49,11 +51,29 @@ function applyPending(list) {
     if (!p) return j;
     const c = Object.assign({}, j);
     if ("done" in p) c.done = p.done;
+    if (p.blk != null) { c.blk = p.blk; c.cat = blkCat(p.blk); }   // moved in Excel; file still catching up
     c.prods = j.prods.map(x => Object.prototype.hasOwnProperty.call(p.prods, x.n)
       ? Object.assign({}, x, { st: p.prods[x.n] ? [p.prods[x.n]] : [] }) : x);
     c.stage = c.done ? "deliver" : (c.dates.floor ? "floor" : (c.dates.ready ? "ready" : "office"));
     return c;
   });
+}
+
+/* Placements in dashboard-only categories get the same treatment: kept here
+   until the downloaded file shows them, so a refresh cannot undo a move. */
+let PENDV = {};
+try { PENDV = JSON.parse(localStorage.getItem("cw_pendv") || "{}"); } catch (e) { PENDV = {}; }
+const savePendV = () => { try { localStorage.setItem("cw_pendv", JSON.stringify(PENDV)); } catch (e) {} };
+function pendView(view, id, group, order) { PENDV[view + "|" + id] = { group: String(group), order: order, at: Date.now() }; savePendV(); }
+function applyPendV() {
+  const now = Date.now(); let changed = false;
+  Object.keys(PENDV).forEach(k => {
+    const p = PENDV[k], i = k.indexOf("|"), view = k.slice(0, i), id = k.slice(i + 1);
+    const cur = VIEWS[view] && VIEWS[view][id];
+    if (now - p.at > PENDING_MS || (cur && String(cur.group) === p.group)) { delete PENDV[k]; changed = true; return; }
+    (VIEWS[view] = VIEWS[view] || {})[id] = { group: p.group, order: p.order };
+  });
+  if (changed) savePendV();
 }
 
 let CHANGES = [];                     // what has changed while this page has been open
@@ -73,6 +93,7 @@ const viewNames = () => Object.keys(VIEWS).sort();
 /** which group a job sits in, for a given view: an explicit placement wins,
     otherwise its natural block from the Production sheet. */
 function groupOf(j, view) {
+  if (view === "Abin") return j.blk;                 // the sheet is the truth: a move here moves the row in Excel
   const v = VIEWS[view];
   if (v && v[j.id] && v[j.id].group !== "") return Number(v[j.id].group);
   return j.blk;
@@ -135,6 +156,9 @@ function diffJobs(prev, next, who, at) {
     if (!p) { if (n.cat !== "past") add(n.id, "Added to the sheet", "", CATNAME[catOf(n)] || n.cat); return; }
     if (!!p.done !== !!n.done) add(n.id, "Ready to deliver", p.done ? "yes" : "no", n.done ? "yes" : "no");
     if (p.cat !== n.cat) add(n.id, "Category", CATNAME[p.cat] || p.cat, CATNAME[n.cat] || n.cat);
+    if (p.blk !== n.blk && p.blk >= 0 && n.blk >= 0)
+      add(n.id, "Section", (prev.blockNames || BLOCKNAMES)[p.blk] || ("section " + p.blk),
+          (next.blockNames || BLOCKNAMES)[n.blk] || ("section " + n.blk));
     ["sold","stamp","ivana","ready","floor"].forEach(k => {
       if ((p.dates[k] || "") !== (n.dates[k] || ""))
         add(n.id, k === "floor" ? "Sent to floor" : k.charAt(0).toUpperCase() + k.slice(1), p.dates[k] || "blank", n.dates[k] || "cleared");
@@ -195,6 +219,7 @@ async function load(reason, force) {
   const t0 = performance.now();
   try {
     const wb = await CW.downloadWorkbook();
+    LASTWB = wb;                                   // row formatting templates for moves
     const tDown = performance.now() - t0;
     const prev = ALL;
     const parsed = parseWorkbook(wb);
@@ -226,6 +251,7 @@ async function load(reason, force) {
       }
       VIEWS = next;
     }
+    applyPendV();
     /* the shared history lives in the workbook, so everyone sees the same list */
     const logWs = wb.getWorksheet("Dashboard Log");
     if (logWs) {
@@ -287,6 +313,41 @@ async function poll() {
 
 /* ---------- writes ---------- */
 const GOLD_HEX = "#FFE699", YELLOW_HEX = "#FFFF00";
+
+/* Moving a job between the sheet's own sections moves its row in Excel. The
+   list changes at once and holds the new place until the file catches up. */
+let LASTWB = null, MOVING = {};
+const sectionIdx = name => BLOCKNAMES.indexOf(name);
+async function moveJobsInSheet(ids, idx) {
+  const name = BLOCKNAMES[idx] || ("section " + idx);
+  const before = {};
+  ids.forEach(id => { const j = byId(id); if (j) before[id] = j.blk; });
+  ids.forEach(id => pend(id, { blk: idx }));
+  ALL = applyPending(ALL); state.picked = {}; renderAll();
+  let ok = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!(id in before)) continue;
+    if (before[id] === idx) { ok++; continue; }
+    MOVING[id] = 1; if (state.sel === id) renderDrawer();
+    setStatus("moving " + id + " to " + name + " in Excel (" + (i + 1) + " of " + ids.length + ")…", "busy");
+    try {
+      const tmplFor = x => LASTWB ? templateForJob(LASTWB.getWorksheet("Production"), x) : null;
+      const r = await CW.moveJobRow(id, idx, tmplFor, t => setStatus(id + ": " + t + "…", "busy"));
+      if (r.moved) noteChange(id, "Section", r.from, r.to + " (row " + r.row + ")");
+      ok++;
+    } catch (e) {
+      pend(id, { blk: before[id] });                 // put it back where it was shown before
+      ALL = applyPending(ALL); renderAll();
+      toast(id + ": " + friendly(e), true);
+    }
+    delete MOVING[id]; if (state.sel === id) renderDrawer();
+  }
+  setStatus("live");
+  if (ok) toast(ok + " of " + ids.length + " moved to " + name + " in Excel");
+  setTimeout(() => load("checking…", true), 45000);
+  return ok;
+}
 
 async function markReady(job, on) {
   const row = await CW.rowForJob("Production", job.id);   // re-found every time: rows move
@@ -441,16 +502,16 @@ function renderMoveMenu(anchor) {
   m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
   let opts = "";
   if (state.view === "Abin" || state.view === "flat") {
-    opts += '<div class="kick" style="padding:4px 10px 6px">Move ' + jobs.length + ' job' + (jobs.length > 1 ? "s" : "") + ' into</div>' +
+    opts += '<div class="kick" style="padding:4px 10px 6px">Move ' + jobs.length + ' job' + (jobs.length > 1 ? "s" : "") + ' in the Production sheet to</div>' +
       BLOCKNAMES.map((n, i) => '<button class="mrow" data-grp="' + i + '">' + esc(n) + '</button>').join("");
   }
-  opts += '<div class="kick" style="padding:10px 10px 6px;border-top:1px solid var(--line);margin-top:6px">Or a category of your own</div>' +
+  opts += '<div class="kick" style="padding:10px 10px 6px;border-top:1px solid var(--line);margin-top:6px">Or a dashboard-only category (Excel unchanged)</div>' +
     viewNames().filter(v => v !== "Abin").map(v => '<button class="mrow" data-view="' + esc(v) + '">' + esc(v) + '</button>').join("") +
     '<button class="mrow" id="newcat" style="color:var(--accent);font-weight:600">+ New category from selection…</button>';
   m.innerHTML = opts;
   document.body.appendChild(m);
   m.querySelectorAll("[data-grp]").forEach(b => b.onclick = async () => {
-    m.remove(); await assignMany(jobs, state.view === "flat" ? "Abin" : state.view, Number(b.dataset.grp));
+    m.remove(); await moveJobsInSheet(jobs, Number(b.dataset.grp));
   });
   m.querySelectorAll("[data-view]").forEach(b => b.onclick = async () => {
     m.remove(); await assignMany(jobs, b.dataset.view, "");
@@ -469,7 +530,7 @@ async function assignMany(jobs, view, group) {
   const who = whoAmI();
   setStatus("saving " + jobs.length + " to " + view + "…", "busy");
   VIEWS[view] = VIEWS[view] || {};
-  jobs.forEach((id, i) => { VIEWS[view][id] = { group: group === "" ? "" : String(group), order: i }; });
+  jobs.forEach((id, i) => { VIEWS[view][id] = { group: group === "" ? "" : String(group), order: i }; pendView(view, id, group === "" ? "" : String(group), i); });
   state.picked = {}; renderAll();                     // instant
   let ok = 0;
   for (let i = 0; i < jobs.length; i++) {
@@ -577,7 +638,9 @@ function renderRows() {
       gEl.ondrop = async e => {
         e.preventDefault(); gEl.classList.remove("dragover");
         const ids = (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
-        if (ids.length) await assignMany(ids, state.view, Number(g));
+        if (!ids.length) return;
+        if (state.view === "Abin") await moveJobsInSheet(ids, Number(g));
+        else await assignMany(ids, state.view, Number(g));
       };
       wireRows(gEl);
     });
@@ -598,6 +661,9 @@ function renderDrawer() {
   const host = $("#dhost"); if (!host) return;
   const j = byId(state.sel); if (!j) return;
   const st = label(j), ed = state.edit;
+  const isCS = /^[CS]\d/.test(j.id);
+  const readyName = isCS ? "Collect & supply only" : "Ready to fit";
+  const hint = t => '<div style="font-size:11.5px;color:var(--ink-4);margin:-6px 0 12px;line-height:1.4">' + t + '</div>';
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
@@ -608,9 +674,13 @@ function renderDrawer() {
       '<button class="ghost" id="dclose">Close</button></div></div>' +
     '<div class="dbody">' +
       (ed ? '<div class="editbar">Changes here are written <strong>straight into the Excel sheet</strong>. Everyone sees them.</div>' +
-        (j.done
-          ? '<button class="markbtn undo" id="markready">Undo — put back into production</button>'
-          : '<button class="markbtn" id="markready">✓ Mark as ready to deliver</button>') : "") +
+        (MOVING[j.id]
+          ? '<button class="markbtn" disabled><span class="spin"></span> moving the row in Excel…</button>'
+          : j.done
+          ? '<button class="markbtn undo" id="markready">Undo — put back into production</button>' +
+            hint("Clears the gold and moves the row to the bottom of <b>In production</b> in Excel. Dates are not touched.")
+          : '<button class="markbtn" id="markready">✓ Mark as ready to deliver</button>' +
+            hint("Turns the row gold and moves it to the bottom of <b>" + esc(readyName) + "</b> in Excel. Dates are not touched.")) : "") +
       '<div class="sect"><span class="kick">Progress</span><div class="steps">' +
         STEPS.map(p => '<div class="step"><span class="tab" style="font-size:13px;font-weight:600;color:' +
           (j.dates[p[0]] ? "var(--ink)" : "var(--ink-4)") + '">' + dshort(j.dates[p[0]]) + '</span>' +
@@ -686,7 +756,11 @@ function renderDrawer() {
         toast(j.id + (turningOn ? " marked ready to deliver — row " + row + " is now gold in Excel"
                                 : " put back into production"));
         renderAll(); renderDrawer();          // instant: don't wait ~35s for the file
-        setTimeout(() => load("checking…", true), 45000);   // reconcile once the file catches up
+        /* then the row goes to its section: C/S jobs to Collect & supply, others to
+           Ready to fit; undo sends it to the bottom of In production */
+        const target = sectionIdx(turningOn ? readyName : "In production");
+        if (target >= 0 && byId(j.id) && byId(j.id).blk !== target) await moveJobsInSheet([j.id], target);
+        else setTimeout(() => load("checking…", true), 45000);   // reconcile once the file catches up
       } catch (e) {
         toast(friendly(e), true);
         mr.disabled = false; renderDrawer();

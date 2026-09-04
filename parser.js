@@ -118,30 +118,83 @@ function mapSheet(ws) {
 /** The Production sheet's own divider rows define its blocks. Everything here is
     derived live from the sheet, so adding or moving a divider changes the blocks
     automatically - nothing about the structure is stored anywhere. */
+/** The Production sheet is organised by position: divider rows split it into
+    sections. This reads that structure from a plain values matrix (rows of
+    cell text, columns A..K at least) so the same rule serves the downloaded
+    file and a live read through the Excel API.
+    A divider is a row whose text matches AND whose job-number cell is not a
+    job number - so a job whose comment happens to say "not sent to floor"
+    can never be mistaken for a section break.                             */
+function blocksFromValues(matrix) {
+  const names = ["Can sell as second hand"];
+  const blocks = [{ idx: 0, name: names[0], divider: 0, jobs: [], last: 0 }];
+  let cur = blocks[0];
+  for (let i = 0; i < matrix.length; i++) {
+    const row = matrix[i] || [], r = i + 1;
+    const j = String(row[2] == null ? "" : row[2]).trim().toUpperCase();
+    const isJob = JOB_RE.test(j);
+    let line = "";
+    for (let c = 0; c < 11; c++) line += " " + String(row[c] == null ? "" : row[c]);
+    line = norm(line);
+    let hit = null;
+    if (!isJob) {
+      if (line.indexOf("can sell as second hand") >= 0) hit = null;          // labels the block above
+      else if (line.indexOf("customers won t take") >= 0 || line.indexOf("customers wont take") >= 0)
+        hit = "Ready, customer won't take";
+      else if (line.indexOf("collect or supply only") >= 0) hit = "Collect & supply only";
+      else if (line.indexOf("not sent to floor") >= 0)
+        /* display names only - the sheet's own divider text is never changed */
+        hit = names.indexOf("Ready to fit") < 0 ? "Ready to fit" : "In production";
+    }
+    if (hit) { names.push(hit); cur = { idx: names.length - 1, name: hit, divider: r, jobs: [], last: r }; blocks.push(cur); continue; }
+    if (isJob) { cur.jobs.push({ row: r, id: j }); cur.last = r; }
+  }
+  return { names, blocks };
+}
+
 function productionBlocks(ws) {
-  const cat = {}, blk = {}, names = [], order = {};
-  let idx = 0, seen = 0;
-  names[0] = "Can sell as second hand";
+  const maxR = ws.rowCount || 0, matrix = [];
+  for (let r = 1; r <= maxR; r++) {
+    const row = ws.getRow(r), line = [];
+    for (let c = 1; c <= 11; c++) line.push(cellText(row.getCell(c)));
+    matrix.push(line);
+  }
+  const B = blocksFromValues(matrix);
+  const cat = {}, blk = {}, order = {};
+  let seen = 0;
+  B.blocks.forEach(b => b.jobs.forEach(j => {
+    blk[j.id] = b.idx; order[j.id] = seen++;
+    cat[j.id] = b.idx === 0 ? "secondhand" : b.idx === 1 ? "wonttake" : b.idx === 2 ? "collect" : "active";
+  }));
+  return { cat, blk, names: B.names, order };
+}
+
+/** The formatting of a job's row that the Excel API cannot read cheaply per
+    cell (alignment, wrap, borders) plus grouping keys, from the last download.
+    Found by job number, never by row, because rows move. Plain data only.  */
+function templateForJob(ws, jobId) {
+  if (!ws) return null;
+  const want = String(jobId || "").trim().toUpperCase();
   const maxR = ws.rowCount || 0;
   for (let r = 1; r <= maxR; r++) {
     const row = ws.getRow(r);
-    const j = cellText(row.getCell(3)).trim().toUpperCase();
-    let line = "";
-    for (let c = 1; c <= 11; c++) line += " " + cellText(row.getCell(c));
-    line = norm(line);
-    let hit = null;
-    if (line.indexOf("can sell as second hand") >= 0) hit = null;          // labels the block above
-    else if (line.indexOf("customers won t take") >= 0 || line.indexOf("customers wont take") >= 0)
-      hit = "Ready, customer won't take";
-    else if (line.indexOf("collect or supply only") >= 0) hit = "Collect & supply only";
-    else if (line.indexOf("not sent to floor") >= 0)
-      /* display names only - the sheet's own divider text is never changed */
-      hit = names.indexOf("Ready to fit") < 0 ? "Ready to fit" : "In production";
-    if (hit) { idx++; names[idx] = hit; continue; }
-    if (JOB_RE.test(j)) { blk[j] = idx; order[j] = seen++;
-      cat[j] = idx === 0 ? "secondhand" : idx === 1 ? "wonttake" : idx === 2 ? "collect" : "active"; }
+    if (cellText(row.getCell(3)).trim().toUpperCase() !== want) continue;
+    const cells = [];
+    for (let c = 1; c <= 90; c++) {
+      const cell = row.getCell(c), a = cell.alignment || {}, b = cell.border || {};
+      const f = cell.font || {}, fl = cell.fill || {};
+      const ck = col => col ? (col.argb || ("t" + col.theme + "/" + (col.tint || 0))) : "";
+      const side = s => (s && s.style) ? { style: s.style, color: (s.color && s.color.argb) ? "#" + s.color.argb.slice(-6) : "#000000" } : null;
+      cells.push({ h: a.horizontal || null, v: a.vertical || null, wrap: !!a.wrapText,
+                   bottom: side(b.bottom), left: side(b.left), right: side(b.right),
+                   /* keys only, used to group cells that share one font / one fill so the live
+                      read can fetch each group in a single request */
+                   fk: [f.bold ? 1 : 0, f.italic ? 1 : 0, f.size || "", f.name || "", ck(f.color)].join("|"),
+                   flk: fl.pattern === "solid" ? ck(fl.fgColor) : "" });
+    }
+    return { row: r, height: row.height || null, cells };
   }
-  return { cat, blk, names, order };
+  return null;
 }
 
 function parseWorkbook(wb) {
@@ -228,5 +281,6 @@ function parseWorkbook(wb) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE };
-if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet; }
+if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE, blocksFromValues, templateForJob };
+if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet;
+  window.blocksFromValues = blocksFromValues; window.templateForJob = templateForJob; }
