@@ -788,6 +788,127 @@ function renderChanges() {
   host.querySelectorAll(".jump").forEach(b => b.onclick = () => { host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer(); });
 }
 
+
+/* ---------- version history window ----------
+   Lists SharePoint's own versions of the workbook, shows what each one changed
+   (by parsing it with the same parser and diffing), and can roll back to one. */
+let VERSIONS = [], VCACHE = {}, vsel = null, vmode = "since";
+const vnum = v => String(v.id).replace(/\.0$/, "");
+const vwho = v => (v.by || "").replace(/ ?[-\u2013] ?Costello.*$/i, "").replace(/ Costello Windows$/i, "");
+
+async function versionJobs(v) {
+  if (!VCACHE[v.id]) VCACHE[v.id] = parseWorkbook(await CW.downloadVersion(v.id));
+  return VCACHE[v.id];
+}
+
+async function renderVersions() {
+  let host = $("#vhost");
+  if (!host) { host = document.createElement("div"); host.id = "vhost"; document.body.appendChild(host); }
+  if (!VERSIONS.length) {
+    host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin"><div class="dhead"><div class="cond" style="font-size:25px;font-weight:700">Versions</div></div>' +
+      '<div class="empty"><span class="spin dark"></span> Reading SharePoint version history\u2026</div></div>';
+    $("#vscrim").onclick = () => host.remove();
+    try { VERSIONS = await CW.listVersions(80); }
+    catch (e) {
+      host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin"><div class="empty">' + esc(friendly(e)) + '</div></div>';
+      $("#vscrim").onclick = () => host.remove(); return;
+    }
+  }
+  host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Versions</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">SharePoint keeps every save. Pick one to see what changed, or roll back to it.</div></div>' +
+      '<button class="ghost" id="vclose">Close</button></div>' +
+    '<div class="vbody"><div class="vlist">' + VERSIONS.map((v, i) => {
+        const d = new Date(v.at), p = n => (n < 10 ? "0" : "") + n;
+        return '<button class="vrow' + (vsel === v.id ? " on" : "") + '" data-v="' + v.id + '">' +
+          '<span class="tab" style="font-weight:600">v' + vnum(v) + '</span>' +
+          '<span class="tab" style="color:var(--ink-3);font-size:12px">' + p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + '</span>' +
+          '<span class="ell" style="font-size:12.5px">' + esc(vwho(v)) + '</span>' +
+          (i === 0 ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">current</span>' : "") + '</button>';
+      }).join("") + '</div>' +
+      '<div class="vdetail" id="vdetail">' + (vsel ? "" :
+        '<div class="empty">Select a version on the left.<br><span style="font-size:12px">' + VERSIONS.length + ' most recent shown, newest first.</span></div>') +
+      '</div></div></div>';
+  $("#vscrim").onclick = () => host.remove();
+  $("#vclose").onclick = () => host.remove();
+  host.querySelectorAll(".vrow").forEach(b => b.onclick = () => { vsel = b.dataset.v; vmode = "since"; renderVersions(); });
+  if (vsel) renderVersionDetail();
+}
+
+async function renderVersionDetail() {
+  const box = $("#vdetail"); if (!box) return;
+  const v = VERSIONS.find(x => x.id === vsel); if (!v) return;
+  const idx = VERSIONS.indexOf(v), isCurrent = idx === 0, prev = VERSIONS[idx + 1];
+  const d = new Date(v.at);
+  const head = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<span class="cond" style="font-size:24px;font-weight:700">v' + vnum(v) + '</span>' +
+    '<span style="color:var(--ink-3)">' + d.toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) +
+    ' \u00b7 ' + esc(vwho(v)) + ' \u00b7 ' + Math.round(v.size / 1024) + ' KB</span></div>';
+  box.innerHTML = head + '<div class="empty" style="padding:30px"><span class="spin dark"></span> Downloading and comparing\u2026</div>';
+  try {
+    let entries, title, note;
+    if (vmode === "since") {
+      const vj = await versionJobs(v);
+      entries = isCurrent ? [] : diffJobs(vj, ALL, "since", v.at);
+      title = isCurrent ? "This is the current file" : "Changed since this version";
+      note = isCurrent ? "" : "Rolling back to v" + vnum(v) + " would undo everything below.";
+    } else if (!prev) {
+      entries = []; title = "Oldest version loaded"; note = "Nothing older is loaded to compare with.";
+    } else {
+      const both = await Promise.all([versionJobs(v), versionJobs(prev)]);
+      entries = diffJobs(both[1], both[0], vwho(v), v.at);
+      title = "What this save changed"; note = "Compared with v" + vnum(prev) + ", the save immediately before it.";
+    }
+    box.innerHTML = head +
+      '<div style="display:flex;gap:6px;margin-bottom:12px">' +
+        '<button class="chip" aria-pressed="' + (vmode === "since") + '" id="vm1">Changed since</button>' +
+        '<button class="chip" aria-pressed="' + (vmode === "save") + '" id="vm2">What this save changed</button></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;gap:12px">' +
+        '<span class="kick">' + title + (entries.length ? " \u00b7 " + entries.length : "") + '</span>' +
+        '<span style="font-size:12px;color:var(--ink-4);text-align:right">' + esc(note) + '</span></div>' +
+      '<div class="vdiff">' + (entries.length ? entries.map(c =>
+        '<div class="vline"><span class="stn">' + esc(c.job) + '</span><span>' + esc(c.what) + '</span>' +
+        '<span style="font-size:12px"><span style="color:var(--ink-4);text-decoration:line-through">' + esc(c.from || "blank") +
+        '</span> \u2192 <b>' + esc(c.to || "blank") + '</b></span></div>').join("")
+        : '<div style="padding:18px;color:var(--ink-4);font-size:13px">' +
+          (isCurrent ? "Nothing to compare \u2014 this is what you are looking at now." : "No differences in the job data.") + '</div>') + '</div>' +
+      (isCurrent ? "" :
+        '<div class="rollbox"><div><b>Roll back to this version</b>' +
+        '<div style="font-size:12px;color:var(--ink-3);margin-top:3px;line-height:1.45">Makes v' + vnum(v) +
+        ' the current file. Every sheet goes back to how it was at ' + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+        ' \u2014 including Dashboard Log and Dashboard Views entries made since. The state you replace is kept as a new version, so this can itself be undone.</div></div>' +
+        '<button class="btn danger" id="vroll">Roll back\u2026</button></div>');
+    $("#vm1").onclick = () => { vmode = "since"; renderVersionDetail(); };
+    $("#vm2").onclick = () => { vmode = "save"; renderVersionDetail(); };
+    const rb = $("#vroll"); if (rb) rb.onclick = () => doRollback(v, entries.length);
+  } catch (e) {
+    box.innerHTML = head + '<div class="empty">' + esc(friendly(e)) + '</div>';
+  }
+}
+
+async function doRollback(v, nChanges) {
+  const vn = vnum(v);
+  const typed = prompt("This replaces the live workbook with version " + vn + " and undoes " + nChanges +
+    " change" + (nChanges === 1 ? "" : "s") + " made since.\n\nThe current state is kept as a version, so this can be undone.\n\nType " + vn + " to confirm:");
+  if (typed === null) return;
+  if (typed.trim() !== vn) { toast("Not rolled back \u2014 the number did not match.", true); return; }
+  const cur = VERSIONS[0] ? vnum(VERSIONS[0]) : "?";
+  setStatus("rolling back to v" + vn + "\u2026", "busy");
+  try {
+    await CW.restoreVersion(v.id);
+    PENDING = {}; savePending();                 // held edits no longer describe the file
+    VERSIONS = []; VCACHE = {}; vsel = null;
+    noteChange("(workbook)", "Rolled back", "v" + cur, "v" + vn);
+    const h = $("#vhost"); if (h) h.remove();
+    toast("Rolled back to v" + vn + ". SharePoint is applying it \u2014 the view refreshes in about 40 seconds.");
+    lastStamp = null;
+    setTimeout(() => load("reloading after rollback\u2026", true), 40000);
+  } catch (e) {
+    setStatus("rollback failed", "err");
+    toast(friendly(e), true);
+  }
+}
+
 /* ---------- keep the page itself up to date ----------
    GitHub Pages caches index.html for around ten minutes, so a browser can sit
    on an old build after a deploy. Ask the server directly and offer a reload. */
@@ -840,6 +961,7 @@ async function start() {
   $("#themebtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   $("#refreshbtn").onclick = () => load("refreshing…");
   $("#changebtn").onclick = () => renderChanges();
+  $("#versbtn").onclick = () => renderVersions();
   updateChangeBtn();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {

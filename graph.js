@@ -155,6 +155,32 @@ async function downloadWorkbook() {
   return wb;
 }
 
+/* ---- version history ------------------------------------------------------
+   SharePoint keeps every save as a version. Listing and downloading them is
+   read-only. restoreVersion is the ONE deliberate whole-file write in this
+   app: it makes the chosen version current, and SharePoint keeps the state it
+   replaced as a new version, so a rollback is itself rollable.               */
+async function listVersions(top) {
+  const f = await findFile();
+  const r = await call("GET", f.meta + "/versions?$top=" + (top || 60));
+  return (r.value || []).map(v => ({
+    id: v.id, at: v.lastModifiedDateTime, size: v.size || 0,
+    by: (v.lastModifiedBy && v.lastModifiedBy.user && v.lastModifiedBy.user.displayName) || "unknown"
+  }));
+}
+async function downloadVersion(versionId) {
+  const f = await findFile();
+  const buf = await call("GET", f.meta + "/versions/" + versionId + "/content", null, true);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  return wb;
+}
+async function restoreVersion(versionId) {
+  const f = await findFile();
+  sessionId = null;                         // the file is about to be replaced under any open session
+  return call("POST", f.meta + "/versions/" + versionId + "/restoreVersion", {});
+}
+
 /* ---- the audit log -------------------------------------------------------
    HARD RULE: every function below addresses LOG_SHEET and nothing else. The
    sheet name is a constant, never a parameter, so no call site can point this
@@ -313,5 +339,6 @@ window.CW = {
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
+  listVersions, downloadVersion, restoreVersion,
   get account() { return account; }
 };
