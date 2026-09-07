@@ -95,7 +95,20 @@ function jobPhase(j) {
   if ((j.dates && j.dates.floor) || items.some(x => st(x) === "process" || st(x) === "done")) return 1;
   return 0;
 }
-const phaseName = j => PHASES[jobPhase(j)];
+/* A phase can also be set by hand. That does not live here and it is never in
+   the workbook - it comes from a SharePoint list that app.js reads - so this
+   file only keeps the hook. When one is registered, every reading of the phase
+   goes through effectivePhase(): the sheet's own evidence and the hand-set
+   value, whichever is further on. The sheet therefore wins the moment it
+   catches up, and clearing the hand-set phase drops straight back to it. */
+let phaseHook = null;
+function setPhaseHook(fn) { phaseHook = typeof fn === "function" ? fn : null; }
+function effectivePhase(j) {
+  const sheet = jobPhase(j);
+  const hand = phaseHook ? phaseHook(j) : null;
+  return hand == null ? sheet : Math.max(sheet, hand);
+}
+const phaseName = j => PHASES[effectivePhase(j)];
 
 /* ---- colours ---- */
 const cpStatusFor = (done, total) => done <= 0 ? "" : (done >= total ? "done" : "process");
@@ -283,11 +296,12 @@ async function cpWriteGroup(o) {
 
 if (typeof window !== "undefined") window.CP = {
   itemState, cpItems, cpTotal, cpStatus, cpColumn, cpLabel, cpColour, cpStatusFor, cpClamp,
-  jobPhase, phaseName, PHASES,
+  jobPhase, phaseName, PHASES, effectivePhase, setPhaseHook,
   cpWithHeld, cpSetProgress, cpStored, cpWriteItem, cpWriteGroup,
   cpBurst, cpFire, cpFireAll, cpSettled, cpPending, cpCancelBurst, cpReplay, cpQueue, cpClearQueue, cpChain,
   WHITE_HEX, YELLOW_HEX, GOLD_HEX, CP_DEBOUNCE_MS
 };
 /* the pipeline is read by the drawer and by every job row, so it is a plain
    global as well, the way the parser's own helpers are */
-if (typeof window !== "undefined") { window.jobPhase = jobPhase; window.phaseName = phaseName; window.PHASES = PHASES; }
+if (typeof window !== "undefined") { window.jobPhase = jobPhase; window.phaseName = phaseName; window.PHASES = PHASES;
+                                     window.effectivePhase = effectivePhase; window.setPhaseHook = setPhaseHook; }

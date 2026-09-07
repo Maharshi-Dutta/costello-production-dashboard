@@ -203,6 +203,20 @@
   .phlab { font-size:10.5px; line-height:1.25; color:var(--ink-3) }
   .phstep.now .phlab { color:var(--ink); font-weight:600 }
   .phtag { font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent) }
+  /* Edit mode: every step is a button. 44 px of height is the whole point -
+     these are tapped on a phone on the factory floor, not clicked with a mouse. */
+  .pipe.live { gap:8px }
+  button.phstep { font:inherit; text-align:left; background:none; border:0; border-radius:6px;
+                  padding:7px 5px 6px; margin:0; min-height:46px; cursor:pointer; -webkit-tap-highlight-color:transparent }
+  button.phstep:not(:disabled):hover { background:var(--surface-2) }
+  button.phstep:not(:disabled):hover .phbar { background:var(--accent) }
+  button.phstep:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
+  button.phstep:disabled { cursor:not-allowed; opacity:.45 }
+  .phstep.hand .phbar { background:var(--accent) }
+  .phstep.hand .phlab { color:var(--ink); font-weight:600 }
+  .phset { font-size:11.5px; color:var(--ink-4); line-height:1.45; margin-top:9px }
+  .phset strong { color:var(--ink-2) }
+  .phset.warn { color:var(--urgent) }
   @media (max-width:560px){ .pipe { grid-template-columns:repeat(4,1fr) } }
   /* the date steps fold away under the pipeline; the header is the toggle */
   .dtog { display:flex; align-items:center; gap:9px; width:100%; min-height:40px; padding:0;
@@ -346,47 +360,113 @@
   .spin { width:13px; height:13px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
           border-radius:50%; animation:spin .7s linear infinite; display:inline-block }
   /* ---- the floating selection radial menu ----
-     A round button in the thumb's corner whenever jobs are ticked. Opening it
-     glides that same button inwards to the middle of the ring (--fdx/--fdy),
-     swaps its count for a plus that turns 315° into a cross, ripples two ring
-     shadows out behind it, and floats the options onto a FULL circle around it
-     (--fx/--fy, worked out in JS so the ring can never leave the screen). The
-     stagger is the CSS's own: --i counts the options out on opening, --rev
-     counts them back in on closing, so nothing about the motion runs in
-     JavaScript. It sits below the scrim (z-index 40), so an open window covers
-     it on a desktop; on a phone there is no room for that and it hides itself
-     instead, well clear of a window's Download and Save buttons. */
-  .fabwrap { position:fixed; right:18px; bottom:18px; width:56px; height:56px; z-index:35 }
+     Nothing here pops: everything travels. The wheel RISES from under the
+     screen edge when the first job is ticked and SINKS back out of sight when
+     the last one is unticked (the host is only taken off the page once that
+     has finished - see fabDrop in app.js). Opening GLIDES that same button in
+     to the middle of the ring (--fdx/--fdy), turns its plus 315° into a cross,
+     GROWS two soft rings out behind it and sends each option TRAVELLING out
+     along its own radius from underneath the button (--fx/--fy, worked out in
+     JS so the ring can never leave the screen). Closing plays the whole thing
+     backwards: the options draw back in on a reverse stagger, then the button
+     glides home behind them.
+
+     Every stage is a transform/opacity transition on its own node, so none of
+     it touches layout or paint, and the stagger is the CSS's own: --i counts
+     the options out on opening, --rev counts them back in on closing. Every
+     duration, delay and easing is a custom property (--fab-t-* a duration,
+     --fab-d-* a delay, --fab-s-* a per-option step, --fab-e-* an easing), so
+     the whole feel can be retuned here without a line of JavaScript changing;
+     app.js reads the two it has to wait for straight back off :root.
+
+     It sits below the scrim (z-index 40), so an open window covers it on a
+     desktop; on a phone there is no room for that and it hides itself instead,
+     well clear of a window's Download and Save buttons. */
+  :root {
+    --fab-t-arrive:420ms;  --fab-e-arrive:cubic-bezier(.34,1.56,.64,1);
+    --fab-t-leave:300ms;   --fab-e-leave:cubic-bezier(.4,0,1,1);
+    --fab-t-glide:450ms;   --fab-e-spring:cubic-bezier(.34,1.4,.64,1);  --fab-d-home:200ms;
+    --fab-t-x:500ms;       --fab-d-x:80ms;
+    --fab-t-ring-in:450ms; --fab-t-ring-out:550ms; --fab-d-ring-out:80ms;
+    --fab-e-out:cubic-bezier(.16,.84,.44,1);
+    --fab-t-opt:450ms;     --fab-d-opt:160ms;      --fab-s-opt:70ms;
+    --fab-t-optback:320ms; --fab-s-optback:45ms;   --fab-e-in:cubic-bezier(.4,0,1,1);
+    --fab-t-fade:200ms;    --fab-t-pulse:250ms;
+    --fab-ring-in-s:1.45;  --fab-ring-out-s:2.45;
+  }
+  @keyframes fabrise { from { transform:translateY(120px); opacity:0 } to { transform:none; opacity:1 } }
+  @keyframes fabpulse { 0% { transform:scale(1) } 45% { transform:scale(1.15) } 100% { transform:scale(1) } }
+  /* the whole wheel arrives and leaves as one: the button's own transform is
+     left free for the glide, so the two motions never fight over it */
+  .fabwrap { position:fixed; right:18px; bottom:18px; width:56px; height:56px; z-index:35;
+             will-change:transform,opacity;
+             animation:fabrise var(--fab-t-arrive) var(--fab-e-arrive) backwards }
+  .fabwrap.leaving { transform:translateY(120px); opacity:0; pointer-events:none; animation:none;
+             transition:transform var(--fab-t-leave) var(--fab-e-leave),
+                        opacity var(--fab-t-leave) linear }
   .fab { width:56px; height:56px; border-radius:50%; border:0; background:var(--accent); color:#fff;
-         box-shadow:0 6px 20px rgba(0,0,0,.28), 0 0 0 0 var(--fab-ring-in), 0 0 0 0 var(--fab-ring-out);
+         box-shadow:0 6px 20px rgba(0,0,0,.28);
          display:flex; flex-direction:column; align-items:center; justify-content:center;
          line-height:1; position:relative; z-index:2; transform:translate(0,0);
-         transition:transform .25s cubic-bezier(.2,.8,.3,1), box-shadow .35s ease }
+         will-change:transform;
+         transition:transform var(--fab-t-glide) var(--fab-e-spring) var(--fab-d-home) }
   .fab:hover { filter:brightness(1.08) }
+  /* out to the middle at once; home again only once the options are back in */
   .fabwrap.open .fab { transform:translate(var(--fdx,0),var(--fdy,0));
-         box-shadow:0 6px 20px rgba(0,0,0,.28), 0 0 0 12px var(--fab-ring-in), 0 0 0 40px var(--fab-ring-out) }
+         transition:transform var(--fab-t-glide) var(--fab-e-spring) 0s }
   .fabn { font-family:"Barlow Condensed",sans-serif; font-size:23px; font-weight:700;
           font-variant-numeric:tabular-nums }
   .fabk { font-size:8px; letter-spacing:.12em; text-transform:uppercase; opacity:.85; margin-top:1px }
-  .fabn, .fabk { transition:opacity .15s ease }
+  .fabn, .fabk { transition:opacity var(--fab-t-fade) ease }
   .fabwrap.open .fabn, .fabwrap.open .fabk { opacity:0 }
+  /* the count never jumps: a change of number gives it one small beat */
+  .fab.pulse .fabn { animation:fabpulse var(--fab-t-pulse) var(--fab-e-out) }
   /* the plus sits on top of the count and takes over as it fades */
   .fabx { position:absolute; left:0; top:0; right:0; bottom:0; display:flex;
           align-items:center; justify-content:center; opacity:0; transform:rotate(0deg);
-          transition:transform .25s cubic-bezier(.2,.8,.3,1), opacity .15s ease }
+          will-change:transform,opacity;
+          transition:transform var(--fab-t-x) var(--fab-e-spring),
+                     opacity var(--fab-t-fade) ease }
   .fabx svg { width:24px; height:24px }
-  .fabwrap.open .fabx { opacity:1; transform:rotate(315deg) }
+  .fabwrap.open .fabx { opacity:1; transform:rotate(315deg);
+          transition:transform var(--fab-t-x) var(--fab-e-spring) var(--fab-d-x),
+                     opacity var(--fab-t-fade) ease var(--fab-d-x) }
+  /* two rings growing out from behind the button as it lands - scaled discs
+     rather than box-shadow spread, so the GPU carries them */
+  .fabring { position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px;
+             border-radius:50%; pointer-events:none; opacity:0; will-change:transform,opacity;
+             transform:translate(0,0) scale(.2) }
+  .fabring.in { background:var(--fab-ring-in);
+             transition:transform var(--fab-t-ring-in) var(--fab-e-out),
+                        opacity var(--fab-t-ring-in) ease }
+  .fabring.out { background:var(--fab-ring-out);
+             transition:transform var(--fab-t-ring-out) var(--fab-e-out),
+                        opacity var(--fab-t-ring-out) ease }
+  .fabwrap.open .fabring { opacity:1;
+             transform:translate(var(--fdx,0),var(--fdy,0)) scale(var(--fab-ring-in-s)) }
+  .fabwrap.open .fabring.out {
+             transform:translate(var(--fdx,0),var(--fdy,0)) scale(var(--fab-ring-out-s));
+             transition-delay:var(--fab-d-ring-out) }
   /* one option: a 52 px round icon with its name underneath, its whole box
      centred on the point of the circle it belongs to, so the label never
-     changes where the ring's spacing has to be worked out from. */
+     changes where the ring's spacing has to be worked out from. It waits small
+     and invisible at the middle of the ring - which is where the button itself
+     will be by the time the option is let go, 160 ms in - so it travels out
+     along its own radius and, on the way back, draws in to the button rather
+     than to the empty corner. */
   .fabopt { position:absolute; left:50%; top:50%; width:76px; height:68px; margin:-34px 0 0 -38px;
             display:flex; flex-direction:column; align-items:center; gap:3px;
             padding:0; border:0; background:none; color:var(--ink); cursor:pointer;
-            transform:translate(0,0) scale(0); opacity:0; pointer-events:none;
-            transition:transform .28s cubic-bezier(.2,.8,.3,1), opacity .2s ease;
-            transition-delay:calc(var(--rev, 0) * 60ms) }
+            transform:translate(var(--fdx,0),var(--fdy,0)) scale(.3); opacity:0; pointer-events:none;
+            will-change:transform,opacity;
+            transition:transform var(--fab-t-optback) var(--fab-e-in),
+                       opacity var(--fab-t-optback) ease-in;
+            transition-delay:calc(var(--rev, 0) * var(--fab-s-optback)) }
   .fabwrap.open .fabopt { transform:translate(var(--fx,0),var(--fy,0)) scale(1); opacity:1;
-            pointer-events:auto; transition-delay:calc(var(--i, 0) * 60ms) }
+            pointer-events:auto;
+            transition:transform var(--fab-t-opt) var(--fab-e-spring),
+                       opacity var(--fab-t-opt) ease-out;
+            transition-delay:calc(var(--fab-d-opt) + var(--i, 0) * var(--fab-s-opt)) }
   .fabi { width:52px; height:52px; border-radius:50%; background:var(--surface);
           border:1px solid var(--line); box-shadow:0 4px 14px rgba(0,0,0,.18);
           display:flex; align-items:center; justify-content:center; color:var(--accent) }
@@ -395,8 +475,13 @@
   .fabl { font-size:10px; line-height:12px; color:var(--ink-2); white-space:nowrap;
           text-shadow:0 1px 3px var(--bg), 0 0 3px var(--bg) }
   @media (max-width:700px){ .fabwrap.over { display:none } }
+  /* asked for less motion: everything still goes exactly where it goes, it
+     just stops travelling there - only a short fade is left */
   @media (prefers-reduced-motion:reduce){
-    .fab, .fabx, .fabn, .fabk, .fabopt { transition:none !important; transition-delay:0s !important }
+    .fabwrap, .fab, .fabx, .fabn, .fabk, .fabring, .fabopt {
+      animation:none !important;
+      transition:opacity 120ms linear !important; transition-delay:0s !important }
+    .fabwrap.leaving { transform:none !important }
   }
 
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70;
@@ -452,7 +537,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1205</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1302</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -464,10 +549,10 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260907-1205"></script>
-<script src="graph.js?v=20260907-1205"></script>
-<script src="checkpoints.js?v=20260907-1205"></script>
-<script src="export.js?v=20260907-1205"></script>
-<script src="app.js?v=20260907-1205"></script>
+<script src="parser.js?v=20260907-1302"></script>
+<script src="graph.js?v=20260907-1302"></script>
+<script src="checkpoints.js?v=20260907-1302"></script>
+<script src="export.js?v=20260907-1302"></script>
+<script src="app.js?v=20260907-1302"></script>
 </body>
 </html>

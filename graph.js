@@ -4,7 +4,9 @@
 
 const CLIENT_ID = "a989939b-17f3-4c9c-adb7-4d8338f4878a";
 const TENANT_ID = "cb4cfc4c-96f4-44c0-b37b-a467826f86d6";
-const SCOPES = ["Files.ReadWrite.All", "User.Read"];
+/* Sites.ReadWrite.All is for the SharePoint list that holds the hand-set
+   phases - never for the workbook, which stays on Files.ReadWrite.All. */
+const SCOPES = ["Files.ReadWrite.All", "Sites.ReadWrite.All", "User.Read"];
 const SITE_PATH = "costellowindowsie.sharepoint.com:/sites/ProductionProgress";
 const FILE_MATCH = "production work in progress";
 const G = "https://graph.microsoft.com/v1.0";
@@ -61,9 +63,12 @@ async function token() {
   }
 }
 
-async function headers(extra) {
+/* The workbook session header belongs to workbook requests only: sending a
+   stale one at /sites/{id}/lists would earn an InvalidSession 400 on a call
+   that has nothing to do with the workbook. */
+async function headers(extra, path) {
   const h = { Authorization: "Bearer " + (await token()) };
-  if (sessionId) h["workbook-session-id"] = sessionId;
+  if (sessionId && (path == null || path.indexOf("/workbook") >= 0)) h["workbook-session-id"] = sessionId;
   return Object.assign(h, extra || {});
 }
 
@@ -76,7 +81,7 @@ let openingSession = false;
 async function call(method, path, body, asBuffer) {
   let lastStatus = 0, lastText = "", sessionRetried = false;
   for (let a = 0; a < 5; a++) {
-    const init = { method, headers: await headers(body ? { "Content-Type": "application/json" } : null) };
+    const init = { method, headers: await headers(body ? { "Content-Type": "application/json" } : null, path) };
     if (body) init.body = JSON.stringify(body);
     const r = await fetch(G + path, init);
     if (r.ok) {
@@ -101,7 +106,8 @@ async function call(method, path, body, asBuffer) {
     }
     break;
   }
-  throw new Error(method + " " + path.split("/workbook")[1] + " -> " + lastStatus + " " + lastText.slice(0, 200));
+  /* list paths have no "/workbook" in them, so fall back to the whole path */
+  throw new Error(method + " " + (path.split("/workbook")[1] || path) + " -> " + lastStatus + " " + lastText.slice(0, 200));
 }
 
 /* ---- the workbook ---- */
@@ -817,6 +823,151 @@ async function moveJobRow(jobId, targetIdx, tmplFor, onStep) {
   return { moved: true, from: sb.name, to: tb.name, fromRow: src, row: tgt - (srcNow < tgt ? 1 : 0) };
 }
 
+/* ---- SharePoint lists ------------------------------------------------------
+   The hand-set phases are shared through a SharePoint list in the same site,
+   NOT through the workbook: nothing in this block addresses a worksheet, a
+   range, a cell format or the file at all. Every path is
+   /sites/{siteId}/lists/... and the only thing taken from the workbook is the
+   site id that findFile() already worked out.
+
+   The list itself is made by hand in SharePoint. If it is not there, listId()
+   answers null and listItems() answers null with it, so the dashboard can say
+   so plainly instead of trying to create anything.                          */
+const LISTIDS_KEY = "cw_listids";
+const listIdMemo = {};                 // display name -> id, for this page load
+
+function listIdCache() {
+  try { return JSON.parse(localStorage.getItem(LISTIDS_KEY) || "{}"); } catch (e) { return {}; }
+}
+function rememberListId(name, id) {
+  const all = listIdCache();
+  if (all[name] === id) return;
+  all[name] = id;
+  try { localStorage.setItem(LISTIDS_KEY, JSON.stringify(all)); } catch (e) {}
+}
+
+/** The id of a list, found once by its display name and then remembered - in
+    memory for this page and in localStorage for the next one. A list that is
+    not there is never cached: the moment the manager creates it, the next call
+    finds it without anyone clearing anything. */
+async function listId(displayName) {
+  if (listIdMemo[displayName]) return listIdMemo[displayName];
+  const cached = listIdCache()[displayName];
+  if (cached) { listIdMemo[displayName] = cached; return cached; }
+  const f = await findFile();
+  const r = await call("GET", "/sites/" + f.siteId + "/lists?$select=id,displayName");
+  const want = String(displayName).toLowerCase();
+  const hit = (r.value || []).find(l => String(l.displayName || "").toLowerCase() === want);
+  if (!hit) return null;
+  listIdMemo[displayName] = hit.id;
+  rememberListId(displayName, hit.id);
+  return hit.id;
+}
+
+/** The next page of a collection arrives as an absolute URL. It is normally
+    the same base call() puts on the front, but an absolute origin must be cut
+    off either way rather than handed to call() whole - and so must the version
+    segment call() is about to add back. */
+function graphPath(url) {
+  let s = String(url || "");
+  if (s.indexOf(G) === 0) return s.slice(G.length);
+  const m = /^https?:\/\/[^/]+(\/.*)$/.exec(s);
+  if (m) s = m[1];
+  return s.replace(/^\/(v1\.0|beta)(?=\/)/, "");
+}
+
+/** Every item of a list, following @odata.nextLink to the end.
+    null (not []) means the list does not exist. */
+async function listItems(displayName) {
+  const id = await listId(displayName);
+  if (!id) return null;
+  const f = await findFile();
+  let path = "/sites/" + f.siteId + "/lists/" + id +
+             "/items?expand=fields(select=Title,Phase,PhaseName,SetBy,SetAt)&$top=999";
+  const out = [];
+  for (let page = 0; page < 50 && path; page++) {
+    const r = await call("GET", path);
+    (r.value || []).forEach(it => out.push({ id: String(it.id), fields: it.fields || {} }));
+    path = r["@odata.nextLink"] ? graphPath(r["@odata.nextLink"]) : null;
+  }
+  return out;
+}
+
+/* ---- one item per Title, even with two browsers writing at once -----------
+   serialised() keeps one tab in order; it cannot see the tab on the next desk.
+   Two people setting the same job at the same moment both read "nothing there"
+   and both POST. The list is created with "enforce unique values" on Title, so
+   the second POST is refused - and a refusal there is not an error, it means
+   the item exists now. Either way the answer is the same: read the items for
+   that Title back, keep the OLDEST id, delete any others, and PATCH the
+   survivor with what this caller meant to write. That is done after a POST
+   succeeds as well, so a list without the unique rule still ends up with one
+   item per job rather than two.                                             */
+const itemIdOrder = (a, b) => {
+  const na = Number(a.id), nb = Number(b.id);
+  if (isFinite(na) && isFinite(nb)) return na - nb;
+  return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0;
+};
+/** Every item of a list carrying one Title, oldest first. */
+async function listItemsFor(displayName, title) {
+  const all = (await listItems(displayName)) || [];
+  const key = String(title).trim().toUpperCase();
+  return all.filter(x => String(x.fields.Title == null ? "" : x.fields.Title).trim().toUpperCase() === key)
+            .sort(itemIdOrder);
+}
+
+async function listUpsert(displayName, title, fields) {
+  const id = await listId(displayName);
+  if (!id) throw new Error("The \u201c" + displayName + "\u201d list is not in SharePoint.");
+  const f = await findFile();
+  const base = "/sites/" + f.siteId + "/lists/" + id;
+  const key = String(title).trim().toUpperCase();
+  const body = Object.assign({ Title: key }, fields || {});
+  /* keep the oldest, remove the rest, and write the intended fields onto it */
+  async function settle(mine) {
+    const keep = mine[0];
+    for (let i = 1; i < mine.length; i++) await call("DELETE", base + "/items/" + mine[i].id);
+    await call("PATCH", base + "/items/" + keep.id + "/fields", body);
+    return { id: keep.id, created: false, deduped: mine.length - 1 };
+  }
+  return serialised("list:" + displayName, async () => {
+    const mine = await listItemsFor(displayName, key);
+    if (mine.length) return await settle(mine);
+    let made;
+    try {
+      made = await call("POST", base + "/items", { fields: body });
+    } catch (e) {
+      /* refused: either the unique-values rule caught a second browser, or
+         something else went wrong. Only the first of those leaves an item
+         behind, so look before deciding it was a real failure. */
+      const now = await listItemsFor(displayName, key);
+      if (!now.length) throw e;
+      return await settle(now);
+    }
+    const after = await listItemsFor(displayName, key);
+    if (after.length > 1) return await settle(after);      // both browsers got through
+    return { id: made && made.id != null ? String(made.id) : (after[0] && after[0].id) || null,
+             created: true, deduped: 0 };
+  });
+}
+
+/** Remove the items for one Title - every one of them, so a duplicate left by
+    two browsers writing at once cannot survive a clear.
+    false = there was nothing to remove. */
+async function listDelete(displayName, title) {
+  const id = await listId(displayName);
+  if (!id) return false;
+  const f = await findFile();
+  const base = "/sites/" + f.siteId + "/lists/" + id;
+  const key = String(title).trim().toUpperCase();
+  return serialised("list:" + displayName, async () => {
+    const mine = await listItemsFor(displayName, key);
+    if (!mine.length) return false;
+    for (let i = 0; i < mine.length; i++) await call("DELETE", base + "/items/" + mine[i].id);
+    return true;
+  });
+}
+
 window.CW = {
   initAuth, signIn, signOut, token, findFile, openSession, lastModified,
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
@@ -825,10 +976,13 @@ window.CW = {
   ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,
   ensureAlertsSheet, addAlert, removeAlert, ALERTS_SHEET,
   listVersions, downloadVersion, restoreVersion,
+  listId, listItems, listItemsFor, listUpsert, listDelete,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   /* tests only: forget which dashboard sheets have been seen, so the creation
      branch of the ensure*Sheet functions can be exercised again */
   _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
+  /* tests only: forget the list ids found so far */
+  _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); },
   get account() { return account; }
 };

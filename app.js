@@ -55,10 +55,15 @@ function pend(id, patch) {
     }
   }
   if ("blk" in patch) { if (patch.blk == null) { delete p.blk; delete t.blk; } else { p.blk = patch.blk; t.blk = now; } }
+  /* A hand-set phase, held while the SharePoint list catches up. 0-6 is a
+     phase; -1 means "held as cleared" - the item has just been deleted and a
+     read a second later may still be showing it; null drops the hold, the way
+     it does for blk, which is what a failed write does. */
+  if ("phase" in patch) { if (patch.phase == null) { delete p.phase; delete t.phase; } else { p.phase = patch.phase; t.phase = now; } }
   savePending();
 }
 const blkCat = b => b === 0 ? "secondhand" : b === 1 ? "wonttake" : b === 2 ? "collect" : "active";
-const pendEmpty = p => !("done" in p) && p.blk == null &&
+const pendEmpty = p => !("done" in p) && p.blk == null && p.phase == null &&
   !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length;
 
 /** `fresh` = this is a newly parsed workbook, so a held count can be compared
@@ -71,6 +76,7 @@ function applyPending(list, fresh) {
     const old = k => now - (t[k] || p.at || 0) > PENDING_MS;
     if ("done" in p && old("done")) { delete p.done; delete t.done; dropped = true; }
     if (p.blk != null && old("blk")) { delete p.blk; delete t.blk; dropped = true; }
+    if (p.phase != null && old("phase")) { delete p.phase; delete t.phase; dropped = true; }
     Object.keys(p.prods || {}).forEach(k => { if (old("prod:" + k)) { delete p.prods[k]; delete t["prod:" + k]; dropped = true; } });
     Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
     if (pendEmpty(p)) { delete PENDING[id]; dropped = true; }
@@ -83,6 +89,12 @@ function applyPending(list, fresh) {
     if (!p) return j;
     /* the file has caught up with this tick: stop holding it, so what Excel
        says takes over again straight away */
+    /* the list now says what we clicked (or that it is gone again): let go, so
+       what everyone else can see takes over */
+    if (fresh && p.phase != null) {
+      const set = PHASES_SET[String(j.id).toUpperCase()];
+      if (p.phase < 0 ? !set : (set && set.phase === p.phase)) { delete p.phase; delete p.t.phase; dropped = true; }
+    }
     if (fresh && p.cp) Object.keys(p.cp).forEach(k => {
       const st = itemState(j, k);
       if (st && st.done != null && st.done === p.cp[k]) { delete p.cp[k]; delete p.t["cp:" + k]; dropped = true; }
@@ -289,6 +301,134 @@ function updateChangeBtn() {
   b.textContent = CHANGES.length ? "Changes (" + CHANGES.length + ")" : "Changes";
 }
 
+/* ---------- hand-set phases -------------------------------------------------
+   A phase can be set by hand when the sheet has not caught up - the frames are
+   cut but nobody has coloured the cell yet. That decision is shared through a
+   SharePoint list in the same site, "Dashboard phases", and NOTHING about it
+   goes into the workbook: no tab, no column, no colour, no cell. The list is
+   made by hand in SharePoint; if it is not there this whole feature says so
+   plainly and writes nothing at all.
+
+   The sheet always wins when it is further on: effectivePhase() (checkpoints.js)
+   takes the higher of the two, so clearing a hand-set phase drops the job
+   straight back to what the sheet says.                                      */
+const PHASE_LIST = "Dashboard phases";
+const PHASE_LIST_MISSING = "The \u201cDashboard phases\u201d list is not in SharePoint yet, so phases cannot be set here. " +
+  "Ask the manager to add it - nothing in the Excel file is involved.";
+const PHASE_BELOW_SHEET = "the sheet already shows this job past this step";
+const PHASE_CHECKING = "checking…";      // the first read of the list has not answered yet
+let PHASES_SET = {};          // { JOB: { phase, name, who, at } } - everyone's hand-set phases
+let PHASE_LIST_OK = null;     // null: not looked yet · false: no such list · true: read it
+let phaseWarned = false;      // one toast per page for a list that will not read
+const PHASEBUSY = {};         // job -> true while its write is in flight
+
+/** Read the whole list. Failures are tolerated: the last known map stays, and
+    one toast is shown per page, not one per refresh. */
+async function readPhases() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return PHASES_SET;
+  try {
+    const items = await CW.listItems(PHASE_LIST);
+    if (items == null) { PHASE_LIST_OK = false; PHASES_SET = {}; return PHASES_SET; }
+    PHASE_LIST_OK = true;
+    const next = {};
+    items.forEach(it => {
+      const f = it.fields || {};
+      const job = String(f.Title == null ? "" : f.Title).trim().toUpperCase();
+      /* a blank cell is not a zero: Number("") is 0, and a row with a job but
+         no phase on it is a half-filled row, not "In office" */
+      const raw = f.Phase;
+      const n = raw == null || String(raw).trim() === "" ? NaN : Number(raw);
+      if (!job || !isFinite(n)) return;                    // a half-filled row is not a phase
+      const at = String(f.SetAt == null ? "" : f.SetAt);
+      /* Two browsers can add the same job at the same moment, and a list
+         without the unique-Title rule will hold both. The newest SetAt is what
+         somebody most recently decided, so that is the one that counts; the
+         next write to this job clears the older ones away for good. */
+      const seen = next[job];
+      if (seen && seen.at >= at) return;                   // ISO stamps: newest sorts last
+      next[job] = { phase: Math.max(0, Math.min(PHASES.length - 1, Math.round(n))),
+                    name: String(f.PhaseName == null ? "" : f.PhaseName),
+                    who: String(f.SetBy == null ? "" : f.SetBy),
+                    at: at };
+    });
+    PHASES_SET = next;
+  } catch (e) {
+    if (!phaseWarned) { phaseWarned = true; toast("Could not read the hand-set phases: " + friendly(e), true); }
+  }
+  return PHASES_SET;
+}
+
+/** The hold this browser is keeping on a phase it has just written.
+    undefined = no hold · null = held as cleared · 0-6 = held at that phase. */
+function pendPhase(id) {
+  const p = PENDING[id];
+  if (!p || p.phase == null) return undefined;
+  return p.phase < 0 ? null : p.phase;
+}
+/** The hand-set phase for a job, or null. Our own click wins while it is held,
+    so a stale read of the list cannot undo what was just done here. */
+function handPhase(j) {
+  if (!j) return null;
+  const held = pendPhase(j.id);
+  if (held !== undefined) return held;
+  const s = PHASES_SET[String(j.id).toUpperCase()];
+  return s ? s.phase : null;
+}
+/** Who set it and when, for the note under the pipeline. Not shown while our
+    own hold is the only thing saying so. */
+function handPhaseInfo(j) {
+  if (!j) return null;
+  const s = PHASES_SET[String(j.id).toUpperCase()];
+  return s && handPhase(j) === s.phase ? s : null;
+}
+if (typeof setPhaseHook === "function") setPhaseHook(handPhase);
+
+/** Set the phase of one job by hand, or - clicking the step it is already
+    on - clear it and go back to the sheet. One list item per job; one log
+    line per change; no workbook write of any kind. */
+async function setPhaseByHand(j, n) {
+  if (!j || PHASEBUSY[j.id]) return false;
+  if (PHASE_LIST_OK === null) await readPhases();          // the first read has not landed yet
+  if (PHASE_LIST_OK !== true) { toast(PHASE_LIST_MISSING, true); return false; }
+  n = Number(n);
+  if (!isFinite(n) || n < 0 || n >= PHASES.length) return false;
+  const sheet = jobPhase(j);
+  /* the sheet's own evidence already puts it past this step: nothing to set */
+  if (n < sheet) { toast(PHASE_BELOW_SHEET); return false; }
+  const before = PHASES[effectivePhase(j)];
+  const clearing = handPhase(j) === n;
+  PHASEBUSY[j.id] = true;
+  if (state.sel === j.id) renderDrawer();
+  try {
+    if (clearing) {
+      await CW.listDelete(PHASE_LIST, j.id);
+      delete PHASES_SET[String(j.id).toUpperCase()];
+      pend(j.id, { phase: -1 });                       // held as cleared for 180 s
+      ALL = applyPending(ALL);
+      noteChange(j.id, "Phase", before, "sheet");
+      toast(j.id + " phase cleared \u2014 back to what the sheet shows (" + PHASES[jobPhase(j)] + ")");
+    } else {
+      const who = whoAmI(), at = new Date().toISOString();
+      await CW.listUpsert(PHASE_LIST, j.id, { Phase: n, PhaseName: PHASES[n], SetBy: who, SetAt: at });
+      PHASES_SET[String(j.id).toUpperCase()] = { phase: n, name: PHASES[n], who: who, at: at };
+      pend(j.id, { phase: n });
+      ALL = applyPending(ALL);
+      noteChange(j.id, "Phase", before, PHASES[n]);
+      toast(j.id + " phase set to " + PHASES[n]);
+    }
+  } catch (e) {
+    pend(j.id, { phase: null });                       // the write failed: drop the hold
+    ALL = applyPending(ALL);
+    toast(friendly(e), true);
+    delete PHASEBUSY[j.id];
+    renderAll(); if (state.sel === j.id) renderDrawer();
+    return false;
+  }
+  delete PHASEBUSY[j.id];
+  renderAll(); if (state.sel === j.id) renderDrawer();
+  return true;
+}
+
 /* ---------- load ---------- */
 /* SharePoint needs about 35 s to put our change into the downloadable file, so
    every write asks for a re-read afterwards. One timer for all of them: a run
@@ -336,6 +476,11 @@ async function load(reason, force) {
       }
       cpSetProgress(counts);
     } else cpSetProgress({});          // no sheet, no counts - never the last download's
+
+    /* the hand-set phases, from the SharePoint list - never from the workbook.
+       Read before the holds are settled below, so a hold can be let go the
+       moment the list agrees with it. */
+    await readPhases();
 
     ALL = applyPending(parsed, true);   // our own recent writes win over a stale file
     ALL.blockNames = BLOCKNAMES;
@@ -1549,7 +1694,7 @@ function cpInProgress(j) {
 const statusWord = j => {
   const c = catOf(j);
   if (["floor", "ready", "office"].indexOf(c) < 0) return label(j).l;
-  return (c === "floor" || jobPhase(j) >= 1) ? phaseName(j) : label(j).l;
+  return (c === "floor" || effectivePhase(j) >= 1) ? phaseName(j) : label(j).l;
 };
 
 function rowHtml(j, i, max) {
@@ -1674,12 +1819,36 @@ function renderAll() { renderTiles(); renderChips(); renderRows(); }
    the chip bar above the list - this is a second way to reach them on a phone,
    never a second implementation. The ring is a CSS transition on transform and
    opacity with a per-option stagger; all the JavaScript does is work out where
-   the middle of the ring may sit and add or remove the "open" class. */
+   the middle of the ring may sit and add or remove the "open" class.
+
+   Nothing about the wheel pops on or off: it rises from under the screen edge
+   when the first job is ticked, sinks back when the last one is unticked, and
+   the host is only taken off the page once that has finished. Every duration
+   and easing lives in a CSS custom property (see --fab-t-* in index.html); the
+   two the JavaScript has to wait for it reads straight back off :root, so the
+   motion can be retuned in the stylesheet alone. */
 const FAB_R = 100;                     // the ring's radius, in px
 const FAB_OW = 76, FAB_OH = 68;        // one option's footprint: 52 px button + its label
 const FAB_EDGE = 8;                    // the least air an option keeps from the screen edge
 const FAB_HOME = 46;                   // the closed button's centre, in from the corner (18 + 56/2)
 let FABOPEN = false, FABOFF = null;    // FABOFF: the outside-click listener, while open
+let FABGO = null;                      // the leave in flight: { host, off, t }
+let FABLAY = null;                     // a re-lay waiting for the close to finish
+let FABN = -1;                         // the count the button is showing, for the pulse
+
+/** One timing, read off :root, so the stylesheet stays the only place a
+    duration is written down. The fallback is what index.html says today: it is
+    used when there is no browser to ask (the tests) or the property is gone. */
+function fabMs(k, dflt) {
+  try {
+    const cs = typeof window !== "undefined" && window.getComputedStyle
+      ? window.getComputedStyle(document.documentElement) : null;
+    const v = cs && cs.getPropertyValue ? String(cs.getPropertyValue(k)).trim() : "";
+    if (/ms$/.test(v)) return parseFloat(v);
+    if (/s$/.test(v)) return parseFloat(v) * 1000;
+  } catch (e) { /* no computed style here: the fallback stands */ }
+  return dflt;
+}
 
 /** Where the middle of the open ring sits, as a distance in from the right and
     from the bottom edge. The design asks for 150 px (130 px on a phone under
@@ -1729,6 +1898,46 @@ function fabVar(el, k, v) {
   else if (el.style) el.style[k] = v;
 }
 
+/** The last job has been unticked: the wheel sinks back under the screen edge
+    and is only taken off the page when it has gone. The transition tells us
+    when that is; a timer stands behind it for the cases where transitionend
+    never comes (the wheel hidden under a window, a browser that skips it, no
+    browser at all), so a host can never be orphaned. */
+function fabDrop(host) {
+  if (FABGO) return;                   // already on its way out
+  fabClose();
+  host.className = fabClass() + " leaving";
+  const done = () => {
+    if (!FABGO || FABGO.host !== host) return;
+    clearTimeout(FABGO.t);
+    if (host.removeEventListener) host.removeEventListener("transitionend", FABGO.off);
+    FABGO = null;
+    /* ticked again in the meantime? then it stays, and renderFab has it */
+    if (!Object.keys(state.picked).length && host.remove) host.remove();
+  };
+  /* Only the host's OWN sink ends the leave. Unticked with the ring open,
+     every child finishes something first and bubbles it up through here - the
+     button gliding home, the options drawing in, the rings shrinking, the
+     cross turning back - and any one of those taken for the end of the leave
+     whips the whole wheel off the screen mid-motion. The host itself only ever
+     transitions transform and opacity (.fabwrap.leaving), and under reduced
+     motion only opacity, so either of those from the host is the real end. */
+  const ended = e => {
+    if (!e || e.target !== host) return;
+    if (e.propertyName && e.propertyName !== "transform" && e.propertyName !== "opacity") return;
+    done();
+  };
+  FABGO = { host: host, off: ended, t: setTimeout(done, fabMs("--fab-t-leave", 300) + 60) };
+  if (host.addEventListener) host.addEventListener("transitionend", ended);
+}
+/** Ticked again before it finished leaving: it never left. */
+function fabStay(host) {
+  if (!FABGO) return;
+  clearTimeout(FABGO.t);
+  if (host.removeEventListener) host.removeEventListener("transitionend", FABGO.off);
+  FABGO = null;
+}
+
 function fabClose() {
   FABOPEN = false;
   if (FABOFF) { document.removeEventListener("click", FABOFF); FABOFF = null; }
@@ -1770,15 +1979,30 @@ function fabDo(k, anchor) {
 function renderFab() {
   const n = Object.keys(state.picked).length;
   let host = $("#fabhost");
-  if (!n) { if (host) { fabClose(); host.remove(); } FABOPEN = false; return null; }
-  if (!host) { host = document.createElement("div"); host.id = "fabhost"; document.body.appendChild(host); }
+  if (!n) { if (host) fabDrop(host); FABOPEN = false; FABN = -1; return null; }
+  if (host) fabStay(host);             // ticked again mid-leave: call it back
+  if (!host) { host = document.createElement("div"); host.id = "fabhost"; FABN = -1; document.body.appendChild(host); }
   const acts = fabActions();
   const g = fabGeom(acts.length, window.innerWidth, window.innerHeight);
   /* the geometry is part of the signature, so turning the phone rebuilds the ring */
   const sig = acts.map(a => a.k).join(",") + "@" + g.r + "/" + g.cx + "/" + g.cy;
-  if (host.dataset.sig !== sig) {
+  /* Never rebuild the ring under a finger. If the screen changes shape while
+     it is open, it closes with its own motion first and the new geometry is
+     laid out afterwards, when there is nothing on the move to interrupt. */
+  if (host.dataset.sig !== sig && FABOPEN) {
+    fabClose();
+    if (!FABLAY) FABLAY = setTimeout(() => { FABLAY = null; renderFab(); },
+      fabMs("--fab-d-home", 200) + fabMs("--fab-t-glide", 450) + 40);
+  } else if (host.dataset.sig !== sig) {
     host.dataset.sig = sig;
     host.innerHTML = "";
+    FABN = -1;                         // a new button: it has no number on it yet
+    /* the two rings that grow out behind the button as it lands */
+    ["in", "out"].forEach(w => {
+      const r = document.createElement("i");
+      r.className = "fabring " + w;
+      host.appendChild(r);
+    });
     /* how far the button itself glides: from its corner home to the ring's middle */
     const dx = FAB_HOME - g.cx, dy = FAB_HOME - g.cy;
     fabVar(host, "--fdx", Math.round(dx) + "px");
@@ -1810,10 +2034,17 @@ function renderFab() {
   }
   const main = $("#fabbtn");
   if (main) {
-    /* the count while it is closed; the plus - which the CSS turns 315° into a
-       cross - while it is open */
-    main.innerHTML = '<span class="fabn">' + n + '</span><span class="fabk">ticked</span>'
-      + '<span class="fabx">' + fabSvg('<path d="M12 5v14"/><path d="M5 12h14"/>') + '</span>';
+    /* The count while it is closed; the plus - which the CSS turns 315° into a
+       cross - while it is open. Only rewritten when the number really changes,
+       and once it has changed at least once the button carries "pulse", so the
+       fresh <span class="fabn"> the CSS animation hangs off gives the new
+       number one small beat instead of swapping it in dead. */
+    if (FABN !== n) {
+      main.className = "fab" + (FABN >= 0 ? " pulse" : "");
+      main.innerHTML = '<span class="fabn">' + n + '</span><span class="fabk">ticked</span>'
+        + '<span class="fabx">' + fabSvg('<path d="M12 5v14"/><path d="M5 12h14"/>') + '</span>';
+      FABN = n;
+    }
     if (main.setAttribute) {
       main.setAttribute("aria-expanded", FABOPEN ? "true" : "false");
       main.setAttribute("aria-label", n + " job" + (n === 1 ? "" : "s") + " ticked — actions");
@@ -1821,6 +2052,18 @@ function renderFab() {
   }
   host.className = fabClass();
   return host;
+}
+
+/* Turning the phone changes where the ring is allowed to sit. renderFab knows
+   that from its own signature; this is only what tells it to look again, once
+   the resizing has settled - and if the wheel is open at the time it closes on
+   its own motion first, rather than jumping to the new geometry mid-flight. */
+let FABRZ = null;
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("resize", () => {
+    clearTimeout(FABRZ);
+    FABRZ = setTimeout(() => { if ($("#fabhost")) renderFab(); }, 120);
+  });
 }
 
 /* ---------- drawer: checkpoints ---------- */
@@ -1957,19 +2200,55 @@ function wireCheckpoints(host, id) {
 /** The pipeline: seven steps, filled up to where the job has got to. The step
     it is on is named in words beside the heading and tagged "Now", so nothing
     here depends on colour alone. Steps 4-6 are shown whether or not anything
-    has reached them; none of them is ever set by hand. */
-function phasePipeHtml(j) {
-  const cur = jobPhase(j);
+    has reached them.
+
+    In Edit mode every step is a button: clicking one sets the phase by hand,
+    clicking the hand-set one again clears it. That decision goes to the
+    "Dashboard phases" SharePoint list and nowhere near the workbook. Steps the
+    sheet has already gone past cannot be chosen - the sheet's own evidence is
+    always the floor. */
+function phasePipeHtml(j, ed) {
+  const sheet = jobPhase(j);
+  const cur = effectivePhase(j);
+  const hand = handPhase(j);
+  const info = handPhaseInfo(j);
+  const wait = !!PHASEBUSY[j.id];
+  const missing = ed && PHASE_LIST_OK === false;
+  /* the first read of the list has not answered yet: the steps are there, but
+     nothing can be chosen until we know there is somewhere to put the answer */
+  const checking = ed && PHASE_LIST_OK !== true && !missing;
+  const clickable = ed && !missing;
+  const step = (p, i) => {
+    const cls = "phstep" + (i < cur ? " done" : i === cur ? " now" : "") + (i === hand ? " hand" : "");
+    const inner = '<div class="phbar"></div><span class="phlab">' + esc(p) + '</span>' +
+      (i === cur ? '<span class="phtag">Now</span>' : i === hand ? '<span class="phtag">Set</span>' : "");
+    if (!clickable) return '<div class="' + cls + '"' + (i === cur ? ' aria-current="step"' : "") + '>' + inner + '</div>';
+    const below = i < sheet;
+    const title = checking ? PHASE_CHECKING
+      : below ? PHASE_BELOW_SHEET
+      : i === hand ? "click again to clear this and go back to what the sheet shows"
+      : "set this job to " + p;
+    return '<button type="button" class="' + cls + '" data-ph="' + i + '"' +
+      (below || wait || checking ? " disabled" : "") + ' title="' + esc(title) + '"' +
+      (i === cur ? ' aria-current="step"' : "") + '>' + inner + '</button>';
+  };
+  let note = "";
+  if (info) {
+    note = '<div class="phset">Set by <strong>' + esc(info.who || "someone") + '</strong>' +
+      (info.at ? ", " + esc(stamp(info.at)) : "") +
+      (info.phase !== sheet ? ' \u00b7 sheet says: <strong>' + esc(PHASES[sheet]) + '</strong>' : "") + '</div>';
+  } else if (hand != null) {
+    note = '<div class="phset">Just set here \u2014 saving to the phases list\u2026</div>';
+  }
+  if (missing) note += '<div class="phset warn">' + esc(PHASE_LIST_MISSING) + '</div>';
+  else if (checking) note += '<div class="phset">Checking the <strong>Dashboard phases</strong> list…</div>';
+  else if (clickable) note += '<div class="phset">Click a step to set the phase by hand. Shared with everyone through the ' +
+    '<strong>Dashboard phases</strong> list in SharePoint \u2014 the Excel file is not touched.</div>';
   return '<div class="sect">' +
     '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
       '<span class="kick">Phase</span>' +
       '<span class="phnow">Now: <strong>' + esc(PHASES[cur]) + '</strong></span></div>' +
-    '<div class="pipe">' + PHASES.map((p, i) =>
-      '<div class="phstep' + (i < cur ? " done" : i === cur ? " now" : "") + '"' +
-        (i === cur ? ' aria-current="step"' : "") + '><div class="phbar"></div>' +
-        '<span class="phlab">' + esc(p) + '</span>' +
-        (i === cur ? '<span class="phtag">Now</span>' : "") + '</div>').join("") +
-    '</div></div>';
+    '<div class="pipe' + (clickable ? " live" : "") + '">' + PHASES.map(step).join("") + '</div>' + note + '</div>';
 }
 /** The five date steps, folded away under the pipeline. Which way it is folded
     is remembered exactly like a group in the list, under the key "dates". */
@@ -2020,7 +2299,7 @@ function renderDrawer() {
             hint("Clears the gold and moves the row to the bottom of <b>In production</b> in Excel. Dates are not touched.")
           : '<button class="markbtn" id="markready">✓ Mark as ready to deliver</button>' +
             hint("Turns the row gold and moves it to the bottom of <b>" + esc(readyName) + "</b> in Excel. Dates are not touched.")) : "") +
-      phasePipeHtml(j) +
+      phasePipeHtml(j, ed) +
       datesSectionHtml(j, st) +
       cpSectionHtml(j, ed) +
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">' +
@@ -2075,6 +2354,11 @@ function renderDrawer() {
   wireAlerts(host, j.id);
 
   if (ed) {
+    /* the phase steps: one click sets the phase by hand, clicking the one it is
+       already set to clears it. Nothing here goes near the workbook. */
+    (host.querySelectorAll("[data-ph]") || []).forEach(el => {
+      el.onclick = () => { const jj = byId(state.sel); if (jj) setPhaseByHand(jj, Number(el.dataset.ph)); };
+    });
     const mr = $("#markready");
     if (mr) mr.onclick = async () => {
       const turningOn = !j.done;

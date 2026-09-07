@@ -39,7 +39,18 @@ function stubEl(tag, id) {
     remove() { const drop = x => { if (x.id && REG[x.id] === x) delete REG[x.id]; x.kids.forEach(drop); }; drop(e); },
     contains(x) { return x === e || e.kids.some(k => k.contains && k.contains(x)); },
     setAttribute(k, v) { e.attrs[k] = String(v); }, getAttribute(k) { return e.attrs[k]; },
-    addEventListener() {}, removeEventListener() {}, focus() {}, blur() {}, setSelectionRange() {},
+    /* listeners are remembered rather than dropped, so a test can end a
+       transition the way a browser would and watch what the page does next.
+       fire() takes the rest of the event, so a child's transition arriving at
+       a parent's listener - which is what bubbling really looks like from the
+       parent's side - can be told apart from the parent's own. */
+    on: {},
+    addEventListener(t, fn) { (e.on[t] = e.on[t] || []).push(fn); },
+    removeEventListener(t, fn) { e.on[t] = (e.on[t] || []).filter(x => x !== fn); },
+    fire(t, ev) {
+      (e.on[t] || []).slice().forEach(fn => fn(Object.assign({ type: t, target: e }, ev || {})));
+    },
+    focus() {}, blur() {}, setSelectionRange() {},
     getBoundingClientRect: () => ({ left: 40, top: 500, right: 96, bottom: 556 }),
     querySelector: () => stubEl(), querySelectorAll: () => []
   };
@@ -457,6 +468,155 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   assert.strictEqual(el("#fabhost").className, "fabwrap");
   pass("the drawer and the Alerts / Changes windows all step the wheel aside, then give it back");
 
+  /* ---- 4b. the motion: nothing pops, everything travels ----
+     There is no browser here to actually run a transition in, so what is
+     checked is everything a transition needs and everything the page decides:
+     the class each stage turns on, the custom property it moves between, that
+     the host outlives its own leaving animation, and that every duration and
+     easing really is a --fab-* property in the stylesheet rather than a number
+     buried in the JavaScript. */
+  const CSS = fs.readFileSync(__dirname + "/index.html", "utf8");
+  const FABCSS = CSS.slice(CSS.indexOf("/* ---- the floating selection radial menu"),
+                           CSS.indexOf(".toast {"));
+  assert.ok(FABCSS.length > 1000, "the wheel's stylesheet was found");
+  const cssVal = k => {
+    const m = FABCSS.match(new RegExp("\\" + k + "\\s*:\\s*([^;}]+)"));
+    return m ? m[1].trim() : null;
+  };
+  /* every timing the motion uses is declared, and declared here */
+  const declared = (FABCSS.match(/--fab-[tdse]-[a-z-]+\s*:/g) || []).map(s => s.split(":")[0].trim());
+  const used = (FABCSS.match(/var\(--fab-[tdse]-[a-z-]+/g) || []).map(s => s.slice(4));
+  used.forEach(v => assert.ok(declared.indexOf(v) >= 0, v + " is used but never declared"));
+  assert.ok(declared.length >= 18, "the whole feel is tunable: " + declared.length + " properties");
+  const timing = {
+    "--fab-t-arrive": "420ms", "--fab-t-leave": "300ms",
+    "--fab-t-glide": "450ms", "--fab-d-home": "200ms",
+    "--fab-t-x": "500ms", "--fab-d-x": "80ms",
+    "--fab-t-ring-in": "450ms", "--fab-t-ring-out": "550ms", "--fab-d-ring-out": "80ms",
+    "--fab-t-opt": "450ms", "--fab-d-opt": "160ms", "--fab-s-opt": "70ms",
+    "--fab-t-optback": "320ms", "--fab-s-optback": "45ms",
+    "--fab-t-pulse": "250ms",
+    "--fab-e-arrive": "cubic-bezier(.34,1.56,.64,1)",
+    "--fab-e-spring": "cubic-bezier(.34,1.4,.64,1)"
+  };
+  Object.keys(timing).forEach(k =>
+    assert.strictEqual(cssVal(k), timing[k], k + " is not what the motion asks for"));
+  /* the JavaScript's fallbacks are the same numbers, so tuning the stylesheet
+     alone can never leave the removal timer behind the animation it waits for */
+  assert.strictEqual(fabMs("--fab-t-leave", 300) + "ms", timing["--fab-t-leave"]);
+  assert.strictEqual(fabMs("--fab-t-glide", 450) + "ms", timing["--fab-t-glide"]);
+  assert.strictEqual(fabMs("--fab-d-home", 200) + "ms", timing["--fab-d-home"]);
+  /* nothing is transitioned that the compositor cannot carry on its own */
+  (FABCSS.match(/transition:[^;}]+/g) || []).forEach(t =>
+    assert.ok(!/(box-shadow|width|height|margin|inset|filter|background|border)/.test(t),
+      "only transform and opacity may move: " + t));
+  ["\\.fabwrap \\{[^}]*will-change", "\\.fab \\{[^}]*will-change", "\\.fabx \\{[^}]*will-change",
+   "\\.fabring \\{[^}]*will-change", "\\.fabopt \\{[^}]*will-change"].forEach(re =>
+    assert.ok(new RegExp(re).test(FABCSS.replace(/\s+/g, m => m.indexOf("\n") >= 0 ? " " : m)),
+      "no will-change on " + re));
+  /* the two stages that are keyframes rather than transitions */
+  assert.ok(/@keyframes fabrise \{ from \{ transform:translateY\(120px\); opacity:0 \}/.test(FABCSS),
+    "the wheel rises from 120 px under the edge");
+  assert.ok(/@keyframes fabpulse \{ 0% \{ transform:scale\(1\) \} 45% \{ transform:scale\(1\.15\) \} 100% \{ transform:scale\(1\) \} \}/
+    .test(FABCSS), "and the count beats 1 - 1.15 - 1");
+  assert.ok(/animation:fabrise var\(--fab-t-arrive\) var\(--fab-e-arrive\)/.test(FABCSS));
+  assert.ok(/\.fabwrap\.leaving \{ transform:translateY\(120px\); opacity:0/.test(FABCSS),
+    "and sinks back the same way");
+  /* asked for less motion: opacity only, and nowhere left mid-slide */
+  const RM = FABCSS.slice(FABCSS.indexOf("prefers-reduced-motion"));
+  assert.ok(/animation:none !important/.test(RM) &&
+            /transition:opacity 120ms linear !important/.test(RM) &&
+            /transition-delay:0s !important/.test(RM), "reduced motion keeps a short fade only");
+  assert.ok(/\.fabwrap\.leaving \{ transform:none !important \}/.test(RM));
+  pass("every stage of the motion is a --fab-* property in the stylesheet, on transform/opacity only");
+
+  /* what the page itself builds and switches */
+  host = el("#fabhost");
+  assert.deepStrictEqual(host.kids.filter(x => /fabring/.test(x.className)).map(x => x.className),
+    ["fabring in", "fabring out"], "two rings to grow out behind the button");
+  assert.strictEqual(el("#fabbtn").className, "fab", "it arrives without a pulse");
+  el("#fabbtn").onclick({ stopPropagation() {} });
+  assert.strictEqual(el("#fabhost").className, "fabwrap open", "opening is one class");
+  el("#fabbtn").onclick({ stopPropagation() {} });
+
+  /* the count changing while it is on screen gives the number a beat */
+  set("state.picked = { R0001: 1, R0003: 1, R0005: 1 };");
+  renderChips();
+  assert.strictEqual(el("#fabbtn").className, "fab pulse", "a new count beats");
+  assert.ok(el("#fabbtn").innerHTML.indexOf('<span class="fabn">3</span>') === 0);
+  /* and a render that changes nothing leaves the button entirely alone, so an
+     open ring is never rebuilt under the finger by a passing chip-bar redraw */
+  el("#fabbtn").innerHTML = "";
+  renderChips();
+  assert.strictEqual(el("#fabbtn").innerHTML, "", "the same count is not written again");
+  set("state.picked = { R0001: 1, R0003: 1 };");
+  renderChips();
+  assert.ok(el("#fabbtn").innerHTML.indexOf('<span class="fabn">2</span>') === 0, "back to two");
+  pass("the rings are built, opening is one class, and a changed count beats instead of jumping");
+
+  /* the screen changes shape while the ring is open: it closes first */
+  el("#fabbtn").onclick({ stopPropagation() {} });
+  assert.strictEqual(el("#fabhost").className, "fabwrap open");
+  const wasSig = el("#fabhost").dataset.sig;
+  window.innerWidth = 390; window.innerHeight = 844;
+  renderChips();
+  assert.strictEqual(el("#fabhost").className, "fabwrap", "it closed rather than jumped");
+  assert.strictEqual(el("#fabhost").dataset.sig, wasSig, "and the ring was NOT re-laid mid-motion");
+  await new Promise(r => setTimeout(r, 760));
+  assert.notStrictEqual(el("#fabhost").dataset.sig, wasSig, "the new geometry lands once it is still");
+  assert.strictEqual(el("#fabhost").dataset.sig, "alert,export,move,clear@100/146/142");
+  window.innerWidth = 1280; window.innerHeight = 800;
+  renderChips();
+  await new Promise(r => setTimeout(r, 760));
+  assert.strictEqual(el("#fabhost").dataset.sig, "alert,export,move,clear@100/150/150");
+  pass("turning the phone while it is open closes it with its motion, then re-lays the ring");
+
+  /* leaving: it sinks first, and only then is it taken off the page - and the
+     last job unticked with the ring OPEN is the hard case, because every child
+     ends a transition of its own before the host has finished sinking and
+     bubbles it straight up through the host's listener */
+  el("#fabbtn").onclick({ stopPropagation() {} });
+  assert.strictEqual(el("#fabhost").className, "fabwrap open");
+  set("state.picked = {};");
+  renderChips();
+  host = el("#fabhost");
+  assert.ok(host, "the last job unticked: the wheel is still there...");
+  assert.strictEqual(host.className, "fabwrap leaving", "...closed, and on its way out");
+  host.fire("transitionend", { target: opt("clear"), propertyName: "transform" });
+  assert.strictEqual(el("#fabhost"), host, "an option drawing in is not the wheel leaving");
+  host.fire("transitionend", { target: el("#fabbtn"), propertyName: "transform" });
+  assert.strictEqual(el("#fabhost"), host, "nor is the button gliding home");
+  host.fire("transitionend", { target: host.kids[0], propertyName: "opacity" });
+  assert.strictEqual(el("#fabhost"), host, "nor a ring shrinking back");
+  host.fire("transitionend", { target: host, propertyName: "width" });
+  assert.strictEqual(el("#fabhost"), host, "nor anything the sink does not animate");
+  host.fire("transitionend", { target: host, propertyName: "transform" });
+  assert.strictEqual(el("#fabhost"), null, "gone the moment the host's own sinking ends");
+  /* ...and gone anyway if transitionend never comes (hidden tab, no browser) */
+  set("state.picked = { R0001: 1 };");
+  renderChips();
+  assert.ok(el("#fabhost"), "ticked again: it rises back");
+  set("state.picked = {};");
+  renderChips();
+  assert.strictEqual(el("#fabhost").className, "fabwrap leaving");
+  await new Promise(r => setTimeout(r, 420));
+  assert.strictEqual(el("#fabhost"), null, "the timer behind the transition takes it away");
+
+  /* ticked and unticked in a hurry: one host, and it never orphans */
+  set("state.picked = { R0001: 1 };");
+  renderChips();
+  const first = el("#fabhost");
+  set("state.picked = {};");
+  renderChips();
+  set("state.picked = { R0001: 1, R0003: 1 };");
+  renderChips();
+  assert.strictEqual(el("#fabhost"), first, "the very same host, called back mid-leave");
+  assert.strictEqual(el("#fabhost").className, "fabwrap", "and no longer leaving");
+  await new Promise(r => setTimeout(r, 420));
+  assert.strictEqual(el("#fabhost"), first, "the cancelled leave never fires behind it");
+  assert.ok(el("#fabbtn").innerHTML.indexOf('<span class="fabn">2</span>') === 0);
+  pass("it sinks before it is removed, on transitionend or on the timer, and a fast re-tick calls it back");
+
   /* Untick all - the selection goes, and so does the wheel */
   el("#fabbtn").onclick({ stopPropagation() {} });
   assert.ok(opt("clear").innerHTML.indexOf('class="fabl">Untick all<') >= 0,
@@ -464,6 +624,9 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   ids = opt("clear").onclick({ stopPropagation() {} });
   assert.deepStrictEqual(ids, ["R0001", "R0003"], "it reports what it cleared");
   assert.deepStrictEqual(state.picked, {});
+  assert.strictEqual(el("#fabhost").className, "fabwrap leaving", "the wheel is on its way out");
+  host = el("#fabhost");
+  host.fire("transitionend", { target: host, propertyName: "transform" });
   assert.strictEqual(el("#fabhost"), null, "nothing ticked, so no wheel");
   pass("Untick all empties the selection and takes the wheel away with it");
 
