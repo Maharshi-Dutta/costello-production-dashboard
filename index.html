@@ -186,6 +186,27 @@
   .steps { display:flex; gap:6px }
   .step { flex:1; display:flex; flex-direction:column; gap:5px }
   .stepbar { height:5px; border-radius:3px; background:var(--line) }
+  /* ---- the phase pipeline ----
+     Seven steps across the drawer, filled up to the one the job is on. The
+     current step is named in words as well as coloured, so it still reads on a
+     monochrome screen or to anyone who cannot separate the two greens. On a
+     phone the seven wrap onto two rows rather than shrinking to slivers. */
+  .phnow { font-size:11.5px; color:var(--ink-3) }
+  .phnow strong { color:var(--ink) }
+  .pipe { display:grid; grid-template-columns:repeat(7,1fr); gap:6px }
+  .phstep { display:flex; flex-direction:column; gap:4px; min-width:0 }
+  .phbar { height:5px; border-radius:3px; background:var(--line) }
+  .phstep.done .phbar { background:var(--single) }
+  .phstep.now .phbar { background:var(--accent) }
+  .phlab { font-size:10.5px; line-height:1.25; color:var(--ink-3) }
+  .phstep.now .phlab { color:var(--ink); font-weight:600 }
+  .phtag { font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--accent) }
+  @media (max-width:560px){ .pipe { grid-template-columns:repeat(4,1fr) } }
+  /* the date steps fold away under the pipeline; the header is the toggle */
+  .dtog { display:flex; align-items:center; gap:9px; width:100%; min-height:40px; padding:0;
+          background:none; border:0; color:inherit; text-align:left }
+  .dtog .chev { color:var(--ink-4); width:12px; font-size:12px }
+  .dsum { margin-left:auto; font-size:11.5px; color:var(--ink-3) }
   .dl { display:grid; grid-template-columns:112px 1fr; gap:6px 14px; font-size:13px }
   .dl dt { color:var(--ink-3) } .dl dd { margin:0; font-weight:500 }
   /* checkpoints: one line per countable thing. Controls are thumb sized (>=40px)
@@ -322,6 +343,38 @@
              padding:9px 12px; font-size:12.5px; color:var(--ink-2) }
   .spin { width:13px; height:13px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
           border-radius:50%; animation:spin .7s linear infinite; display:inline-block }
+  /* ---- the floating selection wheel ----
+     A round button in the thumb's corner whenever jobs are ticked. Its options
+     fan out on a quarter circle up and to the left; the fan is a transition on
+     transform and opacity with a stagger set per button, so nothing about it
+     runs in JavaScript. It sits below the scrim (z-index 40), so an open window
+     covers it on a desktop; on a phone there is no room for that and it hides
+     itself instead, well clear of a window's Download and Save buttons. */
+  .fabwrap { position:fixed; right:18px; bottom:18px; width:56px; height:56px; z-index:35 }
+  .fab { width:56px; height:56px; border-radius:50%; border:0; background:var(--accent); color:#fff;
+         box-shadow:0 6px 20px rgba(0,0,0,.28); display:flex; flex-direction:column;
+         align-items:center; justify-content:center; line-height:1; position:relative; z-index:2 }
+  .fab:hover { filter:brightness(1.08) }
+  .fabn { font-family:"Barlow Condensed",sans-serif; font-size:23px; font-weight:700;
+          font-variant-numeric:tabular-nums }
+  .fabk { font-size:8px; letter-spacing:.12em; text-transform:uppercase; opacity:.85; margin-top:1px }
+  /* each pill is anchored by its RIGHT edge, so its label grows leftward and can
+     never run back under the button; --fpill caps how wide it may get, because
+     the fan's radius is worked out from that width and would otherwise be a
+     guess. --fx / --fy are where this pill lands, set once when it is built. */
+  .fabopt { position:absolute; right:8px; bottom:8px; min-height:40px; padding:0 15px; border-radius:20px;
+            border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:12.5px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:var(--fpill,104px);
+            box-shadow:0 4px 14px rgba(0,0,0,.18); transform-origin:100% 100%;
+            transform:translate(0,0) scale(.5); opacity:0; pointer-events:none;
+            transition:transform .26s cubic-bezier(.2,.8,.3,1), opacity .2s ease }
+  .fabwrap.open .fabopt { transform:translate(var(--fx,0),var(--fy,0)) scale(1); opacity:1; pointer-events:auto }
+  .fabopt:hover { background:var(--surface-2) }
+  @media (max-width:700px){ .fabwrap.over { display:none } }
+  @media (prefers-reduced-motion:reduce){
+    .fabopt { transition:none !important; transition-delay:0s !important }
+  }
+
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70;
            background:var(--ink); color:var(--bg); padding:11px 18px; border-radius:6px;
            font-size:13px; box-shadow:0 10px 30px rgba(0,0,0,.3); animation:rise .2s ease both; max-width:90vw }
@@ -375,7 +428,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1026</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1126</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -387,10 +440,10 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260907-1026"></script>
-<script src="graph.js?v=20260907-1026"></script>
-<script src="checkpoints.js?v=20260907-1026"></script>
-<script src="export.js?v=20260907-1026"></script>
-<script src="app.js?v=20260907-1026"></script>
+<script src="parser.js?v=20260907-1126"></script>
+<script src="graph.js?v=20260907-1126"></script>
+<script src="checkpoints.js?v=20260907-1126"></script>
+<script src="export.js?v=20260907-1126"></script>
+<script src="app.js?v=20260907-1126"></script>
 </body>
 </html>

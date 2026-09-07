@@ -47,12 +47,44 @@ function fillOf(cell) {
 
 const GOLD = new Set(['FFE699', 'FFC000']);
 const YELLOW = new Set(['FFFF00']);
+/* "Cut" is a green the sheet paints on a product cell once that part has been
+   cut. The sheet says which green in its own legend - a cell reading "Cut=" on
+   the header rows, filled in that colour - so repainting the legend carries
+   straight through to here. The list below is the greens the sheet has used,
+   for a workbook whose legend cannot be read. */
+const CUT_FALLBACK = ['00B050', '92D050', 'C6EFCE'];
+let CUT = new Set(CUT_FALLBACK);
+
+/** The sheet's own Cut colour, read off the legend cell on rows 1-2 of the
+    Production sheet. A candidate that is white, yellow or gold is not a colour
+    key at all - it is a heading that happens to say "cut" - so it is passed
+    over, and the fallback greens are used instead. */
+function cutColours(ws) {
+  if (ws) {
+    const maxC = Math.min(ws.columnCount || 60, 60);
+    /* two passes: the legend is written "Cut=", so a cell carrying the equals
+       sign is preferred over any other header that merely contains the word */
+    for (const wantEq of [true, false]) {
+      for (let r = 1; r <= 2; r++) {
+        for (let c = 1; c <= maxC; c++) {
+          const cell = ws.getRow(r).getCell(c), txt = cellText(cell);
+          if (norm(txt).indexOf('cut') < 0) continue;
+          if (wantEq && txt.indexOf('=') < 0) continue;
+          const f = fillOf(cell);
+          if (f && f !== 'FFFFFF' && !YELLOW.has(f) && !GOLD.has(f)) return new Set([f]);
+        }
+      }
+    }
+  }
+  return new Set(CUT_FALLBACK);
+}
 
 /* A job shows up on several sheets; when two of them disagree about a cell's
    colour the further-along one wins, because a colour is only ever added as
    work is finished - it is never taken back to mean "less done". */
-const CPRANK = { '': 0, process: 1, done: 2 };
-const cpOf = fill => YELLOW.has(fill) ? 'process' : (GOLD.has(fill) ? 'done' : '');
+const CPRANK = { '': 0, cut: 1, process: 2, done: 3 };
+const cpOf = fill => YELLOW.has(fill) ? 'process'
+  : (GOLD.has(fill) ? 'done' : (CUT.has(fill) ? 'cut' : ''));
 const cpBump = (o, k, st) => { if (CPRANK[st] > CPRANK[o[k] || '']) o[k] = st; };
 const norm = v => String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -206,6 +238,7 @@ function templateForJob(ws, jobId) {
 
 function parseWorkbook(wb) {
   const prodSheet = wb.getWorksheet('Production');
+  CUT = cutColours(prodSheet);          // the sheet's legend decides, once per workbook
   const B = prodSheet ? productionBlocks(prodSheet) : { cat: {}, blk: {}, names: [], order: {} };
   const PRODCAT = B.cat;
   const jobs = {};
@@ -316,6 +349,7 @@ function parseWorkbook(wb) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE, blocksFromValues, templateForJob };
+if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE, blocksFromValues, templateForJob, cutColours };
 if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet;
-  window.blocksFromValues = blocksFromValues; window.templateForJob = templateForJob; }
+  window.blocksFromValues = blocksFromValues; window.templateForJob = templateForJob;
+  window.cutColours = cutColours; }

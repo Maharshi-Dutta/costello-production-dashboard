@@ -135,6 +135,10 @@ let VIEWS = {};            // view name -> { job -> {group, order} }  (from the 
 let BLOCKNAMES = [];
 try { state.hidden = JSON.parse(localStorage.getItem("cw_hidden") || "{}"); } catch (e) {}
 try { state.collapsed = JSON.parse(localStorage.getItem("cw_collapsed") || "{}"); } catch (e) {}
+/* the drawer's five date steps start folded away: the phase pipeline above them
+   is the progress people actually read. Same store, same rule as a group in the
+   list - a truthy value means collapsed - so it only needs seeding once. */
+if (!("dates" in state.collapsed)) state.collapsed.dates = 1;
 const saveUi = () => { try {
   localStorage.setItem("cw_hidden", JSON.stringify(state.hidden));
   localStorage.setItem("cw_collapsed", JSON.stringify(state.collapsed));
@@ -901,8 +905,8 @@ function renderAlertsWindow() {
         (admin ? '<br><span style="font-size:12px">Open a job and add an address in its Alerts section.</span>' : "") + '</div>') +
     '</div><div class="foot"><span>' + (admin ? "You can add and remove alerts" : ALERT_ADMIN_ONLY) +
     '</span><span>Click a job number to open it</span></div></div>';
-  $("#ascrim").onclick = () => host.remove();
-  $("#aclose").onclick = () => host.remove();
+  $("#ascrim").onclick = closeWin(host);
+  $("#aclose").onclick = closeWin(host);
   host.querySelectorAll(".jump").forEach(b => b.onclick = () => {
     host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer();
   });
@@ -916,6 +920,7 @@ function renderAlertsWindow() {
   host.querySelectorAll("[data-a-yes]").forEach(b => b.onclick = () => {
     const p = pairOf(b.dataset.aYes); removeJobAlert(p[0], p[1]);
   });
+  renderFab();                 // a window is open: the wheel steps aside
 }
 
 /** "Alert to…" for the ticked jobs: the addresses already in use, plus a box. */
@@ -923,8 +928,6 @@ function renderAlertMenu(anchor) {
   const old = $("#alertmenu"); if (old) { old.remove(); return; }
   const jobs = Object.keys(state.picked);
   const m = document.createElement("div"); m.id = "alertmenu"; m.className = "menu";
-  const r = anchor.getBoundingClientRect();
-  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
   const known = alertAddresses();
   m.innerHTML = '<div class="kick" style="padding:4px 10px 6px">Email alerts for ' + jobs.length +
       ' job' + (jobs.length > 1 ? "s" : "") + ' to</div>' +
@@ -936,6 +939,7 @@ function renderAlertMenu(anchor) {
     '<div class="alerr" id="almerr" hidden style="margin:6px 10px"></div>' +
     '<div class="alnote" style="padding:6px 10px">' + ALERT_NOTE + '</div>';
   document.body.appendChild(m);
+  menuAt(m, anchor);
   const go = async raw => {
     const res = await alertMany(jobs, raw);
     if (res.ok) m.remove();
@@ -1184,6 +1188,7 @@ function renderExportWindow() {
   if ($("#xbody")) $("#xbody").scrollTop = keep;
   xpWire(host);
   xpUpdateCount();
+  renderFab();                 // the wheel is under a window now
 }
 
 /** Walk "f.cp.win" and put the value at the end of it. "" means "any". */
@@ -1233,7 +1238,7 @@ function xpUpdateCount() {
 }
 
 function xpWire(host) {
-  const close = () => { host.remove(); };
+  const close = closeWin(host);
   if ($("#xscrim")) $("#xscrim").onclick = close;
   if ($("#xclose")) $("#xclose").onclick = close;
 
@@ -1435,6 +1440,22 @@ function renderChips() {
   dir.title = "Click to flip the order";
   dir.onclick = () => { state.desc = !state.desc; renderRows(); renderChips(); };
   c.appendChild(dir);
+
+  renderFab();                  // the same actions again, within thumb reach
+}
+
+/** Put a menu under the thing that opened it, and pull it back on screen when
+    there is no room below - the selection wheel sits in the bottom corner, and
+    a menu hung under that would open past the bottom of the window. Called
+    after the menu is on the page, so its real height is known. */
+function menuAt(m, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const vw = window.innerWidth || 1200, vh = window.innerHeight || 800;
+  const w = m.offsetWidth || 240, h = m.offsetHeight || 0;
+  m.style.left = Math.max(8, Math.min(r.left, vw - w - 8)) + "px";
+  let top = r.bottom + 6;
+  if (h && top + h > vh - 8) top = Math.max(8, r.top - 6 - h);
+  m.style.top = top + "px";
 }
 
 /** Which categories to show. Hiding is per person and remembered. */
@@ -1444,8 +1465,6 @@ function renderCatMenu(anchor) {
                 ["office", "In office"], ["collect", "Collect & supply"], ["wonttake", "Won't take"],
                 ["secondhand", "Second hand"]];
   const m = document.createElement("div"); m.id = "catmenu"; m.className = "menu";
-  const r = anchor.getBoundingClientRect();
-  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
   m.innerHTML = '<div class="kick" style="padding:4px 10px 8px">Show which categories</div>' +
     cats.map(cc => '<label class="mrow"><input type="checkbox" data-k="' + cc[0] + '"' +
       (state.hidden[cc[0]] ? "" : " checked") + '> ' + cc[1] +
@@ -1453,6 +1472,7 @@ function renderCatMenu(anchor) {
     '<div style="display:flex;gap:6px;padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:6px">' +
     '<button class="chip" id="mall">Show all</button><button class="chip" id="mnone">Hide all</button></div>';
   document.body.appendChild(m);
+  menuAt(m, anchor);
   m.querySelectorAll("input").forEach(i => i.onchange = () => {
     if (i.checked) delete state.hidden[i.dataset.k]; else state.hidden[i.dataset.k] = 1;
     saveUi(); renderTiles(); renderRows();
@@ -1469,8 +1489,6 @@ function renderMoveMenu(anchor) {
   const old = $("#movemenu"); if (old) { old.remove(); return; }
   const jobs = Object.keys(state.picked);
   const m = document.createElement("div"); m.id = "movemenu"; m.className = "menu";
-  const r = anchor.getBoundingClientRect();
-  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
   let opts = "";
   if (state.view === "Abin" || state.view === "flat") {
     opts += '<div class="kick" style="padding:4px 10px 6px">Move ' + jobs.length + ' job' + (jobs.length > 1 ? "s" : "") + ' in the Production sheet to</div>' +
@@ -1481,6 +1499,7 @@ function renderMoveMenu(anchor) {
     '<button class="mrow" id="newcat" style="color:var(--accent);font-weight:600">+ New category from selection…</button>';
   m.innerHTML = opts;
   document.body.appendChild(m);
+  menuAt(m, anchor);
   m.querySelectorAll("[data-grp]").forEach(b => b.onclick = async () => {
     m.remove(); await moveJobsInSheet(jobs, Number(b.dataset.grp));
   });
@@ -1517,6 +1536,22 @@ function cpInProgress(j) {
   return cpItems(j).filter(x => { const s = itemState(j, x.key); return s && s.status === "process"; }).length;
 }
 
+/** The word in a job's status badge, in the list and at the head of the drawer:
+    for a job still in production, where it has got to - "Cutting", "In glazing" -
+    in place of the stage word. The section badges (Ready to deliver,
+    Collect/Supply, Won't take, Second hand) are left exactly as they were.
+
+    One exception, before the job reaches the floor. Phase 0 covers both "In
+    office" and "Waiting" (ready to print, not yet sent to floor), because
+    nothing on the sheet has moved yet in either case - so a job sitting at
+    phase 0 keeps its stage word, which does tell those two apart. Once it is on
+    the floor, or anything at all has moved, the phase is the better word. */
+const statusWord = j => {
+  const c = catOf(j);
+  if (["floor", "ready", "office"].indexOf(c) < 0) return label(j).l;
+  return (c === "floor" || jobPhase(j) >= 1) ? phaseName(j) : label(j).l;
+};
+
 function rowHtml(j, i, max) {
   const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
   const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
@@ -1528,7 +1563,7 @@ function rowHtml(j, i, max) {
     '<span class="tab jid" style="font-weight:600;color:' + (j.urg ? "var(--urgent)" : "var(--ink)") + '">' + esc(j.id) + '</span>' +
     '<span class="ell">' + esc(j.cust || "—") + '</span>' +
     '<span class="ell" style="color:var(--ink-2)">' + esc(j.area || "—") + '</span>' +
-    '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + st.l + '</span></span>' +
+    '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + esc(statusWord(j)) + '</span></span>' +
     '<span class="tab" style="color:var(--ink-2)">' + j.wnd + " / " + j.drs + '</span>' +
     '<span style="display:flex;align-items:center;gap:8px"><span class="mini" style="width:110px">' +
       '<i style="width:' + (T ? c.f / T * w : 0) + 'px;background:var(--f)"></i>' +
@@ -1630,6 +1665,139 @@ function renderRows() {
 }
 
 function renderAll() { renderTiles(); renderChips(); renderRows(); }
+
+/* ---------- the floating selection wheel ----------
+   When jobs are ticked, a round button appears in the thumb's corner showing
+   how many. Tapping it fans its actions out on a quarter circle, up and to the
+   left. Every action here already exists in the chip bar above the list - this
+   is a second way to reach them on a phone, never a second implementation.
+   The fan is a CSS transition on transform and opacity with a stagger; all the
+   JavaScript does is add and remove the "open" class. */
+const FAB_PILL = 104;                  // the widest an option pill may be, in px
+const FAB_GAP = 6;                     // clear air between two pills
+let FABOPEN = false, FABOFF = null;    // FABOFF: the outside-click listener, while open
+
+/** How far out the options sit, and how wide a pill may be.
+    The pills are anchored by their right edge, so a label grows leftward and
+    never runs back under the button. Laid out on a quarter circle, the two
+    nearest the top are only R*(1-cos step) apart vertically - less than a pill
+    is tall - so they have to clear each other sideways instead, and that gap is
+    R*sin(step). The radius therefore follows from how many options there are,
+    and opens out on its own if more are ever added.
+    On a narrow screen there is not room for both a full-width pill and that
+    radius: the pill gives way first, so the leftmost option still starts on
+    screen and the fan still clears the top of the window. */
+function fabGeom(n, vw, vh) {
+  const s = Math.sin((Math.PI / 2) / Math.max(1, n - 1));
+  const W = (vw || 1200) - 34, H = (vh || 800) - 74;      // room left/right, room above
+  const pill = Math.max(56, Math.min(FAB_PILL,
+    Math.floor((W - FAB_GAP / s) / (1 / s + 1)),          // radius + pill must fit across
+    Math.floor(s * H - FAB_GAP)));                        // and the radius must fit up
+  return { pill: pill, r: Math.max(96, Math.ceil((pill + FAB_GAP) / s)) };
+}
+
+function fabActions() {
+  const out = [];
+  if (isAdmin()) out.push({ k: "alert", l: "Alert to…" });   // only the admin changes alerts
+  out.push({ k: "export", l: "Export" }, { k: "move", l: "Move to…" }, { k: "clear", l: "Clear" });
+  return out;
+}
+/** A window or the drawer is open. On a phone the wheel would sit right on top
+    of their Download / Save buttons, so it takes itself out of the way. */
+const fabCovered = () => !!($("#dhost") || $("#xhost") || $("#ahost") || $("#chost") || $("#vhost"));
+const fabClass = () => "fabwrap" + (FABOPEN ? " open" : "") + (fabCovered() ? " over" : "");
+/** Every window's Close and scrim go through here: the wheel hid itself while
+    the window was open, so something has to tell it the window has gone. */
+const closeWin = host => () => { host.remove(); renderFab(); };
+/* custom properties, so where each option lands stays a CSS decision */
+function fabVar(el, k, v) {
+  if (el.style && el.style.setProperty) el.style.setProperty(k, v);
+  else if (el.style) el.style[k] = v;
+}
+
+function fabClose() {
+  FABOPEN = false;
+  if (FABOFF) { document.removeEventListener("click", FABOFF); FABOFF = null; }
+  const h = $("#fabhost"); if (h) h.className = fabClass();
+  const b = $("#fabbtn"); if (b && b.setAttribute) b.setAttribute("aria-expanded", "false");
+}
+function fabToggle() {
+  if (FABOPEN) { fabClose(); return false; }
+  FABOPEN = true;
+  const h = $("#fabhost"); if (h) h.className = fabClass();
+  const b = $("#fabbtn"); if (b && b.setAttribute) b.setAttribute("aria-expanded", "true");
+  FABOFF = e => {
+    const host = $("#fabhost");
+    if (!host || !host.contains || !host.contains(e.target)) fabClose();
+  };
+  /* next tick: the click that opened the wheel must not close it again */
+  setTimeout(() => { if (FABOPEN && FABOFF) document.addEventListener("click", FABOFF); }, 0);
+  return true;
+}
+
+/** Carry out one option, on whatever is ticked right now. Returns those ids. */
+function fabDo(k, anchor) {
+  const ids = Object.keys(state.picked);
+  fabClose();
+  if (k === "clear") { state.picked = {}; renderAll(); }
+  else if (k === "move") renderMoveMenu(anchor);
+  else if (k === "alert") renderAlertMenu(anchor);
+  else if (k === "export") {
+    if (!XSTATE) XSTATE = xpNewState();
+    XSTATE.f.scope = "ticked";          // the window opens on the ticked jobs
+    renderExportWindow();
+  }
+  return ids;
+}
+
+/** Draw (or take away) the wheel. The buttons are only rebuilt when the set of
+    options changes, so re-rendering the chip bar mid-fan does not restart the
+    animation under the finger. */
+function renderFab() {
+  const n = Object.keys(state.picked).length;
+  let host = $("#fabhost");
+  if (!n) { if (host) { fabClose(); host.remove(); } FABOPEN = false; return null; }
+  if (!host) { host = document.createElement("div"); host.id = "fabhost"; document.body.appendChild(host); }
+  const acts = fabActions();
+  const g = fabGeom(acts.length, window.innerWidth, window.innerHeight);
+  /* the geometry is part of the signature, so turning the phone rebuilds the fan */
+  const sig = acts.map(a => a.k).join(",") + "@" + g.r + "/" + g.pill;
+  if (host.dataset.sig !== sig) {
+    host.dataset.sig = sig;
+    host.innerHTML = "";
+    fabVar(host, "--fpill", g.pill + "px");
+    acts.forEach((a, i) => {
+      /* a quarter circle: the first option straight up, the last straight left */
+      const ang = (90 + (acts.length > 1 ? i * (90 / (acts.length - 1)) : 45)) * Math.PI / 180;
+      const b = document.createElement("button");
+      b.className = "fabopt"; b.id = "fab-" + a.k; b.dataset.fab = a.k;
+      b.textContent = a.l;
+      if (b.setAttribute) { b.setAttribute("type", "button"); b.setAttribute("aria-label", a.l); }
+      fabVar(b, "--fx", Math.round(g.r * Math.cos(ang)) + "px");
+      fabVar(b, "--fy", Math.round(-g.r * Math.sin(ang)) + "px");
+      b.style.transitionDelay = (i * 45) + "ms";
+      /* the ids it acted on come back out, which is what the test asserts on;
+         an array is never false, so nothing about the click is cancelled */
+      b.onclick = e => { if (e && e.stopPropagation) e.stopPropagation(); return fabDo(a.k, b); };
+      host.appendChild(b);
+    });
+    const main = document.createElement("button");
+    main.className = "fab"; main.id = "fabbtn";
+    if (main.setAttribute) main.setAttribute("type", "button");
+    main.onclick = e => { if (e && e.stopPropagation) e.stopPropagation(); fabToggle(); };
+    host.appendChild(main);
+  }
+  const main = $("#fabbtn");
+  if (main) {
+    main.innerHTML = '<span class="fabn">' + n + '</span><span class="fabk">ticked</span>';
+    if (main.setAttribute) {
+      main.setAttribute("aria-expanded", FABOPEN ? "true" : "false");
+      main.setAttribute("aria-label", n + " job" + (n === 1 ? "" : "s") + " ticked — actions");
+    }
+  }
+  host.className = fabClass();
+  return host;
+}
 
 /* ---------- drawer: checkpoints ---------- */
 const shortWho = w => String(w || "").split("@")[0];
@@ -1762,8 +1930,42 @@ function wireCheckpoints(host, id) {
 }
 
 /* ---------- drawer ---------- */
-function openDrawer() { if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); } renderDrawer(); }
-function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dhost"); if (h) h.remove(); renderRows(); }
+/** The pipeline: seven steps, filled up to where the job has got to. The step
+    it is on is named in words beside the heading and tagged "Now", so nothing
+    here depends on colour alone. Steps 4-6 are shown whether or not anything
+    has reached them; none of them is ever set by hand. */
+function phasePipeHtml(j) {
+  const cur = jobPhase(j);
+  return '<div class="sect">' +
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
+      '<span class="kick">Phase</span>' +
+      '<span class="phnow">Now: <strong>' + esc(PHASES[cur]) + '</strong></span></div>' +
+    '<div class="pipe">' + PHASES.map((p, i) =>
+      '<div class="phstep' + (i < cur ? " done" : i === cur ? " now" : "") + '"' +
+        (i === cur ? ' aria-current="step"' : "") + '><div class="phbar"></div>' +
+        '<span class="phlab">' + esc(p) + '</span>' +
+        (i === cur ? '<span class="phtag">Now</span>' : "") + '</div>').join("") +
+    '</div></div>';
+}
+/** The five date steps, folded away under the pipeline. Which way it is folded
+    is remembered exactly like a group in the list, under the key "dates". */
+function datesSectionHtml(j, st) {
+  const open = !state.collapsed.dates;
+  let last = "none yet";
+  STEPS.forEach(p => { if (j.dates[p[0]]) last = p[1] + " " + dshort(j.dates[p[0]]); });
+  return '<div class="sect"><button class="dtog" id="datetog" aria-expanded="' + (open ? "true" : "false") + '">' +
+      '<span class="chev">' + (open ? "▾" : "▸") + '</span><span class="kick">Dates</span>' +
+      '<span class="dsum">' + esc(last) + '</span></button>' +
+    (open ? '<div class="steps">' +
+      STEPS.map(p => '<div class="step"><span class="tab" style="font-size:13px;font-weight:600;color:' +
+        (j.dates[p[0]] ? "var(--ink)" : "var(--ink-4)") + '">' + dshort(j.dates[p[0]]) + '</span>' +
+        '<div class="stepbar" style="background:' + (j.dates[p[0]] ? "var(" + st.c + ")" : "var(--line)") + '"></div>' +
+        '<span style="font-size:11px;color:var(--ink-3)">' + p[1] + '</span></div>').join("") + '</div>' : "") +
+    '</div>';
+}
+
+function openDrawer() { if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); } renderDrawer(); renderFab(); }
+function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dhost"); if (h) h.remove(); renderRows(); renderFab(); }
 
 function renderDrawer() {
   const host = $("#dhost"); if (!host) return;
@@ -1780,7 +1982,7 @@ function renderDrawer() {
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
-      '<span class="badge" style="background:var(--brand-2);color:#d5d1c8">' + st.l + '</span>' +
+      '<span class="badge" style="background:var(--brand-2);color:#d5d1c8">' + esc(statusWord(j)) + '</span>' +
       (j.urg ? '<span class="badge" style="background:var(--urgent);color:#fff">Urgent</span>' : "") +
       '</div><div style="font-size:13px;color:#d5d1c8;margin-top:4px">' + esc(j.cust || "—") + ' · ' + esc(j.area || "—") + '</div></div>' +
       '<div style="display:flex;gap:7px"><button class="ghost" id="editbtn">' + (ed ? "Done" : "Edit") + '</button>' +
@@ -1794,11 +1996,8 @@ function renderDrawer() {
             hint("Clears the gold and moves the row to the bottom of <b>In production</b> in Excel. Dates are not touched.")
           : '<button class="markbtn" id="markready">✓ Mark as ready to deliver</button>' +
             hint("Turns the row gold and moves it to the bottom of <b>" + esc(readyName) + "</b> in Excel. Dates are not touched.")) : "") +
-      '<div class="sect"><span class="kick">Progress</span><div class="steps">' +
-        STEPS.map(p => '<div class="step"><span class="tab" style="font-size:13px;font-weight:600;color:' +
-          (j.dates[p[0]] ? "var(--ink)" : "var(--ink-4)") + '">' + dshort(j.dates[p[0]]) + '</span>' +
-          '<div class="stepbar" style="background:' + (j.dates[p[0]] ? "var(" + st.c + ")" : "var(--line)") + '"></div>' +
-          '<span style="font-size:11px;color:var(--ink-3)">' + p[1] + '</span></div>').join("") + '</div></div>' +
+      phasePipeHtml(j) +
+      datesSectionHtml(j, st) +
       cpSectionHtml(j, ed) +
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">' +
         [[j.wnd, "windows"], [j.drs, "doors"], [tot(comp(j)), "components"], [j.sheets.length, "sheets"]]
@@ -1845,6 +2044,8 @@ function renderDrawer() {
   $("#dscrim").onclick = closeDrawer;
   $("#dclose").onclick = closeDrawer;
   $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
+  const dtog = $("#datetog");
+  if (dtog) dtog.onclick = () => { state.collapsed.dates = state.collapsed.dates ? 0 : 1; saveUi(); renderDrawer(); };
   /* the Alerts section is not part of Edit mode: it never touches the
      Production sheet, and only the administrator sees its controls at all */
   wireAlerts(host, j.id);
@@ -1938,8 +2139,8 @@ function renderChanges() {
       : '<div class="empty">' + (CHANGES.length ? "Nothing matches those filters." :
           "Nothing has changed yet. Edit something in Excel or here, and it will be listed with what it was and what it became.") + '</div>') +
     '</div><div class="foot"><span>' + rows.length + ' of ' + CHANGES.length + '</span><span>Click a job number to open it</span></div></div>';
-  $("#cscrim").onclick = () => host.remove();
-  $("#cclose").onclick = () => host.remove();
+  $("#cscrim").onclick = closeWin(host);
+  $("#cclose").onclick = closeWin(host);
   $("#cclear").onclick = () => {
     if (confirm("Hide the entries recorded in this browser? The permanent log in the Dashboard Log sheet is NOT touched and will reappear on the next refresh.")) {
       CHANGES = CHANGES.filter(c => c.shared); saveChanges(); updateChangeBtn(); renderChanges();
@@ -1950,6 +2151,7 @@ function renderChanges() {
   $("#cwho").onchange = e => { cf.who = e.target.value; renderChanges(); };
   $("#csrc").onchange = e => { cf.src = e.target.value; renderChanges(); };
   host.querySelectorAll(".jump").forEach(b => b.onclick = () => { host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer(); });
+  renderFab();                 // a window is open: the wheel steps aside
 }
 
 
@@ -1971,11 +2173,12 @@ async function renderVersions() {
   if (!VERSIONS.length) {
     host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin"><div class="dhead"><div class="cond" style="font-size:25px;font-weight:700">Versions</div></div>' +
       '<div class="empty"><span class="spin dark"></span> Reading SharePoint version history\u2026</div></div>';
-    $("#vscrim").onclick = () => host.remove();
+    $("#vscrim").onclick = closeWin(host);
+    renderFab();
     try { VERSIONS = await CW.listVersions(80); }
     catch (e) {
       host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin"><div class="empty">' + esc(friendly(e)) + '</div></div>';
-      $("#vscrim").onclick = () => host.remove(); return;
+      $("#vscrim").onclick = closeWin(host); renderFab(); return;
     }
   }
   host.innerHTML = '<div class="scrim" id="vscrim"></div><div class="logwin vwin">' +
@@ -1993,9 +2196,10 @@ async function renderVersions() {
       '<div class="vdetail" id="vdetail">' + (vsel ? "" :
         '<div class="empty">Select a version on the left.<br><span style="font-size:12px">' + VERSIONS.length + ' most recent shown, newest first.</span></div>') +
       '</div></div></div>';
-  $("#vscrim").onclick = () => host.remove();
-  $("#vclose").onclick = () => host.remove();
+  $("#vscrim").onclick = closeWin(host);
+  $("#vclose").onclick = closeWin(host);
   host.querySelectorAll(".vrow").forEach(b => b.onclick = () => { vsel = b.dataset.v; vmode = "since"; renderVersions(); });
+  renderFab();                 // a window is open: the wheel steps aside
   if (vsel) renderVersionDetail();
 }
 
@@ -2140,7 +2344,8 @@ async function start() {
   cpWatchExit();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); return; }
+    if (e.key === "Escape" && FABOPEN) { fabClose(); return; }
+    if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
   });

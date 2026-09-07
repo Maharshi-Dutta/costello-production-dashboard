@@ -70,6 +70,33 @@ function cpItems(j) {
   return out;
 }
 
+/* ---- the phase pipeline ----
+   Where a job has got to, in one word, worked out from what the sheet already
+   says: the "sent to floor" date and the checkpoint colours. Nothing sets a
+   phase by hand, nothing is stored and nothing is written - it is a reading of
+   the sheet, not a new field on it. The highest phase that applies wins. */
+const PHASES = ["In office", "Sent to floor", "Cutting", "In fabrication",
+                "In glazing", "Quality check", "Fitted / delivered"];
+
+function jobPhase(j) {
+  if (!j) return 0;
+  /* gold, or gone from the Production sheet altogether: it has left the floor */
+  if (j.done || j.cat === "past") return 6;
+  const items = cpItems(j);                       // only things with a total > 0
+  const st = x => cpStatus(j, x.key);
+  const prod = items.filter(x => x.group.indexOf("prod:") === 0);
+  const rest = items.filter(x => x.group.indexOf("prod:") !== 0);
+  const allDone = a => a.length > 0 && a.every(x => st(x) === "done");
+  if (allDone(items)) return 5;                   // everything ticked, not yet marked ready
+  if (allDone(prod) && !allDone(rest)) return 4;  // frames done, the glass/windows/doors are not
+  if (prod.some(x => st(x) === "process") ||
+      cpStatus(j, "win") === "process" || cpStatus(j, "drs") === "process") return 3;
+  if (prod.some(x => st(x) === "cut")) return 2;  // the sheet's Cut green, nothing fabricated yet
+  if ((j.dates && j.dates.floor) || items.some(x => st(x) === "process" || st(x) === "done")) return 1;
+  return 0;
+}
+const phaseName = j => PHASES[jobPhase(j)];
+
 /* ---- colours ---- */
 const cpStatusFor = (done, total) => done <= 0 ? "" : (done >= total ? "done" : "process");
 const cpColour = (done, total) => { const s = cpStatusFor(done, total); return s === "done" ? GOLD_HEX : s === "process" ? YELLOW_HEX : WHITE_HEX; };
@@ -256,7 +283,11 @@ async function cpWriteGroup(o) {
 
 if (typeof window !== "undefined") window.CP = {
   itemState, cpItems, cpTotal, cpStatus, cpColumn, cpLabel, cpColour, cpStatusFor, cpClamp,
+  jobPhase, phaseName, PHASES,
   cpWithHeld, cpSetProgress, cpStored, cpWriteItem, cpWriteGroup,
   cpBurst, cpFire, cpFireAll, cpSettled, cpPending, cpCancelBurst, cpReplay, cpQueue, cpClearQueue, cpChain,
   WHITE_HEX, YELLOW_HEX, GOLD_HEX, CP_DEBOUNCE_MS
 };
+/* the pipeline is read by the drawer and by every job row, so it is a plain
+   global as well, the way the parser's own helpers are */
+if (typeof window !== "undefined") { window.jobPhase = jobPhase; window.phaseName = phaseName; window.PHASES = PHASES; }
