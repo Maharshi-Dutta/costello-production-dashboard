@@ -1668,38 +1668,52 @@ function renderAll() { renderTiles(); renderChips(); renderRows(); }
 
 /* ---------- the floating selection wheel ----------
    When jobs are ticked, a round button appears in the thumb's corner showing
-   how many. Tapping it fans its actions out on a quarter circle, up and to the
-   left. Every action here already exists in the chip bar above the list - this
-   is a second way to reach them on a phone, never a second implementation.
-   The fan is a CSS transition on transform and opacity with a stagger; all the
-   JavaScript does is add and remove the "open" class. */
-const FAB_PILL = 104;                  // the widest an option pill may be, in px
-const FAB_GAP = 6;                     // clear air between two pills
+   how many. Tapping it glides the button inwards to the middle of the screen's
+   bottom-right corner and lays its actions out on a FULL circle around it, each
+   a round icon with its name underneath. Every action here already exists in
+   the chip bar above the list - this is a second way to reach them on a phone,
+   never a second implementation. The ring is a CSS transition on transform and
+   opacity with a per-option stagger; all the JavaScript does is work out where
+   the middle of the ring may sit and add or remove the "open" class. */
+const FAB_R = 100;                     // the ring's radius, in px
+const FAB_OW = 76, FAB_OH = 68;        // one option's footprint: 52 px button + its label
+const FAB_EDGE = 8;                    // the least air an option keeps from the screen edge
+const FAB_HOME = 46;                   // the closed button's centre, in from the corner (18 + 56/2)
 let FABOPEN = false, FABOFF = null;    // FABOFF: the outside-click listener, while open
 
-/** How far out the options sit, and how wide a pill may be.
-    The pills are anchored by their right edge, so a label grows leftward and
-    never runs back under the button. Laid out on a quarter circle, the two
-    nearest the top are only R*(1-cos step) apart vertically - less than a pill
-    is tall - so they have to clear each other sideways instead, and that gap is
-    R*sin(step). The radius therefore follows from how many options there are,
-    and opens out on its own if more are ever added.
-    On a narrow screen there is not room for both a full-width pill and that
-    radius: the pill gives way first, so the leftmost option still starts on
-    screen and the fan still clears the top of the window. */
+/** Where the middle of the open ring sits, as a distance in from the right and
+    from the bottom edge. The design asks for 150 px (130 px on a phone under
+    400 px wide), but that is a wish rather than a rule: an option's own body
+    reaches FAB_R + half its width further out again, so on a narrow screen a
+    150 px inset would hang the right-hand option off the edge. The wish is
+    therefore clamped to the band in which every option stays FAB_EDGE inside
+    the viewport, and if even that band is empty the ring simply centres. */
 function fabGeom(n, vw, vh) {
-  const s = Math.sin((Math.PI / 2) / Math.max(1, n - 1));
-  const W = (vw || 1200) - 34, H = (vh || 800) - 74;      // room left/right, room above
-  const pill = Math.max(56, Math.min(FAB_PILL,
-    Math.floor((W - FAB_GAP / s) / (1 / s + 1)),          // radius + pill must fit across
-    Math.floor(s * H - FAB_GAP)));                        // and the radius must fit up
-  return { pill: pill, r: Math.max(96, Math.ceil((pill + FAB_GAP) / s)) };
+  const W = vw || 1200, H = vh || 800;
+  const want = W < 400 ? 130 : 150;
+  const fit = (span, pad) => (span < pad * 2 ? Math.round(span / 2)
+                                             : Math.min(Math.max(want, pad), span - pad));
+  return { r: FAB_R, n: n,
+           cx: fit(W, FAB_R + FAB_OW / 2 + FAB_EDGE),
+           cy: fit(H, FAB_R + FAB_OH / 2 + FAB_EDGE) };
 }
+
+/* Inline SVG, so the ring carries no icon library and nothing is fetched. Each
+   is drawn on a 24-box in the current colour and is never rotated, so it stays
+   upright wherever on the circle its option lands. */
+const FAB_ICON = {
+  alert: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  export: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+  move: '<path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><path d="M2 12h20"/><path d="M12 2v20"/>',
+  clear: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'
+};
+const fabSvg = body => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + body + '</svg>';
 
 function fabActions() {
   const out = [];
   if (isAdmin()) out.push({ k: "alert", l: "Alert to…" });   // only the admin changes alerts
-  out.push({ k: "export", l: "Export" }, { k: "move", l: "Move to…" }, { k: "clear", l: "Clear" });
+  out.push({ k: "export", l: "Export" }, { k: "move", l: "Move to…" }, { k: "clear", l: "Untick all" });
   return out;
 }
 /** A window or the drawer is open. On a phone the wheel would sit right on top
@@ -1730,7 +1744,7 @@ function fabToggle() {
     const host = $("#fabhost");
     if (!host || !host.contains || !host.contains(e.target)) fabClose();
   };
-  /* next tick: the click that opened the wheel must not close it again */
+  /* next tick: the click that opened the ring must not close it again */
   setTimeout(() => { if (FABOPEN && FABOFF) document.addEventListener("click", FABOFF); }, 0);
   return true;
 }
@@ -1751,8 +1765,8 @@ function fabDo(k, anchor) {
 }
 
 /** Draw (or take away) the wheel. The buttons are only rebuilt when the set of
-    options changes, so re-rendering the chip bar mid-fan does not restart the
-    animation under the finger. */
+    options or the geometry changes, so re-rendering the chip bar mid-open does
+    not restart the animation under the finger. */
 function renderFab() {
   const n = Object.keys(state.picked).length;
   let host = $("#fabhost");
@@ -1760,22 +1774,29 @@ function renderFab() {
   if (!host) { host = document.createElement("div"); host.id = "fabhost"; document.body.appendChild(host); }
   const acts = fabActions();
   const g = fabGeom(acts.length, window.innerWidth, window.innerHeight);
-  /* the geometry is part of the signature, so turning the phone rebuilds the fan */
-  const sig = acts.map(a => a.k).join(",") + "@" + g.r + "/" + g.pill;
+  /* the geometry is part of the signature, so turning the phone rebuilds the ring */
+  const sig = acts.map(a => a.k).join(",") + "@" + g.r + "/" + g.cx + "/" + g.cy;
   if (host.dataset.sig !== sig) {
     host.dataset.sig = sig;
     host.innerHTML = "";
-    fabVar(host, "--fpill", g.pill + "px");
+    /* how far the button itself glides: from its corner home to the ring's middle */
+    const dx = FAB_HOME - g.cx, dy = FAB_HOME - g.cy;
+    fabVar(host, "--fdx", Math.round(dx) + "px");
+    fabVar(host, "--fdy", Math.round(dy) + "px");
     acts.forEach((a, i) => {
-      /* a quarter circle: the first option straight up, the last straight left */
-      const ang = (90 + (acts.length > 1 ? i * (90 / (acts.length - 1)) : 45)) * Math.PI / 180;
+      /* a full circle, evenly spaced, starting at the top and going clockwise:
+         four options land 90° apart, three 120° apart */
+      const ang = i * (2 * Math.PI / acts.length);
       const b = document.createElement("button");
       b.className = "fabopt"; b.id = "fab-" + a.k; b.dataset.fab = a.k;
-      b.textContent = a.l;
+      b.innerHTML = '<span class="fabi">' + fabSvg(FAB_ICON[a.k] || "") + '</span>'
+                  + '<span class="fabl">' + esc(a.l) + '</span>';
       if (b.setAttribute) { b.setAttribute("type", "button"); b.setAttribute("aria-label", a.l); }
-      fabVar(b, "--fx", Math.round(g.r * Math.cos(ang)) + "px");
-      fabVar(b, "--fy", Math.round(-g.r * Math.sin(ang)) + "px");
-      b.style.transitionDelay = (i * 45) + "ms";
+      fabVar(b, "--fx", Math.round(dx + Math.sin(ang) * g.r) + "px");
+      fabVar(b, "--fy", Math.round(dy - Math.cos(ang) * g.r) + "px");
+      /* the stagger is the CSS's: --i counts out on opening, --rev back in again */
+      fabVar(b, "--i", String(i));
+      fabVar(b, "--rev", String(acts.length - 1 - i));
       /* the ids it acted on come back out, which is what the test asserts on;
          an array is never false, so nothing about the click is cancelled */
       b.onclick = e => { if (e && e.stopPropagation) e.stopPropagation(); return fabDo(a.k, b); };
@@ -1789,7 +1810,10 @@ function renderFab() {
   }
   const main = $("#fabbtn");
   if (main) {
-    main.innerHTML = '<span class="fabn">' + n + '</span><span class="fabk">ticked</span>';
+    /* the count while it is closed; the plus - which the CSS turns 315° into a
+       cross - while it is open */
+    main.innerHTML = '<span class="fabn">' + n + '</span><span class="fabk">ticked</span>'
+      + '<span class="fabx">' + fabSvg('<path d="M12 5v14"/><path d="M5 12h14"/>') + '</span>';
     if (main.setAttribute) {
       main.setAttribute("aria-expanded", FABOPEN ? "true" : "false");
       main.setAttribute("aria-label", n + " job" + (n === 1 ? "" : "s") + " ticked — actions");

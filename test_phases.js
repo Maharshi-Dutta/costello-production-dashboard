@@ -300,65 +300,86 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   renderChips();
   let host = el("#fabhost");
   assert.ok(host, "two jobs ticked: the wheel appears");
-  assert.strictEqual(el("#fabbtn").innerHTML, '<span class="fabn">2</span><span class="fabk">ticked</span>',
+  assert.ok(el("#fabbtn").innerHTML.indexOf('<span class="fabn">2</span><span class="fabk">ticked</span>') === 0,
     "and says how many");
+  assert.ok(el("#fabbtn").innerHTML.indexOf('class="fabx"') > 0,
+    "with the plus the CSS turns 315° into a cross while it is open");
   assert.strictEqual(el("#fabbtn").attrs["aria-label"], "2 jobs ticked — actions");
   assert.deepStrictEqual(host.kids.map(k => k.dataset.fab).filter(Boolean),
     ["alert", "export", "move", "clear"], "the admin gets all four options");
   const opt = k => host.kids.find(x => x.dataset.fab === k);
-  /* a quarter circle up and to the left of the button, first option straight up */
+  /* a full circle of radius 100 around the ring's middle, first option straight
+     up: on a 1280x800 screen that middle is 150 px in from the right and the
+     bottom, which is 104 px in from where the closed button sits (18 + 56/2). */
+  assert.deepStrictEqual(fabGeom(4, 1280, 800), { r: 100, n: 4, cx: 150, cy: 150 });
   assert.deepStrictEqual(host.kids.filter(x => x.dataset.fab).map(x => x.style["--fx"] + "/" + x.style["--fy"]),
-    ["0px/-221px", "-110px/-191px", "-191px/-110px", "-221px/0px"]);
-  assert.deepStrictEqual(host.kids.filter(x => x.dataset.fab).map(x => x.style.transitionDelay),
-    ["0ms", "45ms", "90ms", "135ms"], "staggered, so they fan rather than jump together");
+    ["-104px/-204px", "-4px/-104px", "-104px/-4px", "-204px/-104px"]);
+  assert.strictEqual(host.style["--fdx"], "-104px", "and the button itself glides in to that middle");
+  assert.strictEqual(host.style["--fdy"], "-104px");
+  /* the stagger is the CSS's own: --i counts them out, --rev counts them back */
+  assert.deepStrictEqual(host.kids.filter(x => x.dataset.fab).map(x => x.style["--i"]), ["0", "1", "2", "3"]);
+  assert.deepStrictEqual(host.kids.filter(x => x.dataset.fab).map(x => x.style["--rev"]), ["3", "2", "1", "0"]);
+  assert.ok(el("#fab-export").innerHTML.indexOf("<svg") >= 0 &&
+            el("#fab-export").innerHTML.indexOf('class="fabl">Export<') >= 0,
+    "each option is an inline-SVG icon with its name written underneath it");
   assert.strictEqual(host.className, "fabwrap", "closed until it is tapped");
-  pass("the wheel exists only while jobs are ticked, and fans on a quarter circle");
+  pass("the wheel exists only while jobs are ticked, and opens on a full circle of radius 100");
 
-  /* ---- the fan must not stack pills on top of each other, at any width ----
-     Every pill is measured at the widest the CSS lets it be (--fpill), which is
-     the width the radius was worked out from, so this is the worst case rather
-     than a lucky one. */
-  const geom = (vw, vh) => {
+  /* ---- every option on the circle, and all of it on the screen ----
+     Each option is measured at its full 76 x 68 box (the 52 px button plus its
+     label), centred on its point of the circle, so this is the worst case
+     rather than a lucky one. */
+  const ring = (vw, vh, n) => {
     window.innerWidth = vw; window.innerHeight = vh;
     set("state.picked = { R0001: 1, R0003: 1 };");
     renderChips();
-    const h = el("#fabhost"), pill = parseFloat(h.style["--fpill"]);
-    const rEdge = vw - 18 - 8, bEdge = vh - 18 - 8;         // .fabwrap right:18 / .fabopt right:8
-    return { pill: pill, rects: h.kids.filter(x => x.dataset.fab).map(x => {
-      const dx = parseFloat(x.style["--fx"]), dy = parseFloat(x.style["--fy"]);
-      return { k: x.dataset.fab, x1: rEdge + dx - pill, x2: rEdge + dx,
-               y1: bEdge + dy - 40, y2: bEdge + dy };      // 40 = .fabopt min-height
-    }) };
+    const h = el("#fabhost"), g = fabGeom(n, vw, vh);
+    return { g: g, cx: vw - g.cx, cy: vh - g.cy,          // where the open ring's middle sits
+      opts: h.kids.filter(x => x.dataset.fab).map(x => {
+        const ox = vw - 46 + parseFloat(x.style["--fx"]);  // 46 = the closed button's centre
+        const oy = vh - 46 + parseFloat(x.style["--fy"]);
+        return { k: x.dataset.fab, x: ox, y: oy,
+                 x1: ox - 38, x2: ox + 38, y1: oy - 34, y2: oy + 34 };
+      }) };
   };
-  const hits = (a, b) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
-  [[1280, 800], [390, 844], [390, 640], [320, 640]].forEach(v => {
-    const g = geom(v[0], v[1]), where = " at " + v[0] + "x" + v[1];
-    assert.strictEqual(g.rects.length, 4);
-    for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++)
-      assert.ok(!hits(g.rects[a], g.rects[b]), g.rects[a].k + " overlaps " + g.rects[b].k + where);
-    g.rects.forEach(p => {
+  const checkRing = (vw, vh, n) => {
+    const r = ring(vw, vh, n), where = " at " + vw + "x" + vh + " with " + n + " options";
+    assert.strictEqual(r.opts.length, n, "every option is on the ring" + where);
+    r.opts.forEach((p, i) => {
+      const d = Math.sqrt(Math.pow(p.x - r.cx, 2) + Math.pow(p.y - r.cy, 2));
+      assert.ok(Math.abs(d - 100) <= 1, p.k + " is " + d.toFixed(1) + " px out, not 100" + where);
+      /* clockwise from straight up, evenly spaced: 90° apart for four, 120° for three */
+      const deg = ((Math.atan2(p.x - r.cx, r.cy - p.y) * 180 / Math.PI) + 360) % 360;
+      const want = (i * (360 / n)) % 360;
+      assert.ok(Math.min(Math.abs(deg - want), 360 - Math.abs(deg - want)) <= 1,
+        p.k + " sits at " + deg.toFixed(1) + "°, not " + want + "°" + where);
       assert.ok(p.x1 >= 8, p.k + " runs off the left edge" + where);
-      assert.ok(p.x2 <= v[0] - 8, p.k + " runs off the right edge" + where);
+      assert.ok(p.x2 <= vw - 8, p.k + " runs off the right edge" + where);
       assert.ok(p.y1 >= 8, p.k + " runs off the top" + where);
-      assert.ok(p.y2 <= v[1] - 8, p.k + " runs off the bottom" + where);
+      assert.ok(p.y2 <= vh - 8, p.k + " runs off the bottom" + where);
     });
-  });
-  assert.strictEqual(geom(320, 640).pill < geom(1280, 800).pill, true,
-    "a narrow phone gets narrower pills rather than a fan that hangs off the screen");
-  /* the radius is worked out from the count, so more options fan out further */
-  assert.ok(fabGeom(5, 1280, 800).r > fabGeom(4, 1280, 800).r);
-  assert.ok(fabGeom(4, 1280, 800).r > fabGeom(3, 1280, 800).r);
-  assert.strictEqual(fabGeom(4, 1280, 800).r, 221);
+    return r;
+  };
+  [[1280, 800], [390, 844], [390, 640], [320, 640]].forEach(v => checkRing(v[0], v[1], 4));
+  /* the wished-for inset is 150 px, but on a phone it has to give way, or the
+     right-hand option would hang off the edge - the ring is never cropped */
+  assert.strictEqual(fabGeom(4, 320, 640).cx, 146);
+  assert.ok(fabGeom(4, 320, 640).cx < fabGeom(4, 1280, 800).cx,
+    "a narrow phone pulls the ring's middle in rather than letting it hang off the screen");
   window.innerWidth = 1280; window.innerHeight = 800;
   renderChips();
   host = el("#fabhost");
-  pass("no two pills overlap and none leaves the screen, at 1280, 390 or 320 px wide");
+  pass("every option sits on the circle and stays on screen, at 1280, 390 and 320 px wide");
 
   WHO = "someone@example.test";
   renderChips();
   host = el("#fabhost");
   assert.deepStrictEqual(host.kids.map(k => k.dataset.fab).filter(Boolean), ["export", "move", "clear"],
     "everyone else gets three: alerts are the administrator's");
+  /* three options share the same circle, 120° apart, still starting at the top */
+  checkRing(1280, 800, 3);
+  checkRing(320, 640, 3);
+  window.innerWidth = 1280; window.innerHeight = 800;
   WHO = "boss@example.test";
   renderChips();
   host = el("#fabhost");
@@ -436,13 +457,15 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   assert.strictEqual(el("#fabhost").className, "fabwrap");
   pass("the drawer and the Alerts / Changes windows all step the wheel aside, then give it back");
 
-  /* Clear - the selection goes, and so does the wheel */
+  /* Untick all - the selection goes, and so does the wheel */
   el("#fabbtn").onclick({ stopPropagation() {} });
+  assert.ok(opt("clear").innerHTML.indexOf('class="fabl">Untick all<') >= 0,
+    'the old "Clear" now reads "Untick all"');
   ids = opt("clear").onclick({ stopPropagation() {} });
   assert.deepStrictEqual(ids, ["R0001", "R0003"], "it reports what it cleared");
   assert.deepStrictEqual(state.picked, {});
   assert.strictEqual(el("#fabhost"), null, "nothing ticked, so no wheel");
-  pass("Clear empties the selection and takes the wheel away with it");
+  pass("Untick all empties the selection and takes the wheel away with it");
 
   /* ---- 5. neither feature writes or fetches anything ---- */
   assert.strictEqual(FETCHES, 0, "no network");

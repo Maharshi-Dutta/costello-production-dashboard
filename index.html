@@ -13,6 +13,7 @@
     --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#184f95; --accent-soft:#e2ecf8;
     --fab:#8a6d00; --fab-bg:#fffbe0; --fab-dot:#ffff00;
+    --fab-ring-in:rgba(23,23,26,.10); --fab-ring-out:rgba(24,79,149,.10);
     --done:#8a6a1e; --done-bg:#fff6dd; --done-dot:#ffe699;
     --cut:#2f7d1f; --notsent:#5d5a54; --single:#16437c;
     --urgent:#b3261e; --urgent-bg:#fbe3e1;
@@ -25,6 +26,7 @@
     --brand:#0e0e11; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#6aa9ec; --accent-soft:#1d2c40;
     --fab:#e8e04a; --fab-bg:#33320f; --done:#e0c98a; --done-bg:#332c18;
+    --fab-ring-in:rgba(0,0,0,.38); --fab-ring-out:rgba(106,169,236,.14);
     --cut:#6dbf4b; --notsent:#a8a49a; --single:#7fb4e8;
     --urgent:#f07a72; --urgent-bg:#3b1d1b;
     --green:#6dbf4b; --green-bg:#1d2c17; --green-bg2:#243a1c;
@@ -343,36 +345,58 @@
              padding:9px 12px; font-size:12.5px; color:var(--ink-2) }
   .spin { width:13px; height:13px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
           border-radius:50%; animation:spin .7s linear infinite; display:inline-block }
-  /* ---- the floating selection wheel ----
-     A round button in the thumb's corner whenever jobs are ticked. Its options
-     fan out on a quarter circle up and to the left; the fan is a transition on
-     transform and opacity with a stagger set per button, so nothing about it
-     runs in JavaScript. It sits below the scrim (z-index 40), so an open window
-     covers it on a desktop; on a phone there is no room for that and it hides
-     itself instead, well clear of a window's Download and Save buttons. */
+  /* ---- the floating selection radial menu ----
+     A round button in the thumb's corner whenever jobs are ticked. Opening it
+     glides that same button inwards to the middle of the ring (--fdx/--fdy),
+     swaps its count for a plus that turns 315° into a cross, ripples two ring
+     shadows out behind it, and floats the options onto a FULL circle around it
+     (--fx/--fy, worked out in JS so the ring can never leave the screen). The
+     stagger is the CSS's own: --i counts the options out on opening, --rev
+     counts them back in on closing, so nothing about the motion runs in
+     JavaScript. It sits below the scrim (z-index 40), so an open window covers
+     it on a desktop; on a phone there is no room for that and it hides itself
+     instead, well clear of a window's Download and Save buttons. */
   .fabwrap { position:fixed; right:18px; bottom:18px; width:56px; height:56px; z-index:35 }
   .fab { width:56px; height:56px; border-radius:50%; border:0; background:var(--accent); color:#fff;
-         box-shadow:0 6px 20px rgba(0,0,0,.28); display:flex; flex-direction:column;
-         align-items:center; justify-content:center; line-height:1; position:relative; z-index:2 }
+         box-shadow:0 6px 20px rgba(0,0,0,.28), 0 0 0 0 var(--fab-ring-in), 0 0 0 0 var(--fab-ring-out);
+         display:flex; flex-direction:column; align-items:center; justify-content:center;
+         line-height:1; position:relative; z-index:2; transform:translate(0,0);
+         transition:transform .25s cubic-bezier(.2,.8,.3,1), box-shadow .35s ease }
   .fab:hover { filter:brightness(1.08) }
+  .fabwrap.open .fab { transform:translate(var(--fdx,0),var(--fdy,0));
+         box-shadow:0 6px 20px rgba(0,0,0,.28), 0 0 0 12px var(--fab-ring-in), 0 0 0 40px var(--fab-ring-out) }
   .fabn { font-family:"Barlow Condensed",sans-serif; font-size:23px; font-weight:700;
           font-variant-numeric:tabular-nums }
   .fabk { font-size:8px; letter-spacing:.12em; text-transform:uppercase; opacity:.85; margin-top:1px }
-  /* each pill is anchored by its RIGHT edge, so its label grows leftward and can
-     never run back under the button; --fpill caps how wide it may get, because
-     the fan's radius is worked out from that width and would otherwise be a
-     guess. --fx / --fy are where this pill lands, set once when it is built. */
-  .fabopt { position:absolute; right:8px; bottom:8px; min-height:40px; padding:0 15px; border-radius:20px;
-            border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:12.5px;
-            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:var(--fpill,104px);
-            box-shadow:0 4px 14px rgba(0,0,0,.18); transform-origin:100% 100%;
-            transform:translate(0,0) scale(.5); opacity:0; pointer-events:none;
-            transition:transform .26s cubic-bezier(.2,.8,.3,1), opacity .2s ease }
-  .fabwrap.open .fabopt { transform:translate(var(--fx,0),var(--fy,0)) scale(1); opacity:1; pointer-events:auto }
-  .fabopt:hover { background:var(--surface-2) }
+  .fabn, .fabk { transition:opacity .15s ease }
+  .fabwrap.open .fabn, .fabwrap.open .fabk { opacity:0 }
+  /* the plus sits on top of the count and takes over as it fades */
+  .fabx { position:absolute; left:0; top:0; right:0; bottom:0; display:flex;
+          align-items:center; justify-content:center; opacity:0; transform:rotate(0deg);
+          transition:transform .25s cubic-bezier(.2,.8,.3,1), opacity .15s ease }
+  .fabx svg { width:24px; height:24px }
+  .fabwrap.open .fabx { opacity:1; transform:rotate(315deg) }
+  /* one option: a 52 px round icon with its name underneath, its whole box
+     centred on the point of the circle it belongs to, so the label never
+     changes where the ring's spacing has to be worked out from. */
+  .fabopt { position:absolute; left:50%; top:50%; width:76px; height:68px; margin:-34px 0 0 -38px;
+            display:flex; flex-direction:column; align-items:center; gap:3px;
+            padding:0; border:0; background:none; color:var(--ink); cursor:pointer;
+            transform:translate(0,0) scale(0); opacity:0; pointer-events:none;
+            transition:transform .28s cubic-bezier(.2,.8,.3,1), opacity .2s ease;
+            transition-delay:calc(var(--rev, 0) * 60ms) }
+  .fabwrap.open .fabopt { transform:translate(var(--fx,0),var(--fy,0)) scale(1); opacity:1;
+            pointer-events:auto; transition-delay:calc(var(--i, 0) * 60ms) }
+  .fabi { width:52px; height:52px; border-radius:50%; background:var(--surface);
+          border:1px solid var(--line); box-shadow:0 4px 14px rgba(0,0,0,.18);
+          display:flex; align-items:center; justify-content:center; color:var(--accent) }
+  .fabi svg { width:22px; height:22px }
+  .fabopt:hover .fabi { background:var(--surface-2) }
+  .fabl { font-size:10px; line-height:12px; color:var(--ink-2); white-space:nowrap;
+          text-shadow:0 1px 3px var(--bg), 0 0 3px var(--bg) }
   @media (max-width:700px){ .fabwrap.over { display:none } }
   @media (prefers-reduced-motion:reduce){
-    .fabopt { transition:none !important; transition-delay:0s !important }
+    .fab, .fabx, .fabn, .fabk, .fabopt { transition:none !important; transition-delay:0s !important }
   }
 
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70;
@@ -428,7 +452,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1126</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1205</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -440,10 +464,10 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260907-1126"></script>
-<script src="graph.js?v=20260907-1126"></script>
-<script src="checkpoints.js?v=20260907-1126"></script>
-<script src="export.js?v=20260907-1126"></script>
-<script src="app.js?v=20260907-1126"></script>
+<script src="parser.js?v=20260907-1205"></script>
+<script src="graph.js?v=20260907-1205"></script>
+<script src="checkpoints.js?v=20260907-1205"></script>
+<script src="export.js?v=20260907-1205"></script>
+<script src="app.js?v=20260907-1205"></script>
 </body>
 </html>
