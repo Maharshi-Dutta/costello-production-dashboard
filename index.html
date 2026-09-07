@@ -263,6 +263,52 @@
     .arow>.asect { display:none }
     .arow>.aact { grid-column:1/-1; justify-content:flex-start }
   }
+  /* ---- Export window ----
+     Same shell as the Log and Alerts windows. Every control the thumb has to
+     find is at least 40px tall, because the person choosing an export is as
+     likely to be on a phone in the yard as at a desk; on a narrow screen the
+     window fills the display and scrolls, rather than shrinking to a slot. */
+  .xwin { width:min(1040px,96vw); height:min(800px,92vh) }
+  .xbody { padding:0 }
+  .xsec { display:flex; flex-direction:column; gap:2px; padding:10px 16px }
+  .xrow { display:grid; grid-template-columns:132px 1fr; gap:10px; align-items:center;
+          padding:5px 0; border-bottom:1px solid var(--line-soft) }
+  .xrow:last-child { border-bottom:0 }
+  .xlab { font-size:12px; color:var(--ink-3) }
+  .xopts { display:flex; flex-wrap:wrap; gap:6px; align-items:center }
+  .xpick { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; max-height:168px; overflow-y:auto }
+  .xchip { min-height:40px; padding:0 12px; border:1px solid var(--line); border-radius:5px;
+           background:var(--surface); color:var(--ink-2); font-size:12.5px; white-space:nowrap }
+  .xchip:hover:not(:disabled) { background:var(--surface-2); color:var(--ink) }
+  .xchip[aria-pressed="true"] { background:var(--ink); color:var(--bg); border-color:var(--ink) }
+  .xchip:disabled { opacity:.45; cursor:default }
+  .xbox { display:inline-flex; align-items:center; gap:7px; min-height:40px; padding:0 10px 0 8px;
+          border:1px solid var(--line); border-radius:20px; background:var(--surface-2);
+          font-size:12.5px; color:var(--ink-2); cursor:pointer }
+  .xbox input { width:16px; height:16px; accent-color:var(--accent); cursor:pointer }
+  .xbox:hover { background:var(--surface); color:var(--ink) }
+  .xdate { min-height:40px }
+  .xto { font-size:12px; color:var(--ink-4) }
+  .xq { min-height:40px; min-width:min(320px,100%); flex:1 }
+  .xnone { font-size:12px; color:var(--ink-4) }
+  .xnote2 { font-size:11.5px; color:var(--ink-4); line-height:1.45; padding:6px 0 2px }
+  .xgrp { border-top:1px solid var(--line) }
+  .xgrp > summary { cursor:pointer; padding:11px 16px; min-height:40px; background:var(--surface-2);
+                    font-size:13px; font-weight:600; color:var(--ink-2); list-style:none;
+                    display:flex; align-items:center; gap:8px }
+  .xgrp > summary::before { content:"▸"; color:var(--ink-4) }
+  .xgrp[open] > summary::before { content:"▾" }
+  .xgrp > summary::-webkit-details-marker { display:none }
+  .xfoot { gap:12px }
+  .xfoot .btn { min-height:40px }
+  #xcount { font-size:13px; font-weight:600; color:var(--ink-2) }
+  @media (max-width:640px){
+    /* full screen on a phone: the window is the page */
+    .xwin { width:100vw; height:100dvh; max-height:100dvh; border-radius:0; border:0; inset:0 }
+    .xrow { grid-template-columns:1fr; gap:4px }
+    .xq { min-width:100% }
+    .xpick { max-height:none }
+  }
   .note { border-left:3px solid var(--done-dot); background:var(--surface-2); padding:9px 12px; border-radius:0 4px 4px 0 }
   .btn { background:var(--ink); color:var(--bg); border:0; padding:9px 15px; border-radius:5px; font-size:13px; font-weight:600 }
   .btn.sec { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
@@ -312,6 +358,7 @@
     <button class="ghost" id="changebtn">Changes</button>
     <button class="ghost" id="versbtn">Versions</button>
     <button class="ghost" id="alertbtn">Alerts</button>
+    <button class="ghost" id="exportbtn">Export</button>
     <button class="ghost" id="refreshbtn">Refresh</button>
     <button class="ghost" id="themebtn">Dark</button>
     <button class="ghost" id="whobtn">…</button>
@@ -328,7 +375,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-0833</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1026</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -340,9 +387,10 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260907-0833"></script>
-<script src="graph.js?v=20260907-0833"></script>
-<script src="checkpoints.js?v=20260907-0833"></script>
-<script src="app.js?v=20260907-0833"></script>
+<script src="parser.js?v=20260907-1026"></script>
+<script src="graph.js?v=20260907-1026"></script>
+<script src="checkpoints.js?v=20260907-1026"></script>
+<script src="export.js?v=20260907-1026"></script>
+<script src="app.js?v=20260907-1026"></script>
 </body>
 </html>

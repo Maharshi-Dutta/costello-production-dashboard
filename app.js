@@ -949,6 +949,392 @@ function renderAlertMenu(anchor) {
   }), 0);
 }
 
+/* ---------- Export ----------
+   The window that drives export.js. Everything it can do is decided here and
+   carried out there: this half only collects choices, shows how many jobs they
+   come to, and hands the finished file to the browser.
+
+   Two things are worth saying out loud, because they are the promises made to
+   the office when this was agreed:
+   - Nothing in this path goes near the network. The jobs are the ones already
+     in memory, the workbook and the PDF are built in the tab, and the file is
+     handed over through an object URL. The single exception is the one
+     Dashboard Log line written after the download, through the same noteChange
+     every other change uses.
+   - Phone numbers and eircodes are not options that happen to be switched off;
+     they are not read at any point. See the note at the top of export.js.       */
+
+let XSTATE = null;                 // the choices in the window, while it is open
+let XBUSY = false;                 // a file is being built - the button waits
+let XLOGO = null;                  // assets/logo.png as a data URL, when the file exists
+
+function xpNewState() {
+  return { format: "xlsx", layout: "cards", fields: exportAllFields(), f: exportDefaults(), preset: "",
+           /* which groups are expanded: kept here rather than left to <details>,
+              because a chip click redraws the window and would otherwise fold
+              the group the person was working in */
+           open: { filters: true, fields: true, sort: false, presets: false } };
+}
+/** The company name for the PDF header: the Config sheet if it says, otherwise
+    the page's own title. Never a name written into the code. */
+function xpCompany() {
+  const t = String(CONFIG.company || document.title || "").split(/[·|—–]/)[0].trim();
+  return t || "Production";
+}
+/** The logo is optional and always will be. It is read once at startup with an
+    Image, not a fetch, and a missing file simply leaves XLOGO null - the PDF
+    header then shows the company name on its own. */
+function xpLoadLogo() {
+  try {
+    const img = new Image();
+    img.onerror = () => { XLOGO = null; };
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth || img.width; c.height = img.naturalHeight || img.height;
+        if (!c.width || !c.height) return;
+        c.getContext("2d").drawImage(img, 0, 0);
+        XLOGO = c.toDataURL("image/png");
+      } catch (e) { XLOGO = null; }
+    };
+    img.src = "assets/logo.png";
+  } catch (e) { XLOGO = null; }
+}
+
+/** The person's name for an exported file. The Dashboard Log keeps the full
+    address, because that is an internal record; a workbook or a PDF often goes
+    outside the office, so it carries a name and nothing else. */
+function xpWhoName() {
+  const a = CW.account;
+  const n = (a && a.name) ? String(a.name).trim() : "";
+  return n || String(whoAmI()).split("@")[0];
+}
+
+/* pdfmake is 1.4 MB and most days nobody exports a PDF, so it is not in the
+   page: the two scripts are injected the first time one is asked for. The
+   offline tests already have a pdfMake, so the loader hands that straight
+   back. */
+let XPDFLOAD = null;
+function xpScript(src) {
+  return new Promise((ok, no) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = false;                       // vfs_fonts.js must land after pdfmake
+    s.onload = () => ok(src);
+    s.onerror = () => no(new Error("could not load " + src));
+    (document.head || document.body).appendChild(s);
+  });
+}
+function xpLoadPdf() {
+  if (typeof pdfMake !== "undefined" && pdfMake) return Promise.resolve(xpPdfReady());
+  if (!XPDFLOAD) {
+    XPDFLOAD = xpScript("vendor/pdfmake.min.js")
+      .then(() => xpScript("vendor/vfs_fonts.js"))
+      .then(() => xpPdfReady())
+      .catch(e => { XPDFLOAD = null; throw e; });
+  }
+  return XPDFLOAD;
+}
+
+/** Everything export.js needs to know about this dashboard, right now. */
+function xpCtxNow() {
+  return { all: live(), view: filtered(), picked: state.picked, sections: BLOCKNAMES,
+           comments: id => commentsFor(id), alerts: id => alertsFor(id) };
+}
+const xpMatched = () => exportJobs(xpCtxNow(), XSTATE.f);
+
+const xpCounties = () => { const s = {}; live().forEach(j => { if (j.area) s[j.area] = 1; }); return Object.keys(s).sort(); };
+const xpProductNames = () => { const s = {}; live().forEach(j => (j.prods || []).forEach(p => { s[p.n] = 1; })); return Object.keys(s).sort(); };
+const xpGlassNames = () => { const s = {}; live().forEach(j => Object.keys(j.glass || {}).forEach(k => { if (j.glass[k] > 0) s[k] = 1; })); return Object.keys(s).sort(); };
+
+/* ---- the little bits of markup the window is made of ---- */
+const xpChip = (on, path, val, text) =>
+  '<button class="xchip" aria-pressed="' + (on ? "true" : "false") + '" data-xset="' + path +
+  '" data-xval="' + esc(String(val)) + '">' + esc(text) + "</button>";
+const xpBox = (on, list, val, text) =>
+  '<label class="xbox"><input type="checkbox" data-xtog="' + list + '" value="' + esc(String(val)) + '"' +
+  (on ? " checked" : "") + "><span>" + esc(text) + "</span></label>";
+/** One row of exclusive choices. `opts` is [value, label]; "" means "any". */
+function xpRow(label, path, cur, opts) {
+  return '<div class="xrow"><span class="xlab">' + esc(label) + "</span><span class=\"xopts\">" +
+    opts.map(o => xpChip(String(cur == null ? "" : cur) === String(o[0]), path, o[0], o[1])).join("") +
+    "</span></div>";
+}
+const XP_TRI = [["", "Any"], ["true", "Yes"], ["false", "No"]];
+const XP_CPOPTS = [["", "Any"], ["none", "Not started"], ["process", "In fabrication"], ["done", "Done"]];
+
+function xpDateRow(key, label) {
+  const r = XSTATE.f.dates[key];
+  return '<div class="xrow"><span class="xlab">' + esc(label) + "</span><span class=\"xopts\">" +
+    '<input class="txt xdate" type="date" data-xdate="' + key + '.from" value="' + esc(r.from || "") + '" aria-label="' + esc(label) + ' from">' +
+    '<span class="xto">to</span>' +
+    '<input class="txt xdate" type="date" data-xdate="' + key + '.to" value="' + esc(r.to || "") + '" aria-label="' + esc(label) + ' to">' +
+    '<button class="xchip" data-xdp="' + key + '|week">This week</button>' +
+    '<button class="xchip" data-xdp="' + key + '|7">Last 7 days</button>' +
+    '<button class="xchip" data-xdp="' + key + '|30">Last 30 days</button>' +
+    '<button class="xchip" data-xdp="' + key + '|clear">Any</button>' +
+    "</span></div>";
+}
+
+/** A collapsible group. Whether it is open is remembered in XSTATE, so a
+    redraw leaves the window looking exactly as it did. */
+const xpGroup = (title, inner, key) =>
+  '<details class="xgrp" id="xg-' + key + '" data-xopen="' + key + '"' + (XSTATE.open[key] ? " open" : "") +
+  "><summary>" + esc(title) + '</summary><div class="xgbody">' + inner + "</div></details>";
+
+function renderExportWindow() {
+  if (!XSTATE) XSTATE = xpNewState();
+  let host = $("#xhost");
+  if (!host) { host = document.createElement("div"); host.id = "xhost"; document.body.appendChild(host); }
+  const keep = $("#xbody") ? $("#xbody").scrollTop : 0;
+  const f = XSTATE.f, F = XSTATE.fields;
+  const nPicked = Object.keys(state.picked).length;
+  const presets = presetsLoad(), pnames = Object.keys(presets).sort();
+
+  const sectionPick = BLOCKNAMES.length
+    ? BLOCKNAMES.map((n, i) => xpBox(f.sections.indexOf(i) >= 0, "sections", i, n + " (" + live().filter(j => j.blk === i).length + ")")).join("")
+    : '<span class="xnone">The sheet has no sections yet.</span>';
+
+  const counties = xpCounties(), prods = xpProductNames(), glass = xpGlassNames();
+
+  host.innerHTML = '<div class="scrim" id="xscrim"></div><div class="logwin xwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Export</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">Download the jobs you choose. ' +
+      'No phone numbers and no eircodes are ever included.</div></div>' +
+      '<button class="ghost" id="xclose">Close</button></div>' +
+    '<div class="logbody xbody" id="xbody">' +
+
+      '<div class="xsec">' +
+        xpRow("Format", "format", XSTATE.format, [["xlsx", "Excel workbook"], ["pdf", "PDF"]]) +
+        (XSTATE.format === "pdf"
+          ? xpRow("PDF layout", "layout", XSTATE.layout, [["cards", "Job cards"], ["table", "Table"]])
+          : "") +
+        xpRow("Scope", "f.scope", f.scope, [["view", "What I see now"], ["ticked", "Ticked jobs (" + nPicked + ")"], ["sections", "Sections…"]]) +
+        (f.scope === "sections" ? '<div class="xrow"><span class="xlab"></span><span class="xpick">' + sectionPick + "</span></div>" : "") +
+      "</div>" +
+
+      xpGroup("Filters", '<div class="xsec">' +
+        xpRow("Ready to deliver", "f.ready", f.ready, XP_TRI) +
+        xpRow("Urgent", "f.urgent", f.urgent, [["", "Any"], ["true", "Urgent only"]]) +
+        xpRow("Windows", "f.cp.win", f.cp.win, XP_CPOPTS) +
+        xpRow("Doors", "f.cp.drs", f.cp.drs, XP_CPOPTS) +
+        xpRow("Glass", "f.cp.glass", f.cp.glass, XP_CPOPTS) +
+        xpRow("Products", "f.cp.prod", f.cp.prod, XP_CPOPTS) +
+        xpDateRow("sold", "Sold") +
+        xpDateRow("ready", "Ready to print") +
+        xpDateRow("floor", "Sent to floor") +
+        '<div class="xrow"><span class="xlab">County</span><span class="xpick">' +
+          (counties.length ? counties.map(c => xpBox(f.county.indexOf(c) >= 0, "county", c, c)).join("") : '<span class="xnone">none</span>') +
+        "</span></div>" +
+        '<div class="xrow"><span class="xlab">Products</span><span class="xpick">' +
+          (prods.length ? prods.map(p => xpBox(f.products.indexOf(p) >= 0, "products", p, p.toUpperCase())).join("") : '<span class="xnone">none</span>') +
+        "</span></div>" +
+        '<div class="xrow"><span class="xlab">Glass types</span><span class="xpick">' +
+          (glass.length ? glass.map(g => xpBox(f.glassTypes.indexOf(g) >= 0, "glassTypes", g, g.toUpperCase())).join("") : '<span class="xnone">none</span>') +
+        "</span></div>" +
+        '<div class="xrow"><span class="xlab">On sheet</span><span class="xpick">' +
+          SHEETNAMES.map(s => xpBox(f.sheets.indexOf(s) >= 0, "sheets", s, s)).join("") +
+        "</span></div>" +
+        xpRow("Has comments", "f.hasComments", f.hasComments, XP_TRI) +
+        xpRow("Has email alerts", "f.hasAlerts", f.hasAlerts, XP_TRI) +
+        '<div class="xrow"><span class="xlab">Search</span><span class="xopts">' +
+          '<input class="txt xq" id="xq" type="search" placeholder="Job no, customer, county, office no or a comment" value="' + esc(f.q) + '">' +
+        "</span></div>" +
+      "</div>", "filters") +
+
+      xpGroup("Fields", '<div class="xsec">' +
+        '<div class="xrow"><span class="xlab">Include</span><span class="xopts">' +
+          '<button class="xchip" id="xfall">All</button><button class="xchip" id="xfnone">None</button>' +
+        "</span></div>" +
+        '<div class="xrow"><span class="xlab"></span><span class="xpick">' +
+          EXPORT_FIELDS.map(p => xpBox(!!F[p[0]], "fields", p[0], p[1])).join("") +
+        "</span></div>" +
+        '<div class="xnote2">Phone numbers and eircodes are never exported and cannot be turned on.</div>' +
+      "</div>", "fields") +
+
+      xpGroup("Sort & group", '<div class="xsec">' +
+        '<div class="xrow"><span class="xlab">Sort by</span><span class="xopts">' +
+          '<select class="txt" id="xsort">' + XP_SORTS.map(p => '<option value="' + p[0] + '"' +
+            (f.sort === p[0] ? " selected" : "") + ">" + esc(p[1]) + "</option>").join("") + "</select>" +
+          xpChip(!f.desc, "f.desc", "false", "▲ normal") + xpChip(!!f.desc, "f.desc", "true", "▼ reversed") +
+        "</span></div>" +
+        xpRow("Group by section", "f.groupBySection", !!f.groupBySection, [["false", "No"], ["true", "Yes"]]) +
+      "</div>", "sort") +
+
+      xpGroup("Presets", '<div class="xsec">' +
+        '<div class="xrow"><span class="xlab">Saved</span><span class="xopts">' +
+          '<select class="txt" id="xpsel">' + (pnames.length
+            ? pnames.map(n => '<option value="' + esc(n) + '"' + (XSTATE.preset === n ? " selected" : "") + ">" + esc(n) + "</option>").join("")
+            : '<option value="">no presets yet</option>') + "</select>" +
+          '<button class="xchip" id="xpload"' + (pnames.length ? "" : " disabled") + ">Load</button>" +
+          '<button class="xchip" id="xpdel"' + (pnames.length ? "" : " disabled") + ">Delete</button>" +
+        "</span></div>" +
+        '<div class="xrow"><span class="xlab">Save as</span><span class="xopts">' +
+          '<input class="txt xq" id="xpname" placeholder="Name this set of choices" maxlength="40" value="">' +
+          '<button class="xchip" id="xpsave">Save</button>' +
+        "</span></div>" +
+        '<div class="xnote2">A preset remembers the filters, the fields and the format. It never holds job data.</div>' +
+      "</div>", "presets") +
+
+    "</div>" +
+    '<div class="foot xfoot"><span id="xcount">…</span>' +
+      '<button class="btn" id="xdl">Download</button></div>' +
+    "</div>";
+
+  if ($("#xbody")) $("#xbody").scrollTop = keep;
+  xpWire(host);
+  xpUpdateCount();
+}
+
+/** Walk "f.cp.win" and put the value at the end of it. "" means "any". */
+function xpSet(path, raw) {
+  const v = raw === "" ? null : raw === "true" ? true : raw === "false" ? false : raw;
+  const p = String(path).split(".");
+  let o = XSTATE;
+  for (let i = 0; i < p.length - 1; i++) o = o[p[i]];
+  o[p[p.length - 1]] = v;
+}
+/** Tick or untick one value in one of the list filters. */
+function xpToggleList(list, value, on) {
+  if (list === "fields") { if (on) XSTATE.fields[value] = true; else delete XSTATE.fields[value]; return; }
+  const arr = list === "sections" ? XSTATE.f.sections : XSTATE.f[list];
+  const v = list === "sections" ? Number(value) : value;
+  const i = arr.indexOf(v);
+  if (on && i < 0) arr.push(v);
+  if (!on && i >= 0) arr.splice(i, 1);
+  if (list === "sections") XSTATE.f.sectionNames = XSTATE.f.sections.map(x => BLOCKNAMES[x] || ("section " + x));
+}
+/** This week (from Monday), the last 7 or 30 days including today, or clear. */
+function xpDatePreset(key, kind) {
+  const r = XSTATE.f.dates[key];
+  if (kind === "clear") { r.from = null; r.to = null; return; }
+  const now = new Date(), d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (kind === "week") d.setDate(d.getDate() - ((now.getDay() + 6) % 7));
+  else d.setDate(d.getDate() - (kind === "7" ? 6 : 29));
+  r.from = xpIsoDate(d); r.to = xpIsoDate(now);
+}
+
+/** The live count, and whether Download can do anything with it. Ticking every
+    field off used to make ExcelJS throw on a table with no columns and leave
+    the PDF as a cover page with nothing behind it, so the reason is shown
+    beside the count rather than found out the hard way. */
+function xpUpdateCount() {
+  let n = 0, jobs = [];
+  try { jobs = xpMatched(); n = jobs.length; } catch (e) { jobs = []; n = 0; }
+  let can = { ok: false, why: "no jobs match" };
+  try {
+    can = exportBuildable(exportRows(jobs, XSTATE.fields, xpCtxNow()), XSTATE.fields, XSTATE.format, XSTATE.layout);
+  } catch (e) { can = { ok: false, why: (e && e.message) || String(e) }; }
+  const c = $("#xcount");
+  if (c) c.textContent = n + " job" + (n === 1 ? "" : "s") + " match" + (n && !can.ok ? " — " + can.why : "");
+  const b = $("#xdl");
+  if (b) b.disabled = XBUSY || !can.ok;
+  return n;
+}
+
+function xpWire(host) {
+  const close = () => { host.remove(); };
+  if ($("#xscrim")) $("#xscrim").onclick = close;
+  if ($("#xclose")) $("#xclose").onclick = close;
+
+  host.querySelectorAll("[data-xset]").forEach(b => b.onclick = () => {
+    xpSet(b.dataset.xset, b.dataset.xval); renderExportWindow();
+  });
+  host.querySelectorAll("[data-xtog]").forEach(cb => cb.onchange = () => {
+    xpToggleList(cb.dataset.xtog, cb.value, cb.checked); xpUpdateCount();
+  });
+  host.querySelectorAll("[data-xdate]").forEach(inp => inp.onchange = () => {
+    const p = String(inp.dataset.xdate).split(".");
+    XSTATE.f.dates[p[0]][p[1]] = inp.value || null;
+    xpUpdateCount();
+  });
+  host.querySelectorAll("[data-xopen]").forEach(d => d.ontoggle = () => { XSTATE.open[d.dataset.xopen] = !!d.open; });
+  host.querySelectorAll("[data-xdp]").forEach(b => b.onclick = () => {
+    const p = String(b.dataset.xdp).split("|");
+    xpDatePreset(p[0], p[1]); renderExportWindow();
+  });
+
+  const q = $("#xq");
+  /* the box keeps the focus while you type: only the count is redrawn */
+  if (q) q.oninput = () => { XSTATE.f.q = q.value; xpUpdateCount(); };
+  const sort = $("#xsort");
+  if (sort) sort.onchange = () => { XSTATE.f.sort = sort.value; xpUpdateCount(); };
+  if ($("#xfall")) $("#xfall").onclick = () => { XSTATE.fields = exportAllFields(); renderExportWindow(); };
+  if ($("#xfnone")) $("#xfnone").onclick = () => { XSTATE.fields = {}; renderExportWindow(); };
+
+  if ($("#xpsave")) $("#xpsave").onclick = () => {
+    const box = $("#xpname"), name = String(box ? box.value : "").trim();
+    if (!name) { toast("Give the preset a name first", true); return; }
+    presetSave(name, { format: XSTATE.format, layout: XSTATE.layout, fields: XSTATE.fields, f: XSTATE.f });
+    XSTATE.preset = name;
+    toast('Preset "' + name + '" saved');
+    renderExportWindow();
+  };
+  if ($("#xpload")) $("#xpload").onclick = () => {
+    const sel = $("#xpsel"), name = sel ? sel.value : "";
+    const p = presetsLoad()[name];
+    if (!p) return;
+    XSTATE.format = p.format; XSTATE.layout = p.layout;
+    XSTATE.fields = p.fields; XSTATE.f = p.f; XSTATE.preset = name;
+    XSTATE.f.sectionNames = XSTATE.f.sections.map(x => BLOCKNAMES[x] || ("section " + x));
+    renderExportWindow();
+  };
+  if ($("#xpdel")) $("#xpdel").onclick = () => {
+    const sel = $("#xpsel"), name = sel ? sel.value : "";
+    if (!name) return;
+    presetDelete(name);
+    if (XSTATE.preset === name) XSTATE.preset = "";
+    toast('Preset "' + name + '" deleted');
+    renderExportWindow();
+  };
+  if ($("#xdl")) $("#xdl").onclick = () => xpDownload();
+}
+
+/** Build the file, hand it to the browser, then write the one log line.
+    The log line is last on purpose: nothing is claimed to have been exported
+    until the bytes have actually been handed over. */
+async function xpDownload() {
+  if (XBUSY) return null;
+  const ctx = xpCtxNow(), f = XSTATE.f;
+  const jobs = exportJobs(ctx, f);
+  const rows = exportRows(jobs, XSTATE.fields, ctx);
+  const can = exportBuildable(rows, XSTATE.fields, XSTATE.format, XSTATE.layout);
+  if (!can.ok) return null;
+  XBUSY = true; xpUpdateCount();
+  const btn = $("#xdl");
+  if (btn) btn.textContent = "Building…";
+  let name = null;
+  try {
+    const when = new Date();
+    name = exportFilename(XSTATE.format, f, when, BLOCKNAMES);
+    const buildEl = $("#build");
+    const opts = {
+      fields: XSTATE.fields, filters: f, layout: XSTATE.layout,
+      who: xpWhoName(), when: when, company: xpCompany(), sections: BLOCKNAMES, logo: XLOGO,
+      build: buildEl ? String(buildEl.textContent || "").replace("build ", "").trim() : ""
+    };
+    if (XSTATE.format === "pdf") {
+      if (btn && typeof pdfMake === "undefined") btn.textContent = "Loading PDF engine…";
+      const pm = await xpLoadPdf();
+      if (btn) btn.textContent = "Building…";
+      pm.createPdf(buildDocDefinition(rows, opts)).download(name);
+    } else {
+      const wb = buildWorkbook(rows, opts);
+      const buf = await wb.xlsx.writeBuffer();
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);
+    }
+    noteChange("(export)", "Export", exportLogFrom(XSTATE.format, jobs.length), filtersSummary(f, BLOCKNAMES));
+    toast("Downloading " + name);
+  } catch (e) {
+    name = null;
+    toast("Export failed: " + ((e && e.message) || String(e)).slice(0, 160), true);
+  }
+  XBUSY = false;
+  if ($("#xdl")) $("#xdl").textContent = "Download";
+  xpUpdateCount();
+  return name;
+}
+
 /* ---------- render ---------- */
 function filtered() {
   const q = state.q.trim().toLowerCase();
@@ -1746,10 +2132,15 @@ async function start() {
   $("#changebtn").onclick = () => renderChanges();
   $("#versbtn").onclick = () => renderVersions();
   $("#alertbtn").onclick = () => renderAlertsWindow();
+  $("#exportbtn").onclick = () => renderExportWindow();
+  /* the logo is looked for once, here, so the export path itself never has to
+     go and get anything - and a missing file is simply a PDF without a logo */
+  xpLoadLogo();
   updateChangeBtn();
   cpWatchExit();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
   });
