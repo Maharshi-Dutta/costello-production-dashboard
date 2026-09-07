@@ -4,9 +4,12 @@
 
 const CLIENT_ID = "a989939b-17f3-4c9c-adb7-4d8338f4878a";
 const TENANT_ID = "cb4cfc4c-96f4-44c0-b37b-a467826f86d6";
-/* Sites.ReadWrite.All is for the SharePoint list that holds the hand-set
-   phases - never for the workbook, which stays on Files.ReadWrite.All. */
-const SCOPES = ["Files.ReadWrite.All", "Sites.ReadWrite.All", "User.Read"];
+/* Sign-in and every workbook call use SCOPES. The SharePoint list that holds
+   the hand-set phases needs Sites.ReadWrite.All as well - asked for ONLY on
+   list requests, so a tenant that has not consented to it yet still signs in
+   and works; the phase list simply reports that it needs permission. */
+const SCOPES = ["Files.ReadWrite.All", "User.Read"];
+const LIST_SCOPES = ["Files.ReadWrite.All", "Sites.ReadWrite.All", "User.Read"];
 const SITE_PATH = "costellowindowsie.sharepoint.com:/sites/ProductionProgress";
 const FILE_MATCH = "production work in progress";
 const G = "https://graph.microsoft.com/v1.0";
@@ -51,23 +54,30 @@ function signOut() {
 }
 
 let tokenOverride = null;     // rehearsal harness only: a token without the sign-in library
-async function token() {
+/* quiet = never open a consent popup (background reads); a popup is only ever
+   opened for the sign-in scopes, or for the list scopes from a user's click. */
+async function token(scopes, quiet) {
   if (tokenOverride) return tokenOverride();
   if (!account) throw new Error("not signed in");
+  scopes = scopes || SCOPES;
   try {
-    const r = await app().acquireTokenSilent({ scopes: SCOPES, account: account });
+    const r = await app().acquireTokenSilent({ scopes: scopes, account: account });
     return r.accessToken;
   } catch (e) {
-    const r = await app().acquireTokenPopup({ scopes: SCOPES, account: account });
+    if (quiet) throw new Error("permission needed: " + ((e && e.errorCode) || (e && e.message) || "consent"));
+    const r = await app().acquireTokenPopup({ scopes: scopes, account: account });
     return r.accessToken;
   }
 }
+/** Ask (once, with a popup if needed) for the list permission - from a click only. */
+async function listConsent() { return token(LIST_SCOPES, false); }
 
 /* The workbook session header belongs to workbook requests only: sending a
    stale one at /sites/{id}/lists would earn an InvalidSession 400 on a call
    that has nothing to do with the workbook. */
 async function headers(extra, path) {
-  const h = { Authorization: "Bearer " + (await token()) };
+  const isList = path != null && path.indexOf("/lists") >= 0;
+  const h = { Authorization: "Bearer " + (await token(isList ? LIST_SCOPES : SCOPES, isList)) };
   if (sessionId && (path == null || path.indexOf("/workbook") >= 0)) h["workbook-session-id"] = sessionId;
   return Object.assign(h, extra || {});
 }
@@ -917,6 +927,8 @@ async function listItemsFor(displayName, title) {
 }
 
 async function listUpsert(displayName, title, fields) {
+  await listConsent();                    // a click: the one place the list permission may be asked for
+
   const id = await listId(displayName);
   if (!id) throw new Error("The \u201c" + displayName + "\u201d list is not in SharePoint.");
   const f = await findFile();
@@ -955,6 +967,8 @@ async function listUpsert(displayName, title, fields) {
     two browsers writing at once cannot survive a clear.
     false = there was nothing to remove. */
 async function listDelete(displayName, title) {
+  await listConsent();                    // a click: the one place the list permission may be asked for
+
   const id = await listId(displayName);
   if (!id) return false;
   const f = await findFile();
@@ -977,6 +991,7 @@ window.CW = {
   ensureAlertsSheet, addAlert, removeAlert, ALERTS_SHEET,
   listVersions, downloadVersion, restoreVersion,
   listId, listItems, listItemsFor, listUpsert, listDelete,
+  listConsent, LIST_SCOPES,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   /* tests only: forget which dashboard sheets have been seen, so the creation

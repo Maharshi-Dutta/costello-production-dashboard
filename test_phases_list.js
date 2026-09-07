@@ -208,10 +208,11 @@ function useJobs(list) {
   let n = 0; const pass = t => { n++; console.log("  ok  " + t); };
 
   /* ---- 1. the scope ---- */
-  assert.ok(SCOPES.indexOf("Sites.ReadWrite.All") >= 0, "the list needs its own scope");
-  assert.ok(SCOPES.indexOf("Files.ReadWrite.All") >= 0, "and the workbook still needs its own");
-  assert.ok(SCOPES.indexOf("User.Read") >= 0);
-  pass("Sites.ReadWrite.All is asked for at sign-in, alongside the workbook scope");
+  assert.ok(SCOPES.indexOf("Sites.ReadWrite.All") < 0, "sign-in must not depend on the list permission");
+  assert.ok(LIST_SCOPES.indexOf("Sites.ReadWrite.All") >= 0, "the list asks for its own scope");
+  assert.ok(SCOPES.indexOf("Files.ReadWrite.All") >= 0 && LIST_SCOPES.indexOf("Files.ReadWrite.All") >= 0, "the workbook scope stays in both");
+  assert.ok(typeof CW.listConsent === "function", "a click can ask for the list permission");
+  pass("Sites.ReadWrite.All is asked for on list requests only, never at sign-in");
 
   /* ---- 2. the list id: found once, then remembered ---- */
   forget(); reset();

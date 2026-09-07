@@ -388,7 +388,10 @@ if (typeof setPhaseHook === "function") setPhaseHook(handPhase);
     line per change; no workbook write of any kind. */
 async function setPhaseByHand(j, n) {
   if (!j || PHASEBUSY[j.id]) return false;
-  if (PHASE_LIST_OK === null) await readPhases();          // the first read has not landed yet
+  if (PHASE_LIST_OK !== true) {                            // a click: ask for the list permission if it is still missing, then read
+    try { if (CW.listConsent) await CW.listConsent(); } catch (e) { toast(friendly(e), true); return false; }
+    await readPhases();
+  }
   if (PHASE_LIST_OK !== true) { toast(PHASE_LIST_MISSING, true); return false; }
   n = Number(n);
   if (!isFinite(n) || n < 0 || n >= PHASES.length) return false;
