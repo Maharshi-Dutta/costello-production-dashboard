@@ -316,9 +316,11 @@ const PHASE_LIST = "Dashboard phases";
 const PHASE_LIST_MISSING = "The \u201cDashboard phases\u201d list is not in SharePoint yet, so phases cannot be set here. " +
   "Ask the manager to add it - nothing in the Excel file is involved.";
 const PHASE_BELOW_SHEET = "the sheet already shows this job past this step";
+const PHASE_NEED_CONSENT = "Setting phases needs a SharePoint permission that has not been granted yet. Nothing in the Excel file is involved.";
 const PHASE_CHECKING = "checking…";      // the first read of the list has not answered yet
 let PHASES_SET = {};          // { JOB: { phase, name, who, at } } - everyone's hand-set phases
 let PHASE_LIST_OK = null;     // null: not looked yet · false: no such list · true: read it
+let PHASE_LIST_CONSENT = false; // the last read failed because the list permission has not been granted yet
 let phaseWarned = false;      // one toast per page for a list that will not read
 const PHASEBUSY = {};         // job -> true while its write is in flight
 
@@ -353,7 +355,9 @@ async function readPhases() {
     });
     PHASES_SET = next;
   } catch (e) {
-    if (!phaseWarned) { phaseWarned = true; toast("Could not read the hand-set phases: " + friendly(e), true); }
+    PHASE_LIST_CONSENT = /permission needed/.test((e && e.message) || "");   // a click may ask for it
+    if (PHASE_LIST_CONSENT) { PHASE_LIST_OK = false; }                         // known state, not an error: the drawer explains it
+    else if (!phaseWarned) { phaseWarned = true; toast("Could not read the hand-set phases: " + friendly(e), true); }
   }
   return PHASES_SET;
 }
@@ -388,11 +392,11 @@ if (typeof setPhaseHook === "function") setPhaseHook(handPhase);
     line per change; no workbook write of any kind. */
 async function setPhaseByHand(j, n) {
   if (!j || PHASEBUSY[j.id]) return false;
-  if (PHASE_LIST_OK !== true) {                            // a click: ask for the list permission if it is still missing, then read
+  if (PHASE_LIST_OK === null || PHASE_LIST_CONSENT) {      // first read pending, or it failed for want of permission:
     try { if (CW.listConsent) await CW.listConsent(); } catch (e) { toast(friendly(e), true); return false; }
-    await readPhases();
+    await readPhases();                                     // a click is the one place the consent popup may open
   }
-  if (PHASE_LIST_OK !== true) { toast(PHASE_LIST_MISSING, true); return false; }
+  if (PHASE_LIST_OK !== true) { toast(PHASE_LIST_CONSENT ? PHASE_NEED_CONSENT : PHASE_LIST_MISSING, true); return false; }
   n = Number(n);
   if (!isFinite(n) || n < 0 || n >= PHASES.length) return false;
   const sheet = jobPhase(j);
@@ -2216,10 +2220,13 @@ function phasePipeHtml(j, ed) {
   const hand = handPhase(j);
   const info = handPhaseInfo(j);
   const wait = !!PHASEBUSY[j.id];
-  const missing = ed && PHASE_LIST_OK === false;
+  /* the list could not be read because the SharePoint permission has not
+     been granted yet: the administrator's click is what grants it */
+  const consent = ed && PHASE_LIST_CONSENT;
+  const missing = ed && PHASE_LIST_OK === false && !consent;
   /* the first read of the list has not answered yet: the steps are there, but
      nothing can be chosen until we know there is somewhere to put the answer */
-  const checking = ed && PHASE_LIST_OK !== true && !missing;
+  const checking = ed && PHASE_LIST_OK !== true && !missing && !consent;
   const clickable = ed && !missing;
   const step = (p, i) => {
     const cls = "phstep" + (i < cur ? " done" : i === cur ? " now" : "") + (i === hand ? " hand" : "");
@@ -2228,11 +2235,12 @@ function phasePipeHtml(j, ed) {
     if (!clickable) return '<div class="' + cls + '"' + (i === cur ? ' aria-current="step"' : "") + '>' + inner + '</div>';
     const below = i < sheet;
     const title = checking ? PHASE_CHECKING
+      : consent ? (isAdmin() ? "click to grant the SharePoint permission, then set this phase" : PHASE_NEED_CONSENT)
       : below ? PHASE_BELOW_SHEET
       : i === hand ? "click again to clear this and go back to what the sheet shows"
       : "set this job to " + p;
     return '<button type="button" class="' + cls + '" data-ph="' + i + '"' +
-      (below || wait || checking ? " disabled" : "") + ' title="' + esc(title) + '"' +
+      (below || wait || checking || (consent && !isAdmin()) ? " disabled" : "") + ' title="' + esc(title) + '"' +
       (i === cur ? ' aria-current="step"' : "") + '>' + inner + '</button>';
   };
   let note = "";
@@ -2244,6 +2252,8 @@ function phasePipeHtml(j, ed) {
     note = '<div class="phset">Just set here \u2014 saving to the phases list\u2026</div>';
   }
   if (missing) note += '<div class="phset warn">' + esc(PHASE_LIST_MISSING) + '</div>';
+  else if (consent) note += '<div class="phset warn">' + esc(PHASE_NEED_CONSENT) +
+    (isAdmin() ? " Click any step to grant it." : "") + '</div>';
   else if (checking) note += '<div class="phset">Checking the <strong>Dashboard phases</strong> list…</div>';
   else if (clickable) note += '<div class="phset">Click a step to set the phase by hand. Shared with everyone through the ' +
     '<strong>Dashboard phases</strong> list in SharePoint \u2014 the Excel file is not touched.</div>';
