@@ -122,7 +122,13 @@ function applyPendV() {
 
 let CHANGES = [];                     // what has changed while this page has been open
 try { CHANGES = JSON.parse(localStorage.getItem("cw_changes") || "[]"); } catch (e) { CHANGES = []; }
-const saveChanges = () => { try { localStorage.setItem("cw_changes", JSON.stringify(CHANGES.slice(0, 400))); } catch (e) {} };
+/* Alert lines carry an email address, and a subscription lives in the workbook
+   only - never in this browser beyond the 180 s hold below. They are left out
+   of the cached copy and come back from the Dashboard Log sheet on the next
+   read, so the Changes window still shows them. */
+const saveChanges = () => { try {
+  localStorage.setItem("cw_changes", JSON.stringify(CHANGES.filter(c => c.what !== "Alert").slice(0, 400)));
+} catch (e) {} };
 let state = { q: "", cat: null, sheet: null, sort: "id", desc: false, sel: null, edit: false,
               scope: "", view: "flat", picked: {}, collapsed: {}, hidden: {} };
 let VIEWS = {};            // view name -> { job -> {group, order} }  (from the workbook)
@@ -355,6 +361,11 @@ async function load(reason, force) {
       VIEWS = next;
     }
     applyPendV();
+    /* who is the administrator, and who is subscribed to what. Both come out
+       of the workbook on every read; nothing about them is kept in this
+       browser except the 180 s hold on a change just made here. */
+    readAlertSheets(wb);
+    if ($("#ahost")) renderAlertsWindow();      // an open Alerts window must not go stale
     /* the shared history lives in the workbook, so everyone sees the same list */
     const logWs = wb.getWorksheet("Dashboard Log");
     if (logWs) {
@@ -579,6 +590,365 @@ function cpReplayQueue() {
   return n;
 }
 
+/* ---------- job alerts ----------------------------------------------------
+   A person subscribes an email address to a job; a flow inside the tenant
+   emails each address its jobs and their comments. The dashboard only manages
+   the subscriptions, and they live in the Dashboard Alerts sheet - never here.
+   HARD RULE: no address and no domain is written down in this file. The
+   administrator's address comes from the Dashboard Config sheet at run time,
+   and the only domain an address may belong to is that address's own.      */
+const CONFIG_SHEET = "Dashboard Config";
+/* said in one place, used in both: the drawer and the Alerts window */
+const ALERT_NOTE = "Emails go out every 3rd day at 08:00 to each address listed here, one email per address.";
+const ALERT_ADMIN_ONLY = "Only the administrator can change alerts.";
+let CONFIG = {};                 // Dashboard Config, read-only for the dashboard
+let ALERTS = {};                 // job -> [{email, who, when}], from Dashboard Alerts
+let ALCONF = {};                 // job|email -> the inline "Remove?" is showing
+
+/* The optimistic hold, the same idea as PENDV: SharePoint needs ~36 s to put
+   our change into the downloadable file, so a chip appears (or goes) at once
+   and is held until the file agrees, or for 180 s, whichever comes first. */
+let PENDA = {};
+try { PENDA = JSON.parse(localStorage.getItem("cw_penda") || "{}"); } catch (e) { PENDA = {}; }
+/* An address may sit in this browser for the length of the hold and not a
+   moment longer. Expiring it only during a successful load would leave one
+   here for as long as a tab sat open on a workbook that never reloaded, or
+   was simply closed and re-opened, so the rule is applied wherever the store
+   is touched: on the way in, and before anything is written back out. */
+function purgePendA() {
+  const now = Date.now(); let changed = false;
+  Object.keys(PENDA).forEach(k => {
+    if (now - ((PENDA[k] || {}).at || 0) > PENDING_MS) { delete PENDA[k]; changed = true; }
+  });
+  return changed;
+}
+const savePendA = () => { purgePendA(); try { localStorage.setItem("cw_penda", JSON.stringify(PENDA)); } catch (e) {} };
+if (purgePendA()) savePendA();       // holds left behind by an earlier visit, before anyone can see them
+const alKey = (job, email) => job + "|" + email;
+function pendAlert(job, email, act, who, when) {
+  PENDA[alKey(job, email)] = { act: act, who: who || "", when: when || nowStamp(), at: Date.now() };
+  savePendA();
+}
+function dropPendAlert(job, email) { delete PENDA[alKey(job, email)]; savePendA(); }
+function alPut(job, email, who, when) {
+  const list = ALERTS[job] = ALERTS[job] || [];
+  if (!list.some(x => x.email === email)) list.push({ email: email, who: who || "", when: when || nowStamp() });
+}
+function alDrop(job, email) { if (ALERTS[job]) ALERTS[job] = ALERTS[job].filter(x => x.email !== email); }
+/** Re-apply the held adds and removes over what a freshly read sheet says, and
+    let a hold go the moment the file agrees with it. Called from load(). */
+function applyPendA() {
+  let changed = purgePendA();                     // the age rule lives in one place
+  Object.keys(PENDA).forEach(k => {
+    const p = PENDA[k], i = k.indexOf("|"), job = k.slice(0, i), email = k.slice(i + 1);
+    const has = (ALERTS[job] || []).some(x => x.email === email);
+    if (p.act === "add" ? has : !has) { delete PENDA[k]; changed = true; return; }
+    if (p.act === "add") alPut(job, email, p.who, p.when); else alDrop(job, email);
+  });
+  if (changed) savePendA();
+}
+
+/** One cell of a dashboard sheet in the downloaded workbook, as text. Excel
+    sometimes turns our text stamp back into a real date; write it out again
+    in the same shape rather than letting a locale guess at it. */
+function sheetText(row, i) {
+  const v = row.getCell(i).value;
+  if (v == null) return "";
+  if (v instanceof Date) {
+    const p = n => (n < 10 ? "0" : "") + n;
+    return v.getFullYear() + "-" + p(v.getMonth() + 1) + "-" + p(v.getDate()) +
+           " " + p(v.getHours()) + ":" + p(v.getMinutes());
+  }
+  return v.text != null ? v.text : String(v);
+}
+
+/** Read both alert sheets out of a freshly downloaded workbook. Neither is
+    written here: Config is read-only for the dashboard, and a missing sheet or
+    a missing key simply means nobody is the administrator. */
+function readAlertSheets(wb) {
+  const cfg = {};
+  const cws = wb.getWorksheet(CONFIG_SHEET);
+  if (cws) for (let r = 2; r <= (cws.rowCount || 0); r++) {
+    const row = cws.getRow(r), k = sheetText(row, 1).trim().toLowerCase();
+    if (k) cfg[k] = sheetText(row, 2).trim();
+  }
+  CONFIG = cfg;
+  const next = {};
+  const aws = wb.getWorksheet(CW.ALERTS_SHEET);
+  if (aws) for (let r = 2; r <= (aws.rowCount || 0); r++) {
+    const row = aws.getRow(r);
+    const job = sheetText(row, 1).trim().toUpperCase(), email = sheetText(row, 2).trim().toLowerCase();
+    if (!job || !email) continue;                      // a blanked line is a removed subscription
+    const list = next[job] = next[job] || [];
+    if (!list.some(x => x.email === email)) list.push({ email: email, who: sheetText(row, 3).trim(), when: sheetText(row, 4).trim() });
+  }
+  ALERTS = next;
+  applyPendA();
+}
+
+const adminAddress = () => String(CONFIG.admin || "").trim().toLowerCase();
+const adminDomain = () => adminAddress().split("@")[1] || "";
+/* Client-side gating only. This decides what the dashboard offers; it is not a
+   permission. Anyone who can edit the workbook can edit the sheet in Excel -
+   SharePoint's own permissions are the real protection. */
+function isAdmin() {
+  const a = adminAddress();
+  return !!a && String(whoAmI()).trim().toLowerCase() === a;
+}
+
+/** trim, lower-case, must look like an address, and must be in the same domain
+    as the administrator's own address. Both come from the workbook. */
+const ALERT_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+function alertEmailCheck(raw) {
+  const e = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!e) return { ok: false, msg: "Type an email address first." };
+  if (!ALERT_EMAIL_RE.test(e)) return { ok: false, msg: "That is not an email address." };
+  const dom = adminDomain();
+  if (!dom) return { ok: false, msg: "No administrator is set in the " + CONFIG_SHEET + " sheet, so nothing can be added." };
+  if (e.split("@")[1] !== dom) return { ok: false, msg: "Only addresses in the administrator's own organisation can be added." };
+  return { ok: true, email: e };
+}
+
+const alertsFor = job => (ALERTS[job] || []).slice().sort((a, b) => a.email.localeCompare(b.email));
+/** Every address already used anywhere, for the one-tap quick-add chips. */
+function alertAddresses() {
+  const seen = {};
+  Object.keys(ALERTS).forEach(j => (ALERTS[j] || []).forEach(a => { seen[a.email] = 1; }));
+  return Object.keys(seen).sort();
+}
+function alertsByAddress() {
+  const m = {};
+  Object.keys(ALERTS).forEach(job => (ALERTS[job] || []).forEach(a =>
+    (m[a.email] = m[a.email] || []).push({ job: job, who: a.who, when: a.when })));
+  Object.keys(m).forEach(e => m[e].sort((x, y) => x.job.localeCompare(y.job)));
+  return m;
+}
+/** A finished job is never emailed: it has left the "In production" section,
+    or its row has gone gold. Nobody is told - it just stops. While the section
+    names are unknown (nothing loaded yet) nothing is called finished. */
+function alertFinished(j) {
+  if (!j) return true;                       // no longer on the Production sheet at all
+  if (j.done) return true;
+  const idx = sectionIdx("In production");
+  return idx < 0 ? false : j.blk !== idx;
+}
+
+/** Subscribe one address to one job: hold it, write it, log it. Resolves
+    {ok, email} or {ok:false, msg} - the caller shows msg inline. */
+async function addJobAlert(job, raw) {
+  if (!isAdmin()) return { ok: false, msg: ALERT_ADMIN_ONLY };
+  const v = alertEmailCheck(raw);
+  if (!v.ok) return v;
+  const id = String(job).trim().toUpperCase(), email = v.email, who = whoAmI();
+  if ((ALERTS[id] || []).some(x => x.email === email)) return { ok: true, already: true, email: email };
+  pendAlert(id, email, "add", who);
+  alPut(id, email, who);
+  refreshAlerts();
+  try {
+    await CW.addAlert(id, email, who);
+    noteChange(id, "Alert", "", email);
+    scheduleReconcile();
+    return { ok: true, email: email };
+  } catch (e) {
+    dropPendAlert(id, email); alDrop(id, email); refreshAlerts();
+    toast(friendly(e), true);
+    return { ok: false, msg: friendly(e) };
+  }
+}
+
+/** Unsubscribe one address from one job. */
+async function removeJobAlert(job, email) {
+  if (!isAdmin()) return { ok: false, msg: ALERT_ADMIN_ONLY };
+  const id = String(job).trim().toUpperCase(), e = String(email).trim().toLowerCase();
+  const had = (ALERTS[id] || []).find(x => x.email === e);
+  if (!had) return { ok: true, already: true, email: e };
+  pendAlert(id, e, "del", whoAmI());
+  alDrop(id, e);
+  delete ALCONF[alKey(id, e)];
+  refreshAlerts();
+  try {
+    await CW.removeAlert(id, e);
+    noteChange(id, "Alert", e, "");
+    scheduleReconcile();
+    return { ok: true, email: e };
+  } catch (err) {
+    dropPendAlert(id, e); alPut(id, e, had.who, had.when); refreshAlerts();
+    toast(friendly(err), true);
+    return { ok: false, msg: friendly(err) };
+  }
+}
+
+/** The selection bar's "Alert to…": one address, every ticked job, one log
+    line each. The writes are queued per sheet inside graph.js. */
+async function alertMany(jobs, raw) {
+  if (!isAdmin()) { toast(ALERT_ADMIN_ONLY, true); return { ok: false, msg: ALERT_ADMIN_ONLY, added: 0 }; }
+  const v = alertEmailCheck(raw);
+  if (!v.ok) return { ok: false, msg: v.msg, added: 0 };
+  setStatus("subscribing " + jobs.length + " job" + (jobs.length > 1 ? "s" : "") + "…", "busy");
+  let added = 0, stopped = null;
+  for (let i = 0; i < jobs.length; i++) {
+    const r = await addJobAlert(jobs[i], v.email);
+    /* stop at the first refusal rather than working through the rest: whatever
+       Excel objected to will object again, and the person would get a toast
+       per job. addJobAlert has already said what went wrong once. */
+    if (!r.ok) { stopped = r.msg; break; }
+    added++;
+  }
+  if (stopped) {
+    /* the status line was ours to set, so it is ours to correct - but this is
+       not "live", it is an edit that did not land */
+    setStatus("alerts: " + added + " of " + jobs.length + " saved", "err");
+    return { ok: false, msg: stopped, added: added };
+  }
+  setStatus("live");
+  toast(added + " of " + jobs.length + " job" + (jobs.length > 1 ? "s" : "") + " will be emailed");
+  state.picked = {}; renderAll();
+  return { ok: true, added: added, email: v.email };
+}
+
+/** Redraw whatever alert UI happens to be open. */
+function refreshAlerts() {
+  if ($("#ahost")) renderAlertsWindow();
+  if ($("#dhost") && state.sel && byId(state.sel)) renderDrawer();
+}
+
+/* ---- the drawer's Alerts section ---- */
+const alWhen = w => String(w || "").slice(0, 10);
+function alChipHtml(job, a, admin) {
+  const asking = !!ALCONF[alKey(job, a.email)];
+  return '<span class="alchip"><span class="alwho"><b>' + esc(a.email) + '</b>' +
+    (a.who || a.when ? '<span class="alsub">added by ' + esc(shortWho(a.who) || "someone") +
+      (a.when ? " · " + esc(alWhen(a.when)) : "") + '</span>' : "") + '</span>' +
+    (admin ? (asking
+      ? '<span class="alconf">Remove?<button class="albtn yes" data-al-yes="' + esc(a.email) + '">Yes</button>' +
+        '<button class="albtn" data-al-no="' + esc(a.email) + '">No</button></span>'
+      : '<button class="alx" data-al-x="' + esc(a.email) + '" title="Remove this address">&times;</button>') : "") +
+    '</span>';
+}
+function alertsSectionHtml(j) {
+  const list = alertsFor(j.id), admin = isAdmin();
+  const known = alertAddresses().filter(e => !list.some(x => x.email === e));
+  return '<div class="sect"><span class="kick">Alerts (' + list.length + ')</span>' +
+    (alertFinished(j) ? '<div class="alfin">Finished — no more emails for this job.</div>' : "") +
+    (list.length ? '<div class="alchips">' + list.map(a => alChipHtml(j.id, a, admin)).join("") + '</div>'
+                 : '<div style="font-size:13px;color:var(--ink-4)">Nobody is subscribed to this job.</div>') +
+    (admin
+      ? '<div class="alrow"><input class="alin" id="alnew" type="email" inputmode="email" autocomplete="off" ' +
+          'spellcheck="false" placeholder="Email address"><button class="btn" id="aladd">Save</button></div>' +
+        '<div class="alerr" id="alerr" hidden></div>' +
+        (known.length ? '<div class="alquick"><span class="kick">Already used elsewhere</span>' +
+          known.map(e => '<button class="chip alq" data-al-quick="' + esc(e) + '">' + esc(e) + '</button>').join("") + '</div>' : "")
+      : '<div style="font-size:12px;color:var(--ink-4)">' + ALERT_ADMIN_ONLY + '</div>') +
+    '<div class="alnote">' + ALERT_NOTE + '</div></div>';
+}
+function wireAlerts(host, id) {
+  const err = m => { const b = $("#alerr"); if (b) { b.textContent = m; b.hidden = false; } };
+  const save = async raw => {
+    const r = await addJobAlert(id, raw);
+    if (!r.ok) { err(r.msg); return; }
+    /* the address is a chip now, so empty the box - and let it go, or the next
+       re-render would put the text back out of the still-focused field */
+    const box = $("#alnew");
+    if (box) { box.value = ""; try { box.blur(); } catch (e) {} }
+  };
+  const add = $("#aladd");
+  if (add) add.onclick = () => { const box = $("#alnew"); save(box ? box.value : ""); };
+  const box = $("#alnew");
+  if (box) box.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); save(box.value); } };
+  host.querySelectorAll("[data-al-quick]").forEach(b => b.onclick = () => save(b.dataset.alQuick));
+  host.querySelectorAll("[data-al-x]").forEach(b => b.onclick = () => {
+    ALCONF[alKey(id, b.dataset.alX)] = 1; refreshAlerts();
+  });
+  host.querySelectorAll("[data-al-no]").forEach(b => b.onclick = () => {
+    delete ALCONF[alKey(id, b.dataset.alNo)]; refreshAlerts();
+  });
+  host.querySelectorAll("[data-al-yes]").forEach(b => b.onclick = () => removeJobAlert(id, b.dataset.alYes));
+}
+
+/* ---- the Alerts window: every subscription, grouped by address ---- */
+function renderAlertsWindow() {
+  let host = $("#ahost");
+  if (!host) { host = document.createElement("div"); host.id = "ahost"; document.body.appendChild(host); }
+  const by = alertsByAddress(), addrs = Object.keys(by).sort(), admin = isAdmin();
+  const n = addrs.reduce((a, e) => a + by[e].length, 0);
+  host.innerHTML = '<div class="scrim" id="ascrim"></div><div class="logwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Alerts</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + n + ' subscription' + (n === 1 ? "" : "s") +
+      ' across ' + addrs.length + ' address' + (addrs.length === 1 ? "" : "es") + ' · ' + ALERT_NOTE + '</div></div>' +
+      '<button class="ghost" id="aclose">Close</button></div>' +
+    '<div class="logbody">' + (addrs.length ? addrs.map(e => {
+      const rows = by[e];
+      return '<div class="agroup"><div class="ahead"><span class="gname">' + esc(e) + '</span>' +
+        '<span class="gcount">' + rows.length + ' job' + (rows.length === 1 ? "" : "s") + '</span></div>' +
+        rows.map(r => {
+          const j = byId(r.job), fin = alertFinished(j), pair = esc(r.job) + "|" + esc(e);
+          /* the same inline "Remove?" as the drawer chip, sharing ALCONF, so a
+             stray tap in either place never removes anything on its own */
+          const asking = !!ALCONF[alKey(r.job, e)];
+          return '<div class="arow"><button class="stn jump" data-j="' + esc(r.job) + '" style="border:0;cursor:pointer">' +
+            esc(r.job) + '</button>' +
+            '<span class="ell">' + esc(j ? (j.cust || "—") : "—") + '</span>' +
+            '<span class="ell asect" style="color:var(--ink-3)">' + esc(j ? (BLOCKNAMES[j.blk] || "—") : "not on the sheet") + '</span>' +
+            '<span>' + (fin ? '<span class="badge" style="background:var(--surface-2);color:var(--ink-3)">Finished</span>'
+                            : '<span class="badge" style="background:var(--green-bg);color:var(--green)">Emailing</span>') + '</span>' +
+            '<span class="aact">' + (admin ? (asking
+              ? '<span class="alconf">Remove?<button class="albtn yes" data-a-yes="' + pair + '">Yes</button>' +
+                '<button class="albtn" data-a-no="' + pair + '">No</button></span>'
+              : '<button class="albtn" data-a-ask="' + pair + '">Remove</button>') : "") + '</span>' +
+            '</div>';
+        }).join("") + '</div>';
+    }).join("") : '<div class="empty">No job has an email alert yet.' +
+        (admin ? '<br><span style="font-size:12px">Open a job and add an address in its Alerts section.</span>' : "") + '</div>') +
+    '</div><div class="foot"><span>' + (admin ? "You can add and remove alerts" : ALERT_ADMIN_ONLY) +
+    '</span><span>Click a job number to open it</span></div></div>';
+  $("#ascrim").onclick = () => host.remove();
+  $("#aclose").onclick = () => host.remove();
+  host.querySelectorAll(".jump").forEach(b => b.onclick = () => {
+    host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer();
+  });
+  const pairOf = v => { const i = String(v).indexOf("|"); return [String(v).slice(0, i), String(v).slice(i + 1)]; };
+  host.querySelectorAll("[data-a-ask]").forEach(b => b.onclick = () => {
+    const p = pairOf(b.dataset.aAsk); ALCONF[alKey(p[0], p[1])] = 1; renderAlertsWindow();
+  });
+  host.querySelectorAll("[data-a-no]").forEach(b => b.onclick = () => {
+    const p = pairOf(b.dataset.aNo); delete ALCONF[alKey(p[0], p[1])]; renderAlertsWindow();
+  });
+  host.querySelectorAll("[data-a-yes]").forEach(b => b.onclick = () => {
+    const p = pairOf(b.dataset.aYes); removeJobAlert(p[0], p[1]);
+  });
+}
+
+/** "Alert to…" for the ticked jobs: the addresses already in use, plus a box. */
+function renderAlertMenu(anchor) {
+  const old = $("#alertmenu"); if (old) { old.remove(); return; }
+  const jobs = Object.keys(state.picked);
+  const m = document.createElement("div"); m.id = "alertmenu"; m.className = "menu";
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, r.left) + "px"; m.style.top = (r.bottom + 6) + "px";
+  const known = alertAddresses();
+  m.innerHTML = '<div class="kick" style="padding:4px 10px 6px">Email alerts for ' + jobs.length +
+      ' job' + (jobs.length > 1 ? "s" : "") + ' to</div>' +
+    (known.length ? known.map(e => '<button class="mrow" data-al="' + esc(e) + '">' + esc(e) + '</button>').join("")
+                  : '<div style="padding:2px 10px 6px;font-size:12px;color:var(--ink-4)">No address has been used yet.</div>') +
+    '<div class="alrow" style="padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:6px">' +
+      '<input class="alin" id="almin" type="email" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Email address">' +
+      '<button class="btn" id="almadd">Add</button></div>' +
+    '<div class="alerr" id="almerr" hidden style="margin:6px 10px"></div>' +
+    '<div class="alnote" style="padding:6px 10px">' + ALERT_NOTE + '</div>';
+  document.body.appendChild(m);
+  const go = async raw => {
+    const res = await alertMany(jobs, raw);
+    if (res.ok) m.remove();
+    else { const b = $("#almerr"); if (b) { b.textContent = res.msg; b.hidden = false; } }
+  };
+  m.querySelectorAll("[data-al]").forEach(b => b.onclick = () => go(b.dataset.al));
+  const addb = $("#almadd");
+  if (addb) addb.onclick = () => { const box = $("#almin"); go(box ? box.value : ""); };
+  setTimeout(() => document.addEventListener("click", function off(e) {
+    if (!m.contains(e.target) && e.target !== anchor) { m.remove(); document.removeEventListener("click", off); }
+  }), 0);
+}
+
 /* ---------- render ---------- */
 function filtered() {
   const q = state.q.trim().toLowerCase();
@@ -660,6 +1030,11 @@ function renderChips() {
     b.style.cssText = "background:var(--accent);color:#fff;border-color:var(--accent)";
     b.onclick = () => renderMoveMenu(b);
     c.appendChild(b);
+    if (isAdmin()) {                       // only the administrator changes alerts
+      const ab = mk("button", "chip", "Alert to…");
+      ab.onclick = () => renderAlertMenu(ab);
+      c.appendChild(ab);
+    }
     const cl = mk("button", "chip", "clear");
     cl.onclick = () => { state.picked = {}; renderAll(); };
     c.appendChild(cl);
@@ -1015,6 +1390,7 @@ function renderDrawer() {
      wiped out from under the fingers half way through */
   const act = document.activeElement;
   const typing = act && act.dataset && act.dataset.cpin ? { item: act.dataset.cpin, val: act.value } : null;
+  const alTyping = act && act.id === "alnew" ? act.value : null;   // a half-typed address, likewise
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
@@ -1066,6 +1442,7 @@ function renderDrawer() {
               : '<div style="font-size:12px;color:var(--ink-4)">Click <strong>Edit</strong> above to add a comment.</div>') +
           '</div>';
       })() +
+      alertsSectionHtml(j) +
       (j.notes.length ? '<div class="sect"><span class="kick">From the sheet</span>' +
         j.notes.map(n => '<div class="note"><div class="kick" style="margin-bottom:3px">' + esc(n.k) + ' · ' + esc(n.s) + '</div>' +
           '<div style="font-size:13px;line-height:1.45">' + esc(n.t) + '</div></div>').join("") + '</div>' : "") +
@@ -1075,9 +1452,16 @@ function renderDrawer() {
     const box = host.querySelector('.cpin[data-cpin="' + typing.item + '"]');
     if (box) { box.value = typing.val; try { box.focus(); } catch (e) {} }
   }
+  if (alTyping) {
+    const box = host.querySelector("#alnew");
+    if (box) { box.value = alTyping; try { box.focus(); } catch (e) {} }
+  }
   $("#dscrim").onclick = closeDrawer;
   $("#dclose").onclick = closeDrawer;
   $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
+  /* the Alerts section is not part of Edit mode: it never touches the
+     Production sheet, and only the administrator sees its controls at all */
+  wireAlerts(host, j.id);
 
   if (ed) {
     const mr = $("#markready");
@@ -1361,6 +1745,7 @@ async function start() {
   $("#refreshbtn").onclick = () => load("refreshing…");
   $("#changebtn").onclick = () => renderChanges();
   $("#versbtn").onclick = () => renderVersions();
+  $("#alertbtn").onclick = () => renderAlertsWindow();
   updateChangeBtn();
   cpWatchExit();
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });

@@ -419,6 +419,92 @@ async function saveProgressMany(job, items, who) {
   });
 }
 
+/* ---- job alerts ----------------------------------------------------------
+   Who gets emailed about a job. One row per (Job, Email), the address stored
+   lower-cased, removal = blanking the row like clearAssignment. Everything
+   here addresses ALERTS_SHEET by constant, like the log, the views and the
+   progress sheet, so no call site can point a write at Production. Nothing is
+   read from or written to the Dashboard Config sheet here: the dashboard only
+   ever reads that one, out of the downloaded workbook.                      */
+const ALERTS_SHEET = "Dashboard Alerts";
+const ALERTS_HEADERS = [["Job", "Email", "Added by", "When"]];
+const TEXT4 = [["@", "@", "@", "@"]];
+let alertsReady = null;
+
+function ensureAlertsSheet() {
+  if (alertsReady) return alertsReady;
+  alertsReady = makeAlertsSheet();
+  alertsReady.catch(() => { alertsReady = null; });
+  return alertsReady;
+}
+async function makeAlertsSheet() {
+  const f = await findFile();
+  const ws = await call("GET", f.base + "/worksheets");
+  if (!(ws.value || []).some(w => w.name === ALERTS_SHEET)) {
+    await call("POST", f.base + "/worksheets/add", { name: ALERTS_SHEET });
+    const S = f.base + "/worksheets('" + ALERTS_SHEET + "')";
+    await call("PATCH", S + "/range(address='A1:D1')", { values: ALERTS_HEADERS });
+    await call("PATCH", S + "/range(address='A1:D1')/format/font", { bold: true, color: "#FFFFFF" });
+    await call("PATCH", S + "/range(address='A1:D1')/format/fill", { color: "#17171A" });
+    /* text throughout, like the Progress sheet: an address is not a formula and
+       "2026-09-04 10:42" is not a date Excel should re-read in its own locale */
+    const fmt = []; for (let i = 0; i < 1999; i++) fmt.push(["@", "@", "@", "@"]);
+    await call("PATCH", S + "/range(address='A2:D2000')", { numberFormat: fmt });
+    const widths = { A: 70, B: 260, C: 220, D: 130 };
+    for (const c in widths)
+      await call("PATCH", S + "/range(address='" + c + ":" + c + "')/format", { columnWidth: widths[c] });
+  }
+  return true;
+}
+
+/** Subscribe one address to one job. Upsert: an existing (Job, Email) line is
+    written again rather than added a second time, and a line an earlier
+    removal blanked is used before the sheet is made any longer. */
+async function addAlert(job, email, who) {
+  await ensureAlertsSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + ALERTS_SHEET + "')";
+  const j = String(job).trim().toUpperCase(), e = String(email).trim().toLowerCase();
+  return serialised(ALERTS_SHEET, async () => {
+    const used = await call("GET", S + "/usedRange?$select=values,rowCount");
+    const rows = used.values || [];
+    let target = 0, spare = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const rj = String(rows[i][0] == null ? "" : rows[i][0]).trim().toUpperCase();
+      const re = String(rows[i][1] == null ? "" : rows[i][1]).trim().toLowerCase();
+      if (rj === j && re === e) { target = i + 1; break; }
+      if (!spare && !rj && !re) spare = i + 1;
+    }
+    if (!target) target = spare || (used.rowCount || 1) + 1;
+    await call("PATCH", S + "/range(address='A" + target + ":D" + target + "')", {
+      values: [[j, e, who || "", nowStamp()]], numberFormat: TEXT4
+    });
+    return target;
+  });
+}
+
+/** Unsubscribe: blank the line (A:D), the way a view assignment is cleared.
+    Blanks every matching line, in case one was typed twice by hand in Excel. */
+async function removeAlert(job, email) {
+  await ensureAlertsSheet();
+  const f = await findFile();
+  const S = f.base + "/worksheets('" + ALERTS_SHEET + "')";
+  const j = String(job).trim().toUpperCase(), e = String(email).trim().toLowerCase();
+  return serialised(ALERTS_SHEET, async () => {
+    const used = await call("GET", S + "/usedRange?$select=values");
+    const rows = used.values || [];
+    let n = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const rj = String(rows[i][0] == null ? "" : rows[i][0]).trim().toUpperCase();
+      const re = String(rows[i][1] == null ? "" : rows[i][1]).trim().toLowerCase();
+      if (rj !== j || re !== e) continue;
+      await call("PATCH", S + "/range(address='A" + (i + 1) + ":D" + (i + 1) + "')", { values: [["", "", "", ""]] });
+      n++;
+    }
+    return n;
+  });
+}
+
 /* ---- writes: always addressed by cell, never by rewriting the file ---- */
 const A1 = n => { let s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
 
@@ -737,8 +823,12 @@ window.CW = {
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
   ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,
+  ensureAlertsSheet, addAlert, removeAlert, ALERTS_SHEET,
   listVersions, downloadVersion, restoreVersion,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
+  /* tests only: forget which dashboard sheets have been seen, so the creation
+     branch of the ensure*Sheet functions can be exercised again */
+  _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
   get account() { return account; }
 };

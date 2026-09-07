@@ -474,7 +474,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   localStorage.setItem("cw_cpqueue", JSON.stringify([
     { key: "R0001|win", job: "R0001", item: "win", col: 13, from: 0, to: 3, total: 10, at: at, sent: 1 },
     { key: "R0001|drs", job: "R0001", item: "drs", col: 14, from: 0, to: 1, total: 2, at: at, sent: 0 },
-    { key: "R0001|glass:tg", job: "R0001", item: "glass:tg", col: 51, from: 0, to: 5, total: 25, at: at, who: "someone.else@costellowindows.ie" }
+    { key: "R0001|glass:tg", job: "R0001", item: "glass:tg", col: 51, from: 0, to: 5, total: 25, at: at, who: "someone.else@example.test" }
   ]));
   assert.strictEqual(cpReplayQueue(), 1, "only the unsent entry belonging to this person");
   await settle(120);

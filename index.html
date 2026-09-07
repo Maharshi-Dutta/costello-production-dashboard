@@ -68,7 +68,16 @@
   #q { width:100%; height:42px; padding:0 40px; border-radius:6px; border:1.5px solid var(--brand-line);
        background:var(--brand-2); color:var(--onbrand); font-size:14.5px; outline:none }
   #q:focus { border-color:#6aa9ec }
-  .tools { display:flex; align-items:center; gap:7px; font-size:12px; color:#a8a49a; flex-shrink:0 }
+  /* the tool row wraps: on a 360px phone the buttons cannot fit on one line,
+     and a row that refuses to wrap makes the whole page scroll sideways */
+  .tools { display:flex; align-items:center; gap:7px; font-size:12px; color:#a8a49a;
+           flex-shrink:0; flex-wrap:wrap; max-width:100% }
+  /* the signed-in address can be long; it is a label, not a layout decision */
+  #whobtn { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block }
+  @media (max-width:560px){
+    #status { display:none }        /* the live dot still says whether it is busy */
+    #whobtn { max-width:120px }
+  }
   .ghost { background:var(--brand-2); border:1px solid var(--brand-line); color:#d5d1c8;
            padding:7px 11px; border-radius:5px; font-size:12.5px; display:inline-flex; align-items:center; gap:6px }
   .ghost:hover { background:var(--brand-line); color:#fff }
@@ -210,6 +219,50 @@
     .cpbar, .cpctl { grid-column:1/-1 }
     .cpctl { justify-content:flex-start }
   }
+  /* alerts: who gets emailed about a job. Same thumb-sized controls as the
+     checkpoints - the admin adds people from a phone as often as a desk. */
+  .alchips { display:flex; flex-wrap:wrap; gap:7px }
+  .alchip { display:flex; align-items:center; gap:9px; min-height:46px; padding:3px 4px 3px 13px;
+            border:1px solid var(--line); border-radius:23px; background:var(--surface-2) }
+  .alwho { display:flex; flex-direction:column; line-height:1.3; min-width:0 }
+  .alwho b { font-size:13px; font-weight:600 }
+  .alsub { font-size:10.5px; color:var(--ink-4) }
+  .alx { width:40px; height:40px; border:0; border-radius:50%; background:transparent;
+         color:var(--ink-3); font-size:19px; line-height:1 }
+  .alx:hover { background:var(--line-soft); color:var(--ink) }
+  .alconf { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--ink-3) }
+  .albtn { min-height:40px; padding:0 13px; border:1px solid var(--line); border-radius:5px;
+           background:var(--surface); color:var(--ink); font-size:12.5px }
+  .albtn:hover { background:var(--surface-2) }
+  .albtn.yes { background:var(--urgent); border-color:var(--urgent); color:#fff }
+  .alrow { display:flex; gap:8px; align-items:center }
+  .alrow .btn { min-height:40px }
+  .alin { flex:1; min-width:0; height:40px; padding:0 11px; border:1px solid var(--line); border-radius:5px;
+          background:var(--surface); color:var(--ink); font:inherit; font-size:14px; outline:none }
+  .alin:focus { border-color:var(--accent) }
+  .alquick { display:flex; flex-wrap:wrap; gap:7px; align-items:center; margin-top:8px }
+  .alq { min-height:40px }
+  .alerr { font-size:12px; color:var(--urgent); background:var(--urgent-bg); border-radius:4px; padding:7px 10px }
+  .alfin { font-size:12px; color:var(--ink-3); background:var(--surface-2); border-left:3px solid var(--line);
+           padding:8px 11px; border-radius:0 4px 4px 0 }
+  .alnote { font-size:11.5px; color:var(--ink-4); line-height:1.45 }
+  .agroup { border-bottom:1px solid var(--line) }
+  .ahead { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--surface-2);
+           border-bottom:1px solid var(--line-soft); position:sticky; top:0; z-index:2 }
+  /* the last column is auto, not a fixed width: it holds either "Remove" or the
+     wider inline "Remove? Yes / No", and a fixed column would clip the answer */
+  .arow { display:grid; grid-template-columns:84px minmax(110px,1.2fr) minmax(110px,1fr) 96px auto;
+          gap:12px; align-items:center; padding:7px 16px; border-bottom:1px solid var(--line-soft); font-size:13px }
+  .arow:last-child { border-bottom:0 }
+  .aact { display:flex; gap:6px; align-items:center; justify-content:flex-end }
+  /* narrow: the section name goes and the buttons take a line of their own -
+     the Finished / Emailing badge stays, being the one thing that says whether
+     this address is still being emailed at all */
+  @media (max-width:700px){
+    .arow { grid-template-columns:84px minmax(0,1fr) 96px }
+    .arow>.asect { display:none }
+    .arow>.aact { grid-column:1/-1; justify-content:flex-start }
+  }
   .note { border-left:3px solid var(--done-dot); background:var(--surface-2); padding:9px 12px; border-radius:0 4px 4px 0 }
   .btn { background:var(--ink); color:var(--bg); border:0; padding:9px 15px; border-radius:5px; font-size:13px; font-weight:600 }
   .btn.sec { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
@@ -258,6 +311,7 @@
     <span class="dot" id="livedot"></span><span id="status">starting…</span>
     <button class="ghost" id="changebtn">Changes</button>
     <button class="ghost" id="versbtn">Versions</button>
+    <button class="ghost" id="alertbtn">Alerts</button>
     <button class="ghost" id="refreshbtn">Refresh</button>
     <button class="ghost" id="themebtn">Dark</button>
     <button class="ghost" id="whobtn">…</button>
@@ -274,7 +328,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260904-1447</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-0833</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -286,9 +340,9 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260904-1447"></script>
-<script src="graph.js?v=20260904-1447"></script>
-<script src="checkpoints.js?v=20260904-1447"></script>
-<script src="app.js?v=20260904-1447"></script>
+<script src="parser.js?v=20260907-0833"></script>
+<script src="graph.js?v=20260907-0833"></script>
+<script src="checkpoints.js?v=20260907-0833"></script>
+<script src="app.js?v=20260907-0833"></script>
 </body>
 </html>
