@@ -1,0 +1,404 @@
+<!doctype html><html><head><meta charset='utf-8'><base href='../'><title>Production Dashboard — User Guide</title><link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap'><style>
+@page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+html { font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; font-size: 10.5pt; color: #17171a; line-height: 1.5; }
+body { margin: 0; }
+.cover { height: 250mm; display: flex; flex-direction: column; justify-content: flex-end; page-break-after: always; border-left: 6px solid #184f95; padding-left: 14mm; }
+.cover .brand { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 700; font-size: 20pt; letter-spacing: .04em; text-transform: uppercase; color: #6d6a62; }
+.cover h1 { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 42pt; margin: 4mm 0 2mm; line-height: 1; }
+.cover .sub { font-size: 13pt; color: #4d4a44; margin-bottom: 10mm; }
+.cover .meta { font-size: 9.5pt; color: #6d6a62; }
+.toc { page-break-after: always; }
+.toc h2 { margin-top: 0; }
+.toc ul { list-style: none; padding-left: 0; columns: 1; }
+.toc li { margin: 2px 0; }
+.toc ul ul { padding-left: 14px; font-size: 9.5pt; color: #4d4a44; }
+.toc a { color: inherit; text-decoration: none; }
+h1 { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 22pt; margin: 0 0 6mm; }
+h2 { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 18pt; margin: 10mm 0 3mm; padding-bottom: 2mm; border-bottom: 2px solid #184f95; page-break-after: avoid; }
+h3 { font-size: 12.5pt; margin: 7mm 0 2mm; page-break-after: avoid; }
+h4 { font-size: 11pt; margin: 5mm 0 1.5mm; page-break-after: avoid; }
+p, li { orphans: 3; widows: 3; }
+img { max-width: 100%; height: auto; border: 1px solid #dcd9d2; border-radius: 4px; display: block; margin: 3mm auto 1mm; page-break-inside: avoid; }
+img + p > em:only-child { display: block; text-align: center; font-size: 9pt; color: #6d6a62; margin-bottom: 5mm; }
+table { border-collapse: collapse; width: 100%; font-size: 9.2pt; margin: 3mm 0 5mm; page-break-inside: auto; }
+th, td { border: 1px solid #dcd9d2; padding: 4px 7px; vertical-align: top; text-align: left; }
+th { background: #f2f1ee; font-weight: 600; }
+tr { page-break-inside: avoid; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 9pt; background: #f2f1ee; padding: 1px 4px; border-radius: 3px; }
+pre { background: #f2f1ee; padding: 8px 10px; border-radius: 4px; font-size: 8.6pt; overflow-x: auto; white-space: pre-wrap; page-break-inside: avoid; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid #184f95; margin: 3mm 0; padding: 1mm 4mm; color: #4d4a44; background: #f7f9fc; }
+hr { border: 0; border-top: 1px solid #dcd9d2; margin: 6mm 0; }
+.foot { position: fixed; bottom: -12mm; right: 0; font-size: 8pt; color: #8e8b84; }
+</style></head><body><div class='cover'><div class='brand'>Production Dashboard</div><h1>User Guide</h1><div class='sub'>Costello Windows production dashboard</div><div class='meta'>Version of 08 September 2026 · build 20260908-1849 · source: docs/USER-GUIDE.md</div></div><div class='toc'><h2>Contents</h2><ul><li><a href='#1-what-the-dashboard-is'>1. What the dashboard is</a></li><li><a href='#2-signing-in'>2. Signing in</a></li><ul><li><a href='#2-1-the-office'>2.1 The office</a></li><li><a href='#2-2-the-tablet'>2.2 The tablet</a></li></ul><li><a href='#3-the-master-dashboard-screen-by-screen'>3. The Master dashboard, screen by screen</a></li><ul><li><a href='#3-1-header-and-status'>3.1 Header and status</a></li><li><a href='#3-2-summary-tiles'>3.2 Summary tiles</a></li><li><a href='#3-3-the-toolbar'>3.3 The toolbar</a></li><li><a href='#3-4-the-job-list'>3.4 The job list</a></li><li><a href='#3-5-the-selection-wheel'>3.5 The selection wheel</a></li><li><a href='#3-6-the-job-drawer'>3.6 The job drawer</a></li><li><a href='#3-7-mark-ready-and-undo'>3.7 Mark ready and undo</a></li><li><a href='#3-8-changes-versions-alerts-export'>3.8 Changes, Versions, Alerts, Export</a></li><li><a href='#3-9-show-glass-station-board'>3.9 Show ▸ Glass station board</a></li><li><a href='#3-10-the-floor-log-window'>3.10 The Floor log window</a></li></ul><li><a href='#4-the-glass-station-tablet-screen-by-screen'>4. The Glass station tablet, screen by screen</a></li><ul><li><a href='#4-1-who-are-you'>4.1 Who are you?</a></li><li><a href='#4-2-the-card'>4.2 The card</a></li><li><a href='#4-3-gold-and-the-finished-group'>4.3 Gold and the Finished group</a></li><li><a href='#4-4-the-search-box'>4.4 The search box</a></li><li><a href='#4-5-updated-time'>4.5 Updated time</a></li><li><a href='#4-6-switch-person-and-the-ten-minute-lock'>4.6 Switch person and the ten-minute lock</a></li><li><a href='#4-7-light-dark'>4.7 Light / Dark</a></li><li><a href='#4-8-sign-out'>4.8 Sign out</a></li><li><a href='#4-9-what-the-tablet-never-shows-or-allows'>4.9 What the tablet never shows or allows</a></li></ul><li><a href='#5-daily-routine'>5. Daily routine</a></li><li><a href='#6-messages-you-may-see-and-what-to-do'>6. Messages you may see and what to do</a></li><li><a href='#7-rules-the-dashboard-enforces'>7. Rules the dashboard enforces</a></li></ul></div><p>This guide explains how to use the Costello Windows production dashboard —
+both the office screen and the glass floor tablet. It is written for anyone
+who signs in and uses the dashboard day to day; it does not cover setting the
+system up or fixing it when something breaks (see <em>Support and Maintenance</em>
+for that).</p>
+<hr />
+<h2 id="1-what-the-dashboard-is">1. What the dashboard is</h2>
+<p>The dashboard is two web pages that show the same production workbook from
+two different points of view:</p>
+<ul>
+<li><strong>The Master dashboard</strong> (<code>index.html</code>) — used in the office. It shows
+  every job, every section, dates, checkpoints, phases, alerts and exports.</li>
+<li><strong>The Glass station</strong> (<code>glass.html</code>) — used on a shared tablet on the glass
+  floor. It shows only job number, customer name, one number of glasses per
+  job, and the three glass stages: Cutting, Hotmelting, Glazing.</li>
+</ul>
+<p>The Excel workbook on SharePoint stays the single source of truth for every
+job. The dashboard reads it and writes back to it only in the ways described
+in this guide — a colour on a checkpoint cell, or moving a job's whole row
+between sections. It never adds a row, deletes a row, or changes a date,
+comment, quantity, customer name or any other cell on its own. Everything
+else the dashboard needs — exact checkpoint counts, phases, alerts, and the
+floor's own progress — is kept in a handful of extra sheets and lists that sit
+alongside the workbook, never inside the jobs themselves.</p>
+<hr />
+<h2 id="2-signing-in">2. Signing in</h2>
+<h3 id="2-1-the-office">2.1 The office</h3>
+<ol>
+<li>Open the Master dashboard in a browser.</li>
+<li>Click <strong>Sign in with Microsoft</strong> and use your own Costello account.</li>
+<li>The first time a new device or browser signs in, Microsoft may show one
+   permission prompt asking the account to allow the dashboard to read and
+   write the workbook. Accept it — this is the normal, one-off consent every
+   Microsoft sign-in shows to a new app.</li>
+<li>You will see exactly the jobs your account could already open directly in
+   Excel — the dashboard grants nothing extra.</li>
+</ol>
+<h3 id="2-2-the-tablet">2.2 The tablet</h3>
+<p>The glass floor tablet is signed in once, by whoever sets it up, with a
+single shared station account — not a personal account. Ordinary use of the
+tablet never asks anyone to sign in again; it only asks a person to pick
+their own name (see §4.1).</p>
+<p>"Stay signed in" on either page simply means the browser keeps the sign-in
+token so nobody has to re-enter a password every time the page is opened. On
+the tablet this matters more than on the office screen, since the tablet may
+sit open for weeks at a time.</p>
+<hr />
+<h2 id="3-the-master-dashboard-screen-by-screen">3. The Master dashboard, screen by screen</h2>
+<h3 id="3-1-header-and-status">3.1 Header and status</h3>
+<p>The header shows the dashboard's live state at a glance:</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Live dot</td>
+<td>On while the dashboard is actively polling for changes</td>
+</tr>
+<tr>
+<td>Status text</td>
+<td>"starting…", "read failed", or similar — the current state of the last read</td>
+</tr>
+<tr>
+<td>Build number</td>
+<td>The footer shows <code>build YYYYMMDD-HHMM</code> — the exact version currently loaded</td>
+</tr>
+<tr>
+<td>Reload banner</td>
+<td>Appears when the server has a newer build than the one open; click <strong>Reload</strong> to pick it up</td>
+</tr>
+</tbody>
+</table>
+<p>The dashboard checks for a new build every couple of minutes. If the banner
+appears, there is no rush — finish what you are doing, then reload.</p>
+<h3 id="3-2-summary-tiles">3.2 Summary tiles</h3>
+<p>A row of tiles above the job list gives quick counts — total jobs, windows,
+doors — for the current view.</p>
+<h3 id="3-3-the-toolbar">3.3 The toolbar</h3>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Search box</td>
+<td>Filters the job list by job number, customer, county, eircode or any comment</td>
+</tr>
+<tr>
+<td>View</td>
+<td>Switches between the flat list, the sheet's own section order, or a saved custom grouping</td>
+</tr>
+<tr>
+<td>Show</td>
+<td>Switches the main panel between <strong>All jobs</strong> and the <strong>Glass station</strong> board</td>
+</tr>
+<tr>
+<td>Floor log</td>
+<td>Opens the read-only Floor log window (§3.9)</td>
+</tr>
+<tr>
+<td>Categories…</td>
+<td>Manage custom groupings used by the View dropdown</td>
+</tr>
+<tr>
+<td>Sort</td>
+<td>Reorders the job list</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="The office job list" src="img/guide-master-list.png" />
+<em>The Master dashboard's job list, with the toolbar above it.</em></p>
+<h3 id="3-4-the-job-list">3.4 The job list</h3>
+<p>Each row shows the job number, customer, county, category, window/door
+counts, product component counts (Frame · Sash · Transom) and a chip for
+every other workbook sheet the job appears on. Row colours and chips mirror
+the sheet's own colouring where relevant. Ticking the box on the left of one
+or more rows arms the selection wheel (§3.5).</p>
+<h3 id="3-5-the-selection-wheel">3.5 The selection wheel</h3>
+<p>Ticking at least one job shows a floating button; tapping it fans out a
+full-circle menu with four options:</p>
+<ul>
+<li><strong>Alert to…</strong> — subscribe an address to email alerts for the ticked jobs.</li>
+<li><strong>Export</strong> — open the Export window pre-filtered to the ticked jobs.</li>
+<li><strong>Move to…</strong> — move the ticked jobs to a different section.</li>
+<li><strong>Untick all</strong> — clear the selection.</li>
+</ul>
+<p><img alt="The selection wheel open after ticking jobs" src="img/guide-master-wheel.png" />
+<em>The radial selection menu, opened after ticking one or more jobs.</em></p>
+<p>A section move is a real structural change in Excel: the dashboard finds each
+job's row, copies its values, formats, fills and borders to a new position
+in the target section, and deletes the original row. It is the only feature
+in the dashboard that adds or removes a row.</p>
+<h3 id="3-6-the-job-drawer">3.6 The job drawer</h3>
+<p>Clicking anywhere on a job row opens its drawer, with several parts:</p>
+<p><strong>Phase pipeline.</strong> A seven-step line — In office → Sent to floor → Cutting →
+In fabrication → In glazing → Quality check → Fitted / delivered — showing
+how far the job has got. Most of the time this is worked out automatically
+from what is already on the sheet; clicking a step by hand overrides it, and
+the sheet's own evidence always wins if it later shows the job further along.</p>
+<p><img alt="A job drawer showing the phase pipeline and checkpoints" src="img/guide-master-drawer-top.png" />
+<em>The top of a job's drawer: the phase pipeline and the checkpoints below it.</em></p>
+<p><strong>Dates.</strong> The job's key dates, read-only here.</p>
+<p><strong>Checkpoints.</strong> Tick boxes for windows, doors, each glass type and each
+product's frame/sash/transom counts. Ticking a checkpoint writes <strong>only a
+colour</strong> to that item's own cell in the <code>Production</code> sheet (white for
+nothing done, yellow for part done, gold for done) — the exact count behind
+that colour is kept in a separate dashboard sheet, not in the cell itself.</p>
+<p><strong>Details.</strong> Other job facts read from the sheet.</p>
+<p><strong>Glass units.</strong> The job's DG/TG/TUFF and other glass quantities, as ticked
+in Checkpoints above.</p>
+<p><strong>Glass station section.</strong> For a job with glass, a "Glass station" panel
+shows the same three stages the floor tablet uses — Cutting, Hotmelting,
+Glazing — each with who last moved it and when, a short timeline of the most
+recent taps on this job (capped at twelve lines), and a "Full log" link into
+the Floor log window (§3.9).</p>
+<p><img alt="The drawer's Glass station section with the timeline" src="img/guide-master-drawer-station.png" />
+<em>The Glass station section of the drawer, showing who moved each counter, when, and the recent timeline.</em></p>
+<p><strong>Comments.</strong> The job's comment text from the sheet.</p>
+<p><strong>Alerts.</strong> Addresses currently subscribed to email alerts for this job
+(admin only — see §3.8).</p>
+<h3 id="3-7-mark-ready-and-undo">3.7 Mark ready and undo</h3>
+<p><strong>Mark ready</strong> fills the job's status cell gold and moves its row to "Ready
+to fit" (or "Collect &amp; supply only" for C/S-prefixed jobs). <strong>Undo</strong> clears
+that fill and moves the row to the bottom of "In production". Neither action
+touches any date.</p>
+<h3 id="3-8-changes-versions-alerts-export">3.8 Changes, Versions, Alerts, Export</h3>
+<ul>
+<li><strong>Changes</strong> — a running log of every write the dashboard has made.</li>
+<li><strong>Versions</strong> — SharePoint's own version history of the workbook. You can
+  see the difference between two versions and restore an older one; a
+  restore itself becomes a new, rollable version.</li>
+<li><strong>Alerts</strong> (admin only) — subscribe email addresses to jobs. Every third
+  day at 08:00, each subscriber gets one email listing their jobs still in
+  production, with comments. The admin address is read from the workbook's
+  own configuration, not typed into the dashboard.</li>
+</ul>
+<p><img alt="The Alerts window" src="img/guide-master-alerts.png" />
+<em>The Alerts window, listing current subscriptions.</em></p>
+<ul>
+<li><strong>Export</strong> — download the current jobs (or just the ticked ones) as an
+  Excel workbook or a PDF, with filters and a field picker. No phone number
+  and no eircode are ever included in any export, in any format, under any
+  filter. Every export is recorded once in the Changes log — nothing else
+  about what was exported is stored anywhere.</li>
+</ul>
+<p><img alt="The Export window" src="img/guide-master-export.png" />
+<em>The Export window: format, filters and the field picker.</em></p>
+<h3 id="3-9-show-glass-station-board">3.9 Show ▸ Glass station board</h3>
+<p>Switching the <strong>Show</strong> dropdown to <strong>Glass station</strong> replaces the job list
+with a read-only board: one card per active job, in the office's own order,
+with the job number, customer, the total glass count, and the three counters
+(Cutting, Hotmelting, Glazing) each showing who last moved it and when. A
+job whose three counters have all reached the total turns gold and drops to
+the bottom of the board. The board refreshes about every ten seconds while
+it is on screen. Nothing on it can be clicked to change anything.</p>
+<p><img alt="Show ▸ Glass station board" src="img/guide-master-board.png" />
+<em>The office's read-only Glass station board.</em></p>
+<h3 id="3-10-the-floor-log-window">3.10 The Floor log window</h3>
+<p>Opened from the <strong>Floor log</strong> button or a drawer's "Full log" link, this
+lists every recorded floor tap, newest first, with filters for person,
+stage, job number and day, and a running count of lines and units for
+whatever is currently filtered. It pages 200 rows at a time. Clicking a job
+number opens that job's drawer, if the job is still on the sheet. It is
+read-only — nothing here can be edited or deleted from the dashboard.</p>
+<p><img alt="The Floor log window" src="img/guide-master-log.png" />
+<em>The Floor log window, filtered by person and stage.</em></p>
+<hr />
+<h2 id="4-the-glass-station-tablet-screen-by-screen">4. The Glass station tablet, screen by screen</h2>
+<h3 id="4-1-who-are-you">4.1 Who are you?</h3>
+<p>On opening (or after a lock, or Switch person), the tablet shows a picker of
+active people for the glass station, read from a list the admin maintains.
+Tap your name.</p>
+<p><img alt="The &quot;Who are you?&quot; picker" src="img/guide-tablet-picker.png" />
+<em>The tablet's picker, listing active people for the glass station.</em></p>
+<p>If your name has a PIN set, a PIN pad appears next; enter it to continue. A
+wrong PIN simply shakes and asks you to try again — there is no lockout.</p>
+<p><img alt="The PIN pad" src="img/guide-tablet-pin.png" />
+<em>The PIN pad, shown only for people who have a PIN set.</em></p>
+<h3 id="4-2-the-card">4.2 The card</h3>
+<p>Every job with glass appears as one card: job number, customer, and one
+total number of glasses, followed by three rows — Cutting, Hotmelting,
+Glazing — each with a <strong>−</strong>, a count, a <strong>+</strong>, and an <strong>All</strong> button (which
+becomes <strong>None</strong> once that stage is already at the total). Only the stage
+rows you personally hold are bright and tappable; the others show their
+numbers but are greyed out and cannot be tapped. There is nothing to expand
+and nothing to scroll inside a card.</p>
+<p><img alt="The tablet board, dark theme" src="img/guide-tablet-board.png" />
+<em>The tablet board: one card per job, dark theme, three stages on the card itself.</em></p>
+<h3 id="4-3-gold-and-the-finished-group">4.3 Gold and the Finished group</h3>
+<p>Once a job's three counters all reach the total, its card turns gold and
+moves into a collapsed "Finished · n" group at the bottom of the board — tap
+the heading to show it.</p>
+<p><img alt="A gold finished card" src="img/guide-tablet-finished.png" />
+<em>A finished job's card, gold, once all three stages reach the total.</em></p>
+<h3 id="4-4-the-search-box">4.4 The search box</h3>
+<p>A search box in the header narrows the cards down by job number or customer
+as you type.</p>
+<h3 id="4-5-updated-time">4.5 Updated time</h3>
+<p>The header shows how recently the board was last refreshed.</p>
+<h3 id="4-6-switch-person-and-the-ten-minute-lock">4.6 Switch person and the ten-minute lock</h3>
+<p><strong>Switch person</strong> returns to the picker immediately and clears the search
+box. If nobody taps anything on the tablet for ten minutes, it locks back to
+the picker on its own.</p>
+<h3 id="4-7-light-dark">4.7 Light / Dark</h3>
+<p>A button in the header switches the tablet's own theme between dark
+(the default) and light — independent of the office dashboard's theme.</p>
+<p><img alt="The tablet board, light theme, phone width" src="img/guide-tablet-board-light.png" />
+<em>The same board in light theme at phone width.</em></p>
+<h3 id="4-8-sign-out">4.8 Sign out</h3>
+<p>Signing out drops the shared station account's session entirely — normal
+day-to-day use never needs this. It is only for the rare case where the
+sign-in itself has expired (§6) and needs to be renewed.</p>
+<h3 id="4-9-what-the-tablet-never-shows-or-allows">4.9 What the tablet never shows or allows</h3>
+<p>The tablet never shows a customer's phone number, eircode, county, comments,
+price, or any glass type (DG, TG, TUFF and the rest are the office's
+business only — the floor sees one plain total). It cannot export anything,
+cannot delete anything, cannot move a stage you do not personally hold, and
+cannot reach the Master dashboard or any other station's data.</p>
+<hr />
+<h2 id="5-daily-routine">5. Daily routine</h2>
+<ol>
+<li><strong>Keep an office dashboard open somewhere.</strong> The Master dashboard is the
+   only thing that ever pushes jobs onto the floor's board — it does this
+   every time it successfully loads the workbook. If nobody has the office
+   dashboard open, the floor's board simply stops receiving new jobs and
+   updates until someone opens it again.</li>
+<li><strong>A new job reaching the floor.</strong> As soon as a job with glass appears "in
+   production" on the sheet and an office dashboard loads, it is pushed to
+   the floor's list and appears as a card within a few minutes.</li>
+<li><strong>A job already ticked off in the office.</strong> If the office has already
+   ticked some or all of a job's glass checkpoints before it reaches the
+   floor, the tablet's card starts with those same numbers already counted —
+   nobody on the floor has to re-tap what the office already recorded.</li>
+<li><strong>When the office stops changing a job's floor numbers.</strong> The moment
+   anyone on the floor taps a job's card for the first time, the office
+   dashboard never adjusts that job's counters again, no matter what changes
+   afterwards in the office's own checkpoints — from that point on, only the
+   floor's own taps move the numbers.</li>
+<li><strong>Adding or changing a person or PIN.</strong> This is a row in the <code>Station
+   people</code> list, maintained by the admin in SharePoint — not something done
+   from either dashboard page. The tablet picks up a new row, a stage
+   change, or a PIN change within ten minutes on its own, or immediately on
+   reload.</li>
+<li><strong>Seeing who did what.</strong> Use the Floor log window (§3.10) in the office,
+   or the drawer's Glass station timeline for one job at a time.</li>
+</ol>
+<hr />
+<h2 id="6-messages-you-may-see-and-what-to-do">6. Messages you may see and what to do</h2>
+<table>
+<thead>
+<tr>
+<th>Message (exact wording)</th>
+<th>Where</th>
+<th>Meaning / what to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"This account has no access to the production workbook. Station accounts use the Glass station page."</td>
+<td>Master dashboard</td>
+<td>The signed-in account is the shared station account, not an office account. Follow the link to the Glass station page instead.</td>
+</tr>
+<tr>
+<td>"Seeing the floor's progress needs a SharePoint permission that has not been granted yet. Nothing in the Excel file is involved."</td>
+<td>Master dashboard</td>
+<td>A tenant-wide SharePoint permission has not yet been granted. Ask the admin — see <em>Support and Maintenance</em> for the exact steps. Nothing is broken; nothing in Excel is affected.</td>
+</tr>
+<tr>
+<td>"Ask the office to grant the SharePoint permission."</td>
+<td>Tablet</td>
+<td>The same missing permission, shown in the shorter wording the tablet uses since there is no admin sign-in on a shared device.</td>
+</tr>
+<tr>
+<td>"The floor's SharePoint site is not there yet, or this account cannot see it. Ask the office."</td>
+<td>Tablet</td>
+<td>The <code>Floor stations</code> site (or the interim fallback) is not reachable yet. This is expected before the admin finishes setup.</td>
+</tr>
+<tr>
+<td>"The 'Glass station' list is not in the floor's site yet. Ask the office to add it." / "The 'Station people' list is not in the floor's site yet. Ask the office to add it."</td>
+<td>Tablet</td>
+<td>One of the required lists has not been created yet in the site.</td>
+</tr>
+<tr>
+<td>"cannot reach SharePoint — retrying"</td>
+<td>Both</td>
+<td>A read that had worked before has failed for now (network, rate limit). The dashboard keeps showing the last board it read and keeps retrying on its own; there is nothing to click.</td>
+</tr>
+<tr>
+<td>"not saved yet — retrying"</td>
+<td>Tablet</td>
+<td>A tap you made has not yet reached SharePoint. It stays queued and retries on its own; nothing is lost, even across a reload.</td>
+</tr>
+<tr>
+<td>"The sign-in has expired. Tap Sign out, then Sign in again."</td>
+<td>Tablet</td>
+<td>Tap <strong>Sign out</strong> in the header, then use the <strong>Sign in again</strong> button with the station account. Any taps not yet sent are kept and go out once signed in again.</td>
+</tr>
+<tr>
+<td>"Nothing on the board yet."</td>
+<td>Tablet</td>
+<td>No jobs have been fed to the floor yet — usually because no office dashboard has loaded the workbook recently, or nothing on the floor is currently in production.</td>
+</tr>
+<tr>
+<td>"A newer version of the dashboard is available  <strong>Reload</strong>"</td>
+<td>Master dashboard</td>
+<td>GitHub Pages can lag a deployment by up to about ten minutes. Click <strong>Reload</strong> whenever convenient — there is no urgency.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-rules-the-dashboard-enforces">7. Rules the dashboard enforces</h2>
+<ul>
+<li>The <code>Production</code> sheet is only ever changed by a checkpoint colour or a
+  whole-row section move — never a new row, a new sheet, or any other cell.</li>
+<li>No phone number and no eircode ever leave the app in an export, in any
+  format, under any filter.</li>
+<li>Every export is logged once; nothing else about the exported data is kept.</li>
+<li>Only the tablet ever writes the floor's own counters, By/At pairs, or log
+  lines — the office never does, with the single exception of seeding a
+  brand-new or never-tapped row from the office's own checkpoints.</li>
+<li>Once the floor has tapped a job for the first time, the office never
+  changes that job's floor counters again.</li>
+<li>A person on the tablet can only move the glass stages they personally
+  hold; every other stage is shown but disabled.</li>
+</ul></body></html>
