@@ -62,7 +62,7 @@ function stubEl(tag, id) {
 /* the selectors that stand for something the page creates and destroys: they
    answer null until it exists, the way a browser does */
 const NULLABLE = ["#fabhost", "#fabbtn", "#dhost", "#xhost", "#ahost", "#chost", "#vhost",
-                  "#catmenu", "#movemenu", "#alertmenu"];
+                  "#lhost", "#catmenu", "#movemenu", "#alertmenu"];
 const EL = {};
 const el = sel => {
   const id = String(sel).charAt(0) === "#" ? String(sel).slice(1) : null;

@@ -18,6 +18,12 @@ const SORTS = [["id", "Job no (A-Z)"], ["num", "Job number (ignore letter)"], ["
 const jobNum = j => { const m = /(\d+)/.exec(j.id); return m ? parseInt(m[1], 10) : 0; };
 const CATORDER = ["deliver", "collect", "wonttake", "secondhand", "floor", "ready", "office"];
 const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep", "Glazing", "Cut & Weld", "PVC Doors", "Smart Slides", "THWS", "Call Log"];
+/* The floor stations, as the dropdown above the job list offers them. One
+   entry per station page: [key, what the dropdown calls it]. Adding the next
+   station is adding a line here and a renderer for its key - the dropdown, the
+   empty states and the reset in renderChips all follow from this array.
+   SHEETNAMES stays exactly as it was, for the export filter and the row chips. */
+const STATIONS = [["glass", "Glass station"]];
 
 let ALL = [], PRODMAP = null, lastStamp = null, busy = false;
 /* SharePoint takes ~35s to write our change into the downloadable file, while
@@ -142,7 +148,8 @@ const saveChanges = () => { try {
   localStorage.setItem("cw_changes", JSON.stringify(CHANGES.filter(c => c.what !== "Alert").slice(0, 400)));
 } catch (e) {} };
 let state = { q: "", cat: null, sheet: null, sort: "id", desc: false, sel: null, edit: false,
-              scope: "", view: "flat", picked: {}, collapsed: {}, hidden: {} };
+              scope: "", view: "flat", picked: {}, collapsed: {}, hidden: {},
+              board: null };     // null = the job list · "glass" = the Glass station board
 let VIEWS = {};            // view name -> { job -> {group, order} }  (from the workbook)
 let BLOCKNAMES = [];
 try { state.hidden = JSON.parse(localStorage.getItem("cw_hidden") || "{}"); } catch (e) {}
@@ -436,6 +443,504 @@ async function setPhaseByHand(j, n) {
   return true;
 }
 
+/* ---------- the glass station ------------------------------------------------
+   The floor works on glass.html, signed in with a shared station account that
+   has no access to the workbook at all. Everything it sees comes from one
+   SharePoint list in a separate site, and the master dashboard is the only
+   thing that puts job facts in there.
+
+   HARD RULE, and the reason all of this lives in one block: the feeder writes
+   Title, Job, Customer, GlassType, Total, Seq, Active, FedAt and FedBy, and
+   nothing else. It never sends any of ST.FLOOR_FIELDS - the counters, the
+   per-stage By/At pairs and the last-touch pair, all of which belong to the
+   floor - and it never deletes an item. A job that leaves production is marked
+   Active = No and keeps everything the floor recorded. This dashboard also
+   reads two more of the floor's lists, Station log and Station people, and
+   writes to neither. Not one line of this touches the workbook.             */
+const STATION_SITE_MISSING = "The floor’s SharePoint site is not there yet, so their progress " +
+  "cannot be shown here. Ask the manager to add it — nothing in the Excel file is involved.";
+const STATION_LIST_MISSING = "The “Glass station” list is not in the floor’s site yet. " +
+  "Ask the manager to add it — nothing in the Excel file is involved.";
+const STATION_NEED_CONSENT = "Seeing the floor's progress needs a SharePoint permission that has not been granted yet. " +
+  "Nothing in the Excel file is involved.";
+const STATION_SIGN_IN_AGAIN = "The sign-in to SharePoint has expired. Sign out and sign in again to see the floor's progress.";
+const STATION_LOG_MISSING = "The “Station log” list is not in the floor’s site yet, so who changed what " +
+  "cannot be shown. Ask the manager to add it — nothing in the Excel file is involved.";
+const STATION_UNREACHABLE = "cannot reach SharePoint — retrying";
+const STATION_CHECKING = "checking…";
+
+let STATION_ITEMS = null;      // the Glass station list, as last read - null until the first read answers
+let STATION_LOG = null;        // the Station log list, likewise
+let STATION_PEOPLE = null;     // the Station people list, read once for the log window's filters
+let STATION_OK = null;         // null: not looked · false: no site, no list, or no permission · true: read it
+let STATION_WHY = "";          // which of those, in words, for the board and the drawer
+let STATION_ERR = "";          // a passing failure - the last board stays, with this line above it
+let STATION_LOG_OK = null;     // the log list has its own three states: it can be missing on its own
+let STATION_LOG_WHY = "";
+let stationWarned = false;     // one console line per page for a list that will not read
+let stationReading = null;     // the read in flight, so a drawer and the dropdown share one
+let stationLogReading = null;
+
+/* The two lists both screens poll by delta. One shape for each, so the poll
+   below is one function rather than two nearly identical ones - and so a test
+   can put a token back to null and watch the next call enumerate again. */
+const STATION_FEEDS = {
+  items: { list: () => ST.STATION_LIST, fields: () => ST.STATION_FIELDS,
+           get: () => STATION_ITEMS, set: v => { STATION_ITEMS = v; }, token: null, off: 0 },
+  log: { list: () => ST.LOG_LIST, fields: () => ST.LOG_FIELDS,
+         get: () => STATION_LOG, set: v => { STATION_LOG = v; }, token: null, off: 0 }
+};
+/* A delta request is in the air for as long as SharePoint takes to answer it,
+   and in that time a feed or a full read can replace the whole list and null
+   the token underneath it. The answer that then comes back is two changed
+   rows and no token in hand - which reads exactly like a fresh enumeration,
+   and would collapse the board to those two rows until the next feed ten
+   minutes later. So every wholesale replacement bumps a generation, and a
+   delta whose generation has moved throws its answer away. */
+let STATION_GEN = 0;
+function stationResetFeed(key) {
+  STATION_FEEDS[key].token = null;
+  STATION_GEN++;
+}
+/* A list that will not serve a delta at all must not be asked for one six
+   times a minute: it is marked off for five minutes and polled the plain way
+   until then. A 410 "your token is too old" is NOT that - delta is working
+   there, the token is simply stale - so it only resets the token. */
+const DELTA_OFF_MS = 300000;
+const deltaOff = f => !!(f.off && Date.now() - f.off < DELTA_OFF_MS);
+
+/** Read the whole station list, quietly. Never pops a consent window, never
+    toasts, never throws: a floor board nobody is looking at must not be able
+    to interrupt the dashboard.
+
+    A failure only clears the board when SharePoint actually says the site or
+    the list is not there. Anything else - offline, a bad gateway, a refused
+    token - leaves the last board on screen with a line saying it could not be
+    reached, because a blank screen saying "ask the manager to make the list"
+    is a lie when the list is fine and the wifi is not. */
+async function readStation() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  if (typeof ST === "undefined") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      STATION_OK = false; STATION_WHY = STATION_NEED_CONSENT; STATION_ERR = ""; return null;
+    }
+    const siteId = await CW.stationSite();
+    if (!siteId) { STATION_OK = false; STATION_WHY = STATION_SITE_MISSING; STATION_ERR = ""; return null; }
+    const items = await CW.listItems(ST.STATION_LIST, { siteId: siteId, fields: ST.STATION_FIELDS });
+    if (items == null) { STATION_OK = false; STATION_WHY = STATION_LIST_MISSING; STATION_ERR = ""; return null; }
+    STATION_OK = true; STATION_WHY = ""; STATION_ERR = ""; STATION_ITEMS = items;
+    stationResetFeed("items");              // a full read: the next poll starts a fresh delta
+    return items;
+  } catch (e) {
+    stationTrouble(e);
+    return null;
+  }
+}
+
+/** The floor's log - who moved which counter, when. Read-only here, for ever:
+    the office never writes a line and nothing anywhere deletes one. It is a
+    separate list from the board, so it can be the one that is missing: that is
+    a state of its own rather than a reason to hide the bars. */
+async function readStationLog() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  if (typeof ST === "undefined") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      STATION_LOG_OK = false; STATION_LOG_WHY = STATION_NEED_CONSENT; return null;
+    }
+    const siteId = await CW.stationSite();
+    if (!siteId) { STATION_LOG_OK = false; STATION_LOG_WHY = STATION_SITE_MISSING; return null; }
+    const items = await CW.listItems(ST.LOG_LIST, { siteId: siteId, fields: ST.LOG_FIELDS });
+    if (items == null) { STATION_LOG_OK = false; STATION_LOG_WHY = STATION_LOG_MISSING; return null; }
+    /* nothing ever deletes from this list, so after a year it is thousands of
+       lines of last spring. Neither screen looks past ninety days, so neither
+       carries the rest around: a line with no stamp at all is kept, because
+       dropping it would hide work rather than old work. */
+    STATION_LOG = stationLogRecent(items);
+    STATION_LOG_OK = true; STATION_LOG_WHY = "";
+    stationResetFeed("log");
+    return STATION_LOG;
+  } catch (e) {
+    stationTrouble(e);
+    return null;
+  }
+}
+/** The last ninety days of the log, by At. */
+function stationLogRecent(items, now) {
+  const since = ST.logSince(ST.LOG_DAYS, now);
+  return (items || []).filter(it => {
+    const at = String(((it && it.fields) || {}).At || "");
+    return !at || at >= since;
+  });
+}
+
+/** The people the floor picks from, read once - the log window's person filter
+    offers everybody who may record something, not only everybody who has. A
+    list that will not read answers an empty array rather than nothing, so the
+    window falls back to the names in the log instead of asking again forever.
+    Read WITHOUT the PIN column: the office has no business holding anybody's. */
+let stationPeopleReading = null;
+async function readStationPeople() {
+  try {
+    const siteId = await CW.stationSite();
+    STATION_PEOPLE = (siteId &&
+      await CW.listItems(ST.PEOPLE_LIST, { siteId: siteId, fields: ST.PEOPLE_FIELDS_OFFICE })) || [];
+  } catch (e) {
+    console.warn("[station] could not read the people list:", (e && e.message) || e);
+    STATION_PEOPLE = [];
+  }
+  return STATION_PEOPLE;
+}
+function stationPeopleIfNeeded(then) {
+  if (STATION_PEOPLE !== null) return;
+  if (!stationPeopleReading)
+    stationPeopleReading = readStationPeople().then(r => { stationPeopleReading = null; return r; },
+                                                    () => { stationPeopleReading = null; });
+  stationPeopleReading.then(() => { if (then) then(); });
+}
+
+/** What a thrown station error means, in one place, for the read and the feed. */
+function stationTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  if (!stationWarned) { stationWarned = true; console.warn("[station] could not read the list:", m); }
+  /* Only "there is no such thing here" is a reason to doubt the cached site.
+     A refusal, a bad gateway or a dropped connection says nothing about where
+     the lists are; dropping the site over one would restart the whole re-check
+     cadence, and on a 403 could flip a dashboard that is happily reading the
+     real site over to the fallback. */
+  if (CW.isMissing && CW.isMissing(e) && CW.forgetStationSite) CW.forgetStationSite();
+  if (/interaction_required|login_required/.test(m)) {
+    STATION_OK = false; STATION_WHY = STATION_SIGN_IN_AGAIN; STATION_ERR = "";
+  } else if (/permission needed/.test(m)) {
+    STATION_OK = false; STATION_WHY = STATION_NEED_CONSENT; STATION_ERR = "";
+  } else if (CW.isMissing && CW.isMissing(e)) {
+    STATION_OK = false; STATION_WHY = STATION_LIST_MISSING; STATION_ERR = "";
+  } else {
+    STATION_ERR = STATION_UNREACHABLE;          // the last board stays exactly where it was
+  }
+}
+
+/** Read the list once, if nobody has yet - for a drawer opening, or the board
+    being picked, when the feeder's ten-minute skip means nothing has read it.
+    One read is shared by every caller, so opening three drawers asks once. */
+function stationReadIfNeeded(then) {
+  /* already read: the caller has just drawn the current state, so there is
+     nothing to redraw. Calling `then` here would have renderDrawer() call
+     itself without end (it is the caller). */
+  if (STATION_OK !== null) return;
+  if (!stationReading) stationReading = readStation().then(r => { stationReading = null; return r; },
+                                                           () => { stationReading = null; });
+  stationReading.then(() => { if (then) then(); });
+}
+/** The same, for the log. Kept separate because the two lists fail separately:
+    the board can be perfectly readable while the log list has not been made. */
+function stationLogReadIfNeeded(then) {
+  if (STATION_LOG_OK !== null) return;
+  if (!stationLogReading) stationLogReading = readStationLog().then(r => { stationLogReading = null; return r; },
+                                                                   () => { stationLogReading = null; });
+  stationLogReading.then(() => { if (then) then(); });
+}
+
+/* ---- real time --------------------------------------------------------------
+   A tap on the floor is meant to be on the colleague's screen inside ten
+   seconds, and re-reading two whole lists six times a minute to find out that
+   nothing moved would be six hundred rows a minute of unchanged text. So the
+   poll asks Graph what has changed since last time (listDelta) and merges it.
+
+   Ten seconds while somebody is actually looking at the floor - the station
+   board, the log window, or a drawer for a job that has glass - and a minute
+   otherwise, because a poll nobody is reading is only there to keep the drawer
+   honest when it is next opened. A failure never toasts: it leaves the last
+   data exactly where it is and says so in the line the board already has.   */
+const STATION_FAST_MS = 10000, STATION_SLOW_MS = 60000;
+let stationPollT = null, stationPolling = false;
+let STATION_SITE_GEN = 0;               // which site the tokens in hand belong to
+
+/** Is anyone actually looking at the floor's data right now? */
+function stationWatching() {
+  if (state.board) return true;
+  if ($("#lhost")) return true;
+  const j = state.sel ? byId(state.sel) : null;
+  return !!(j && Object.keys(j.glass || {}).length);
+}
+/** The plain read, for a list that will not serve a delta and for a token
+    that has gone stale. true = the list was replaced. */
+async function stationFull(key, siteId, gen) {
+  const f = STATION_FEEDS[key];
+  const all = await CW.listItems(f.list(), { siteId: siteId, fields: f.fields() });
+  if (gen !== STATION_GEN) return false;           // somebody replaced it while we read
+  if (all == null) return false;
+  f.set(key === "log" ? stationLogRecent(all) : all);
+  return true;
+}
+/** One list, brought up to date the cheap way. true = something moved. */
+async function stationDelta(key, siteId) {
+  const f = STATION_FEEDS[key];
+  if (deltaOff(f)) return await stationFull(key, siteId, STATION_GEN);
+  const opts = { siteId: siteId, fields: f.fields() };
+  if (f.token) opts.token = f.token;
+  /* BOTH captured before the await. f.token can be nulled by a feed or a full
+     read while this request is in the air; reading it afterwards would make a
+     delta of two changed rows look like a fresh enumeration of the whole
+     list, and the board would collapse to two rows. */
+  const had = opts.token || null;
+  let gen = STATION_GEN;
+  let d;
+  try {
+    d = await CW.listDelta(f.list(), opts);
+  } catch (e) {
+    if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+    if (gen !== STATION_GEN) return false;         // that answer is about a list we no longer hold
+    /* a 410 means the token is too old and delta is fine; anything else means
+       this list will not serve one, so stop asking for five minutes */
+    if (!(CW.isDeltaResync && CW.isDeltaResync(e))) {
+      f.off = Date.now();
+      console.warn("[station] the " + f.list() + " list refused a delta; polling it the plain way for five minutes");
+    }
+    stationResetFeed(key);
+    gen = STATION_GEN;
+    return await stationFull(key, siteId, gen);
+  }
+  if (gen !== STATION_GEN) return false;           // a feed or a full read landed while this was in the air
+  if (d == null) return false;                     // the list is not there
+  f.off = 0;                                       // it served one: it is not a refusing list
+  f.token = d.next || null;
+  if (!had) {                                      // the first pass enumerates the lot
+    const rows = d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
+    f.set(key === "log" ? stationLogRecent(rows) : rows);
+    return true;
+  }
+  if (!d.items.length) return false;
+  f.set(ST.mergeDelta(f.get() || [], d.items));
+  return true;
+}
+async function stationPoll() {
+  if (stationPolling || stationBusy) return false;
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listDelta) return false;
+  if (STATION_OK !== true) return false;           // nothing read yet: there is nothing to keep current
+  stationPolling = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) return false;
+    const siteId = await CW.stationSite();
+    if (!siteId) return false;
+    /* the floor's lists can move from one site to another (see stationSite()).
+       A delta token only means anything in the site it was issued in, so a
+       move throws both of them away and starts again. */
+    const gen = CW.stationSiteMoves ? CW.stationSiteMoves() : 0;
+    if (gen !== STATION_SITE_GEN) { stationSiteMoved(gen); }
+    let moved = await stationDelta("items", siteId);
+    if (STATION_LOG_OK === true && (await stationDelta("log", siteId))) moved = true;
+    STATION_ERR = "";
+    if (moved) redrawStation();
+    return moved;
+  } catch (e) {
+    stationTrouble(e);
+    redrawStation();
+    return false;
+  } finally {
+    stationPolling = false;
+  }
+}
+/** The floor's lists have moved to another site. Everything this dashboard is
+    holding about them was true of the old one: the delta tokens, the "already
+    fed, nothing changed" hash, and the roster the log window filters by. All
+    of it goes, so the next load feeds the new site and the next window shows
+    the people who are in it. */
+function stationSiteMoved(gen) {
+  STATION_SITE_GEN = gen;
+  stationResetFeed("items"); stationResetFeed("log");
+  STATION_FEEDS.items.off = 0; STATION_FEEDS.log.off = 0;
+  STATION_FEED = { hash: "", at: 0 }; saveStationFeed();
+  STATION_PEOPLE = null; stationPeopleReading = null;
+  console.log("[station] the floor's lists have moved: feeding and re-reading the new site");
+}
+
+/** Redraw only the parts of the dashboard that show the floor's data. */
+function redrawStation() {
+  if (state.board) renderRows();
+  if (state.sel && $("#dhost")) renderDrawer();
+  /* the rows and the counts, never the filter bar: a poll landing while
+     somebody is half way through typing a job number must not take the box
+     out from under them */
+  if ($("#lhost")) paintStationLog();
+}
+/** The poll's own clock. Re-armed after every pass, so changing what is on
+    screen changes the rate at the next tick rather than needing two timers. */
+let STATION_TICK_MS = 0;                 // the rate currently armed, for the tests
+function stationTick() {
+  if (stationPollT) clearTimeout(stationPollT);
+  STATION_TICK_MS = stationWatching() ? STATION_FAST_MS : STATION_SLOW_MS;
+  stationPollT = setTimeout(async () => {
+    stationPollT = null;
+    try { await stationPoll(); } catch (e) { /* stationPoll never throws; belt and braces */ }
+    stationTick();
+  }, STATION_TICK_MS);
+}
+
+/* ---- the feeder ----
+   After every successful load(), the glass slice of the sheet is pushed into
+   the list. It is deliberately dull: skip unless the permission is already
+   granted, skip when nothing has changed and the last run is recent, read the
+   list once, work out the plan (station-core.js), send it a few at a time, and
+   remember what was sent. Failures go to the console and to one small word in
+   the footer; they never toast and never block anything. */
+const STATION_FEED_KEY = "cw_stationfeed";
+const STATION_FEED_MS = 600000;        // an unchanged slice is re-fed at most every 10 minutes
+const STATION_FEED_MAX = 60;           // writes per run; the rest goes next run
+const STATION_FEED_LANES = 3;          // how many writes are in flight at once
+let STATION_FEED = { hash: "", at: 0 };
+try { STATION_FEED = JSON.parse(localStorage.getItem(STATION_FEED_KEY) || "null") || STATION_FEED; } catch (e) {}
+let stationBusy = false;
+let STATION_FEED_ERR = "";
+
+function saveStationFeed() { try { localStorage.setItem(STATION_FEED_KEY, JSON.stringify(STATION_FEED)); } catch (e) {} }
+/* The separator lives inside the wrapper, so an empty station word does not
+   leave a stray middle dot sitting in the footer. */
+function setStationFoot() {
+  const el = $("#stationfeed"); if (!el) return;
+  const wrap = $("#stationfeedwrap");
+  const show = t => { el.textContent = t; if (wrap) wrap.hidden = !t; };
+  if (STATION_FEED_ERR) { show("station feed failed"); el.title = STATION_FEED_ERR; return; }
+  if (!STATION_FEED.at) { show(""); el.title = ""; return; }
+  show("station feed: " + agoWords(STATION_FEED.at));
+  el.title = "The Glass station list was last brought up to date then. The Excel file is not involved.";
+}
+/** "just now" / "3 min ago" / "2 h ago", from a millisecond stamp or an ISO one. */
+function agoWords(at) {
+  const t = typeof at === "number" ? at : Date.parse(at);
+  if (!t || !isFinite(t)) return "never";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 45) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 172800) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+
+/** Run the writes a few lanes at a time, in order. Every failure is counted
+    and the first message is kept: the run finishes what it can, and whatever
+    it lost is planned again on the next run rather than retried in a tight
+    loop here. */
+async function stationSend(jobsToDo) {
+  let sent = 0, failed = 0, err = "";
+  let next = 0;
+  const lane = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= jobsToDo.length) return;
+      try { await jobsToDo[i](); sent++; }
+      catch (e) { failed++; if (!err) err = (e && e.message) || String(e); }
+    }
+  };
+  const lanes = [];
+  for (let i = 0; i < Math.min(STATION_FEED_LANES, jobsToDo.length); i++) lanes.push(lane());
+  await Promise.all(lanes);
+  return { sent: sent, failed: failed, err: err };
+}
+
+/** The name that goes in FedBy: whose dashboard fed the list. A display name
+    when the account has one, the local part of the address when it does not -
+    never the whole address, which the floor has no business reading. */
+function feedWho() {
+  const a = CW.account;
+  const name = a && a.name ? String(a.name).trim() : "";
+  if (name) return name;
+  return String((a && a.username) || "").split("@")[0] || "dashboard";
+}
+
+/** Add one row, and treat a refusal the way listUpsert does: the Title is
+    unique on the list, so a refused POST usually means the row is already
+    there - look for it and patch it rather than losing the update. */
+async function stationAdd(fields, opts) {
+  try { return await CW.listAdd(ST.STATION_LIST, fields, opts); }
+  catch (e) {
+    const mine = await CW.listItemsFor(ST.STATION_LIST, fields.Title, opts);
+    if (!mine.length) throw e;                 // a real failure: nothing was created
+    return CW.listPatch(ST.STATION_LIST, mine[0].id, fields, opts);
+  }
+}
+
+/* A run that could not finish - the 60-write cap, or a write that was refused
+   - comes back in half a minute rather than waiting for the next load. Once:
+   the timer is only ever armed when none is already waiting. */
+const STATION_AGAIN_MS = 30000;
+let stationAgainT = null;
+function stationFeedAgain() {
+  if (stationAgainT) return;
+  stationAgainT = setTimeout(() => { stationAgainT = null; feedStation().catch(() => {}); }, STATION_AGAIN_MS);
+}
+
+async function feedStation() {
+  if (stationBusy) return null;                          // only one feed at a time
+  /* a poll is merging a delta into STATION_ITEMS right now. Feeding would
+     replace the list and null the token under it, so it waits for the next
+     load or the follow-up timer rather than pulling the rug. */
+  if (stationPolling) { stationFeedAgain(); return null; }
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listAdd) return null;
+  /* the flag goes up before the first await: two loads finishing together
+     would otherwise both get past the guard and feed the list twice */
+  stationBusy = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) { STATION_FEED_ERR = ""; return null; }
+    const slice = ST.glassSlice(ALL, BLOCKNAMES);
+    const hash = ST.sliceHash(slice);
+    if (hash === STATION_FEED.hash && Date.now() - (STATION_FEED.at || 0) < STATION_FEED_MS) {
+      STATION_FEED_ERR = "";                             // nothing to do is not a failure
+      return null;
+    }
+    const siteId = await CW.stationSite();
+    if (!siteId) { STATION_OK = false; STATION_WHY = STATION_SITE_MISSING; STATION_ERR = ""; return null; }
+    /* the feed resolves the site as well, so it is one of the two places a
+       move can first be noticed - and it must not feed the new site holding
+       the old one's tokens */
+    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves() : 0;
+    if (fgen !== STATION_SITE_GEN) stationSiteMoved(fgen);
+    const opts = { siteId: siteId, fields: ST.STATION_FIELDS };
+    const items = await CW.listItems(ST.STATION_LIST, opts);
+    if (items == null) { STATION_OK = false; STATION_WHY = STATION_LIST_MISSING; STATION_ERR = ""; return null; }
+    STATION_OK = true; STATION_WHY = ""; STATION_ERR = ""; STATION_ITEMS = items;
+    stationResetFeed("items");             // a full read: the next poll starts a fresh delta
+    const plan = ST.feedPlan(slice, items, { at: new Date().toISOString(), by: feedWho() });
+    const all = plan.adds.map(f => () => stationAdd(f, opts))
+      .concat(plan.patches.map(p => () => CW.listPatch(ST.STATION_LIST, p.id, p.fields, opts)));
+    const work = all.slice(0, STATION_FEED_MAX);
+    const r = await stationSend(work);
+    STATION_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
+    /* the hash is only remembered when the whole plan went out: a run that was
+       cut short by the 60-write cap, or that lost a write, must run again */
+    const whole = !r.failed && work.length === all.length;
+    STATION_FEED = whole ? { hash: hash, at: Date.now() } : { hash: "", at: Date.now() };
+    saveStationFeed();
+    if (!whole) stationFeedAgain();
+    console.log("[station] fed " + r.sent + " of " + all.length +
+                " (" + plan.adds.length + " new, " + plan.patches.length + " changed, " +
+                plan.unchanged + " already right)");
+    /* one more read, only when something actually went out, so the board and
+       the drawer show what the list now says rather than what it said before */
+    if (r.sent) {
+      const after = await CW.listItems(ST.STATION_LIST, opts);
+      if (after) { STATION_ITEMS = after; stationResetFeed("items"); }
+    }
+    return r;
+  } catch (e) {
+    STATION_FEED_ERR = (e && e.message) || String(e);
+    console.warn("[station] feed failed:", STATION_FEED_ERR);
+    stationTrouble(e);
+    stationFeedAgain();
+    return null;
+  } finally {
+    stationBusy = false;
+    setStationFoot();
+  }
+}
+
+/** What the floor has on one job, whether it is still on their board or not.
+    null = the job has never been fed. */
+function stationForJob(id) {
+  if (!STATION_ITEMS || typeof ST === "undefined") return null;
+  return ST.jobRecord(STATION_ITEMS, id);
+}
+
 /* ---------- load ---------- */
 /* SharePoint needs about 35 s to put our change into the downloadable file, so
    every write asks for a re-read afterwards. One timer for all of them: a run
@@ -560,16 +1065,53 @@ async function load(reason, force) {
     updateChangeBtn();
     renderAll();
     if (state.sel) renderDrawer();
+    /* the floor's list, brought up to date from the sheet we have just read.
+       Deliberately last, deliberately not awaited for the render above, and
+       deliberately unable to fail loudly: the dashboard is finished by here. */
+    feedStation().then(() => { if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); } },
+                       () => {});
   } catch (e) {
+    /* A station account signing in here has no access to the workbook at all.
+       That is not a fault to retry: it is the wrong page for them, and saying
+       so once is more use than a read that fails every twelve seconds. */
+    if (NOACCESS_RE.test((e && e.message) || "")) { showNoAccessGate(); busy = false; return; }
     setStatus("read failed", "err");
     toast("Could not read the workbook: " + e.message, true);
   }
   busy = false;
 }
 
+/* Graph answers 403 when the account may not open the file and 404 when it
+   cannot even see the library it is in. Both mean the same thing here.
+   Matched against the STATUS call() puts after its arrow, never against a bare
+   number: row 403 of the Production sheet is in half the messages this app
+   writes, and it is not a permission problem. */
+const NOACCESS_RE = /->\s*40[34]\b|accessDenied|itemNotFound/;
+let NOACCESS = false;
+/** Put the sign-in overlay back with the one thing this person can act on: the
+    station page. No retry loop - the poll and the reconcile both stand down. */
+function showNoAccessGate() {
+  NOACCESS = true;
+  if (reconcileT) { clearTimeout(reconcileT); reconcileT = null; }
+  const gate = $("#gate"); if (!gate) return;
+  gate.hidden = false; gate.style.display = "flex";
+  const top = $("#topbar"), main = $("#main");
+  if (top) { top.hidden = true; top.style.display = "none"; }
+  if (main) { main.hidden = true; main.style.display = "none"; }
+  const box = $("#gateerr");
+  if (box) {
+    box.style.display = "block";
+    box.innerHTML = "This account has no access to the production workbook. " +
+      "Station accounts use the Glass station page.<br><br>" +
+      '<a href="glass.html" style="color:#8ec5ff;font-weight:600">Open the Glass station page</a>';
+  }
+  const btn = $("#signinbtn");
+  if (btn) btn.textContent = "Sign in with a different account";
+}
+
 /** Poll cheaply: only re-download when SharePoint says the file actually changed. */
 async function poll() {
-  if (busy || !CW.account) return;
+  if (busy || NOACCESS || !CW.account) return;
   try {
     const m = await CW.lastModified();
     if (m.at !== lastStamp) {
@@ -1555,13 +2097,34 @@ function renderChips() {
   vsel.onchange = () => { state.view = vsel.value; state.picked = {}; renderAll(); };
   c.appendChild(vsel);
 
-  c.appendChild(mk("span", "kick", "Sheet"));
+  /* The list, or a floor station's board in its place. The other workbook
+     sheets used to be here; they are still the export's own filter and still
+     the chips on every row, but as a thing to switch the whole page to they
+     only ever repeated what the row chips already said. */
+  c.appendChild(mk("span", "kick", "Show"));
   const ssel = mk("select", "txt");
-  ssel.innerHTML = '<option value="">All sheets (' + all.length + ')</option>' +
-    SHEETNAMES.map(s => { const n = all.filter(j => j.sheets.indexOf(s) >= 0).length;
-      return n ? '<option value="' + s + '"' + (state.sheet === s ? " selected" : "") + '>' + s + " (" + n + ")</option>" : ""; }).join("");
-  ssel.onchange = () => { state.sheet = ssel.value || null; renderAll(); };
+  ssel.innerHTML = '<option value="">All jobs (' + all.length + ')</option>' +
+    STATIONS.map(s => '<option value="' + esc(s[0]) + '"' + (state.board === s[0] ? " selected" : "") +
+      '>' + esc(s[1]) + "</option>").join("");
+  ssel.id = "showsel";
+  ssel.onchange = () => {
+    state.board = ssel.value || null; state.picked = {}; renderAll();
+    /* the tick was armed at the slow rate while nobody was looking at the
+       floor; picking the board is exactly the moment to speed it up, or the
+       first delta lands up to a minute later */
+    stationTick();
+    /* the feeder normally fills STATION_ITEMS in on every load; if it skipped
+       (nothing changed, or the permission was granted since) read it now */
+    if (state.board) stationReadIfNeeded(() => renderAll());
+  };
   c.appendChild(ssel);
+
+  /* the floor's log, next to the board it belongs to: who moved which counter
+     and when, filtered by person, stage, job and day. Read-only. */
+  const logb = mk("button", "chip", "Floor log");
+  logb.id = "logbtn";
+  logb.onclick = () => openStationLog("");
+  c.appendChild(logb);
 
   const catsBtn = mk("button", "chip", "Categories…");
   catsBtn.onclick = () => renderCatMenu(catsBtn);
@@ -1754,10 +2317,268 @@ function wireRows(scope) {
   });
 }
 
+/** "Tue 14:02" for something that happened this week, "08/09 14:02" for
+    anything older. The floor's log is read at a glance, so the day of the week
+    beats a date for as long as the day of the week still means anything. */
+const STDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function stWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = n => (n < 10 ? "0" : "") + n;
+  const hm = p(d.getHours()) + ":" + p(d.getMinutes());
+  const age = Date.now() - d.getTime();
+  if (age >= 0 && age < 6 * 86400000) return STDAYS[d.getDay()] + " " + hm;
+  return p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " + hm;
+}
+
+/** What the floor has recorded for one job, in the drawer: the three bars with
+    who last moved each of them and when, and under it the job's own log lines,
+    newest first. Read-only, all of it: this dashboard never writes a counter
+    and never writes a log line, and there is nothing here to click but the
+    link that opens the same log in full. */
+const STATION_TIMELINE_MAX = 12;
+function stationSectionHtml(j) {
+  if (!j || !Object.keys(j.glass || {}).length) return "";   // no glass, no station row
+  const head = '<div class="sect"><span class="kick">Glass station</span>';
+  const note = t => head + '<div class="cphint">' + esc(t) + '</div></div>';
+  if (typeof ST === "undefined") return "";
+  if (STATION_OK === null) return note(STATION_CHECKING);
+  if (STATION_OK !== true) return note(STATION_WHY || STATION_LIST_MISSING);
+  const g = stationForJob(j.id);
+  if (!g) return note("Not fed to the floor yet.");
+  /* a job that has left production is off the floor's board but its record is
+     still worth reading here - and calling that "not fed yet" would be wrong */
+  const why = g.active
+    ? "Recorded by the floor on the Glass station page" + (g.fedAt ? ", fed " + agoWords(g.fedAt) : "")
+    : "Finished on the floor \u2014 this job is no longer on their board.";
+  return head +
+    (STATION_ERR ? '<div class="cphint" style="color:var(--urgent)">' + esc(STATION_ERR) + '</div>' : "") +
+    '<div class="stbars">' + ST.STAGES.map(s => stBarHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+    stationTimelineHtml(j.id) +
+    '<div class="cphint">' + esc(why) + ' Nothing in the Excel file is involved.</div></div>';
+}
+
+/* Parsing and sorting the log is the one thing on this page that is done six
+   times a minute over a list that can run to thousands of lines. The answer
+   only changes when STATION_LOG is replaced - and every path that changes it
+   (a read, a delta merge) replaces the array rather than editing it - so the
+   array itself is the cache key. */
+let LOGROWS = null, LOGROWS_OF = false;
+function logRowsNow() {
+  if (LOGROWS_OF === STATION_LOG) return LOGROWS;
+  LOGROWS_OF = STATION_LOG;
+  LOGROWS = ST.logRows(STATION_LOG || []);
+  return LOGROWS;
+}
+
+/** The job's own log lines, newest first, capped - with the way to the rest. */
+function stationTimelineHtml(job) {
+  if (STATION_LOG_OK === null) return '<div class="cphint">' + esc(STATION_CHECKING) + '</div>';
+  if (STATION_LOG_OK !== true)
+    return '<div class="cphint">' + esc(STATION_LOG_WHY || STATION_LOG_MISSING) + '</div>';
+  /* exact, not a substring: R530 is not R5303, and a drawer quietly listing
+     another job's work would be a lie about this one */
+  const rows = ST.logFilter(logRowsNow(), { job: job, exact: true });
+  if (!rows.length) return '<div class="cphint">Nothing recorded on the floor for this job yet.</div>';
+  return '<div class="stlog">' + rows.slice(0, STATION_TIMELINE_MAX).map(stLogRowHtml).join("") + '</div>' +
+    '<button class="ghost stfull" data-stfull="' + esc(job) + '">Full log' +
+    (rows.length > STATION_TIMELINE_MAX ? " (" + rows.length + " lines)" : "") + '</button>';
+}
+/** One line of the floor's log, in the drawer and in the log window. */
+function stLogRowHtml(r) {
+  return '<div class="stlrow">' +
+    '<span class="stlwho">' + esc(r.who || "\u2014") + '</span>' +
+    '<span class="stlwhat">' + esc(ST.stageLabel(r.stage)) + ' \u00b7 ' + esc(r.type) + ' ' +
+      r.from + ' \u2192 ' + r.to + '</span>' +
+    '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>';
+}
+
+/** One progress bar, stacked: the label row with the count on the right, the
+    track under it, and who last moved it under that. The same shape the floor
+    reads on the tablet, so the two screens say the same thing the same way. */
+function stBarHtml(label, b) {
+  const pct = b.total ? Math.round(b.done / b.total * 100) : 0;
+  const full = b.total > 0 && b.done >= b.total;
+  return '<div class="stbar">' +
+    '<div class="stbhead"><span class="stbl">' + esc(label) + '</span>' +
+    '<span class="cpnum tab">' + (b.total ? b.done + " of " + b.total : "\u2014") + '</span></div>' +
+    '<span class="cpbar"><i style="width:' + pct + '%;background:var(' + (full ? "--done" : "--fab") + ')"></i></span>' +
+    (b.by || b.at ? '<div class="stwho">' + esc(b.by || "\u2014") +
+      (b.at ? ' \u00b7 ' + esc(stWhen(b.at)) : "") + '</div>' : "") +
+    '</div>';
+}
+
+/** The Glass station board, read-only, in the job list's place. Everything on
+    it comes from the two SharePoint lists; nothing here can write anywhere. */
+function stationBoardHtml() {
+  if (typeof ST === "undefined") return '<div class="empty">The station board did not load.</div>';
+  if (STATION_OK === null) return '<div class="empty">' + esc(STATION_CHECKING) + '</div>';
+  if (STATION_OK !== true) return '<div class="empty" style="line-height:1.6">' + esc(STATION_WHY || STATION_LIST_MISSING) + '</div>';
+  const board = ST.jobBoard(STATION_ITEMS || []);
+  const log = STATION_LOG_OK === true ? logRowsNow() : [];
+  /* a passing failure never takes the board away: it says so above whatever
+     was last read, because a stale board beats a blank one */
+  const trouble = STATION_ERR ? '<div class="sttrouble">' + esc(STATION_ERR) + '</div>' : "";
+  if (!board.length)
+    return trouble + '<div class="empty" style="line-height:1.6">No glass jobs on the floor\u2019s board yet. ' +
+           'Jobs appear here once this dashboard has fed them across.</div>';
+  return trouble + board.map(g => {
+    const last = ST.logLast(log, g.job);
+    return '<div class="stcard' + (g.finished ? " done" : "") + '">' +
+      '<div class="sthead">' +
+        '<span class="cond tab stjob">' + esc(g.job) + '</span>' +
+        '<span class="stcust">' + esc(g.customer || "\u2014") + '</span>' +
+        '<span class="stfed">' + esc(g.fedAt ? "fed " + agoWords(g.fedAt) : "not fed yet") + '</span>' +
+      '</div>' +
+      '<div class="stchips">' + g.rows.map(r =>
+        '<span class="stchip">' + esc(r.type) + ' <strong class="tab">' + r.cut + "/" + r.total + '</strong></span>').join("") +
+      '</div>' +
+      '<div class="stbars">' + ST.STAGES.map(s => stBarHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+      (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(last.stage) + ' ' +
+        esc(last.type) + ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
+    '</div>';
+  }).join("");
+}
+
+/* ---- the log window ---------------------------------------------------------
+   Every line the floor has recorded, newest first, filtered by person, stage,
+   job and day, with a count per person and per stage for whatever is showing.
+   Read-only in the strongest sense available: there is no code path in this
+   file that writes or deletes a Station log item, and no export of it either -
+   what leaves this dashboard is still governed by export.js and its standing
+   test, and the floor's log is not part of it.                              */
+const LOG_PAGE = 200;
+let LOGF = { who: "", stage: "", job: "", day: "", show: LOG_PAGE };
+
+function openStationLog(job) {
+  LOGF = { who: "", stage: "", job: job || "", day: "", show: LOG_PAGE };
+  renderStationLog();
+  stationTick();                 // somebody is looking at the floor now: poll fast
+}
+
+/** The window's frame: the head, the filter bar and the two boxes the repaint
+    fills. Built when the window opens and never again, so a poll landing
+    mid-keystroke cannot take the box out from under somebody's fingers. */
+function renderStationLog() {
+  let host = $("#lhost");
+  if (!host) { host = document.createElement("div"); host.id = "lhost"; document.body.appendChild(host); }
+  /* both reads answer once and are shared: opening this window three times
+     asks SharePoint once, exactly as the drawer does */
+  stationLogReadIfNeeded(() => { if ($("#lhost")) paintStationLog(); });
+  stationPeopleIfNeeded(() => { if ($("#lhost")) renderStationLog(); });
+
+  const names = {};
+  ST.stationPeople(STATION_PEOPLE || [], ST.STATION_NAME).forEach(p => { names[p.name] = 1; });
+  (STATION_LOG_OK === true ? logRowsNow() : []).forEach(r => { if (r.who) names[r.who] = 1; });
+  const opt = (v, label, now) => '<option value="' + esc(v) + '"' + (now === v ? " selected" : "") +
+    '>' + esc(label) + '</option>';
+
+  host.innerHTML = '<div class="scrim" id="lscrim"></div><div class="logwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Glass station log</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px"><span id="lgcount"></span> \u00b7 ' +
+      'who moved which counter, and when. ' +
+      'Written by the tablet only \u2014 the Excel file is not involved.</div></div>' +
+      '<button class="ghost" id="lclose">Close</button></div>' +
+    '<div class="lgbar">' +
+      '<select class="txt" id="lgwho">' + opt("", "Everyone", LOGF.who) +
+        Object.keys(names).sort().map(nm => opt(nm, nm, LOGF.who)).join("") + '</select>' +
+      '<select class="txt" id="lgstage">' + opt("", "Every stage", LOGF.stage) +
+        ST.STAGES.map(st => opt(st[0], st[1], LOGF.stage)).join("") + '</select>' +
+      '<input class="txt" id="lgjob" placeholder="Job number" value="' + esc(LOGF.job) + '">' +
+      '<input class="txt" id="lgday" type="date" value="' + esc(LOGF.day) + '">' +
+      '<button class="chip" id="lgclear">Clear filters</button>' +
+    '</div>' +
+    '<div class="lgcounts" id="lgcounts"></div>' +
+    '<div class="logbody" id="lgbody"></div>' +
+    '<div class="foot"><span>Read-only \u2014 nothing here changes the floor\u2019s record or the Excel file</span>' +
+    '<span>Click a job number to open it</span></div></div>';
+
+  $("#lscrim").onclick = closeWin(host);
+  $("#lclose").onclick = closeWin(host);
+  /* the filters repaint the rows and the counts only, so the box being typed
+     into is never rebuilt and the caret stays where it was put */
+  const set = (id, key) => { const el = $(id); if (el) el.onchange = () => { LOGF[key] = el.value; LOGF.show = LOG_PAGE; paintStationLog(); }; };
+  set("#lgwho", "who"); set("#lgstage", "stage"); set("#lgday", "day");
+  const jb = $("#lgjob");
+  if (jb) jb.oninput = () => { LOGF.job = jb.value; LOGF.show = LOG_PAGE; paintStationLog(); };
+  const cl = $("#lgclear");
+  if (cl) cl.onclick = () => {
+    LOGF = { who: "", stage: "", job: "", day: "", show: LOG_PAGE };
+    renderStationLog();                                // the bar's own values have changed
+  };
+  paintStationLog();
+  renderFab();                 // a window is open: the wheel steps aside
+}
+
+/** The rows and the counts, and nothing else on the window. */
+function paintStationLog() {
+  if (!$("#lhost")) return;
+  const all = STATION_LOG_OK === true ? logRowsNow() : [];
+  const rows = ST.logFilter(all, LOGF);
+  const counts = ST.logCounts(rows);
+  const head = $("#lgcount");
+  if (head) head.textContent = rows.length + " line" + (rows.length === 1 ? "" : "s");
+
+  const chip = c => '<span class="lgcount">' + esc(c.key) + ' <strong class="tab">' + c.units + '</strong>' +
+    ' <span class="lgc2">' + c.lines + ' line' + (c.lines === 1 ? "" : "s") + '</span></span>';
+  const cbox = $("#lgcounts");
+  if (cbox) cbox.innerHTML =
+    (counts.people.length ? '<div class="lgcrow"><span class="kick">Per person</span>' +
+      counts.people.map(chip).join("") + '</div>' : "") +
+    (counts.stages.length ? '<div class="lgcrow"><span class="kick">Per stage</span>' +
+      counts.stages.map(c => chip({ key: ST.stageLabel(c.key), units: c.units, lines: c.lines })).join("") +
+      '</div>' : "");
+
+  /* a job number is only a way into the drawer when the job is still on the
+     sheet: a line about a job that has been delivered would otherwise close
+     this window and open nothing */
+  const jobCell = j => (byId(j)
+    ? '<button class="stn jump" data-j="' + esc(j) + '" style="border:0;cursor:pointer">' + esc(j) + '</button>'
+    : '<span class="stn" title="not on the sheet any more">' + esc(j) + '</span>');
+  const body = STATION_LOG_OK === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
+    : STATION_LOG_OK !== true ? '<div class="empty" style="line-height:1.6">' +
+        esc(STATION_LOG_WHY || STATION_LOG_MISSING) + '</div>'
+    : !rows.length ? '<div class="empty">No line on the floor\u2019s log matches that.</div>'
+    : '<div class="lglist">' + rows.slice(0, LOGF.show).map(r =>
+        '<div class="lgrow">' + jobCell(r.job) +
+          '<span class="ell">' + esc(r.type) + '</span>' +
+          '<span class="ell">' + esc(ST.stageLabel(r.stage)) + '</span>' +
+          '<span class="tab">' + r.from + ' \u2192 ' + r.to + '</span>' +
+          '<span class="ell">' + esc(r.who || "\u2014") + '</span>' +
+          '<span class="tab lgwhen">' + esc(stWhen(r.at)) + '</span>' +
+        '</div>').join("") +
+      (rows.length > LOGF.show
+        ? '<button class="ghost lgmore" id="lgmore">Show more (' + (rows.length - LOGF.show) + ' left)</button>'
+        : "") + '</div>';
+  const bbox = $("#lgbody");
+  if (!bbox) return;
+  bbox.innerHTML = body;
+  const more = $("#lgmore");
+  if (more) more.onclick = () => { LOGF.show += LOG_PAGE; paintStationLog(); };
+  bbox.querySelectorAll(".jump").forEach(b => b.onclick = () => {
+    const host = $("#lhost");
+    if (!byId(b.dataset.j)) return;                    // nothing to open: the window stays
+    if (host) host.remove();
+    state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer();
+  });
+}
+
 function renderRows() {
+  const host = $("#rows");
+  /* a floor station's board takes the whole list's place: read-only, no
+     selection, no drag targets, nothing that writes anything anywhere */
+  if (state.board) {
+    /* the card's "last: ..." line comes from the log list, which the feeder
+       never reads - so the board asks for it once, here */
+    stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
+    host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
+    const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.jobBoard(STATION_ITEMS || []).length : 0;
+    $("#count").textContent = n ? "Showing " + n + " job" + (n > 1 ? "s" : "") + " on the Glass station board"
+                                : "Glass station";
+    return;
+  }
   const list = filtered();
   const max = Math.max(1, ...list.map(j => tot(comp(j))));
-  const host = $("#rows");
 
   if (state.view === "flat") {
     host.innerHTML = list.length ? list.map((j, i) => rowHtml(j, i, max)).join("")
@@ -1894,7 +2715,7 @@ function fabActions() {
 }
 /** A window or the drawer is open. On a phone the wheel would sit right on top
     of their Download / Save buttons, so it takes itself out of the way. */
-const fabCovered = () => !!($("#dhost") || $("#xhost") || $("#ahost") || $("#chost") || $("#vhost"));
+const fabCovered = () => !!($("#dhost") || $("#xhost") || $("#ahost") || $("#chost") || $("#vhost") || $("#lhost"));
 const fabClass = () => "fabwrap" + (FABOPEN ? " open" : "") + (fabCovered() ? " over" : "");
 /** Every window's Close and scrim go through here: the wheel hid itself while
     the window was open, so something has to tell it the window has gone. */
@@ -2280,12 +3101,23 @@ function datesSectionHtml(j, st) {
     '</div>';
 }
 
-function openDrawer() { if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); } renderDrawer(); renderFab(); }
+function openDrawer() {
+  if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); }
+  renderDrawer(); renderFab();
+  stationTick();                 // a job with glass on screen polls at the fast rate
+}
 function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dhost"); if (h) h.remove(); renderRows(); renderFab(); }
 
 function renderDrawer() {
   const host = $("#dhost"); if (!host) return;
   const j = byId(state.sel); if (!j) return;
+  /* the feeder skips a run when nothing has changed, so the station list can
+     easily not have been read at all by the time somebody opens a job. Read it
+     once, here, or the Glass station section sits on "checking…" for ever. */
+  if (Object.keys(j.glass || {}).length) {
+    stationReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
+    stationLogReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
+  }
   const st = label(j), ed = state.edit;
   const isCS = /^[CS]\d/.test(j.id);
   const readyName = isCS ? "Collect & supply only" : "Ready to fit";
@@ -2295,6 +3127,10 @@ function renderDrawer() {
   const act = document.activeElement;
   const typing = act && act.dataset && act.dataset.cpin ? { item: act.dataset.cpin, val: act.value } : null;
   const alTyping = act && act.id === "alnew" ? act.value : null;   // a half-typed address, likewise
+  /* and a half-written comment: the station poll redraws this drawer every ten
+     seconds, and a comment box that empties itself mid-sentence is the worst
+     kind of bug to have to explain */
+  const cTyping = act && act.id === "cbox" ? act.value : null;
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
@@ -2328,6 +3164,7 @@ function renderDrawer() {
       (Object.keys(j.glass).length ? '<div class="sect"><span class="kick">Glass units</span><div style="display:flex;flex-wrap:wrap;gap:6px">' +
         Object.keys(j.glass).map(k => '<span style="font-size:12.5px;padding:5px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2)">' +
           esc(k.toUpperCase()) + ' <strong class="tab">' + j.glass[k] + '</strong></span>').join("") + '</div></div>' : "") +
+      stationSectionHtml(j) +
       (function () {
         const cs = commentsFor(j.id);
         return '<div class="sect"><span class="kick">Comments (' + cs.length + ')</span>' +
@@ -2353,6 +3190,10 @@ function renderDrawer() {
     const box = host.querySelector('.cpin[data-cpin="' + typing.item + '"]');
     if (box) { box.value = typing.val; try { box.focus(); } catch (e) {} }
   }
+  if (cTyping != null) {
+    const box = host.querySelector("#cbox");
+    if (box) { box.value = cTyping; try { box.focus(); } catch (e) {} }
+  }
   if (alTyping) {
     const box = host.querySelector("#alnew");
     if (box) { box.value = alTyping; try { box.focus(); } catch (e) {} }
@@ -2360,6 +3201,10 @@ function renderDrawer() {
   $("#dscrim").onclick = closeDrawer;
   $("#dclose").onclick = closeDrawer;
   $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
+  /* the one thing in the Glass station section that can be clicked: the same
+     log, unfiltered from this job rather than cut off at twelve lines */
+  const full = host.querySelector("[data-stfull]");
+  if (full) full.onclick = () => openStationLog(full.dataset.stfull);
   const dtog = $("#datetog");
   if (dtog) dtog.onclick = () => { state.collapsed.dates = state.collapsed.dates ? 0 : 1; saveUi(); renderDrawer(); };
   /* the Alerts section is not part of Edit mode: it never touches the
@@ -2641,10 +3486,26 @@ async function start() {
     cpClearQueue();                  // owed taps belong to the person who made them
     CW.signOut();
   };
-  await CW.openSession();
-  await load("first read…");
+  /* findFile() is the first thing that touches the workbook, and it runs
+     inside openSession() - before load() and its own catch. A station account
+     signing in here would otherwise sit on "starting…" for ever, so the whole
+     opening sequence answers to the same no-access gate. */
+  NOACCESS = false;
+  try {
+    await CW.openSession();
+    await load("first read…");
+  } catch (e) {
+    const m = (e && e.message) || String(e);
+    if (NOACCESS_RE.test(m)) { showNoAccessGate(); return; }
+    setStatus("read failed", "err");
+    toast("Could not open the workbook: " + m.slice(0, 160), true);
+    return;
+  }
+  if (NOACCESS) return;            // load() met it and has already put the gate up
   cpReplayQueue();                 // taps this browser owed from a previous visit
   setInterval(poll, 12000);
+  setStationFoot(); setInterval(setStationFoot, 60000);   // "station feed: 3 min ago" keeps counting
+  stationTick();                   // the floor's own two lists, kept current by delta
   checkBuild(); setInterval(checkBuild, 120000);
 }
 
@@ -2667,6 +3528,7 @@ async function start() {
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && FABOPEN) { fabClose(); return; }
     if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); renderFab(); return; }
+    if (e.key === "Escape" && $("#lhost")) { $("#lhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
   });

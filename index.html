@@ -256,6 +256,61 @@
     .cpbar, .cpctl { grid-column:1/-1 }
     .cpctl { justify-content:flex-start }
   }
+  /* the Glass station board, in the job list's place. Read-only here: the bars
+     are the checkpoint bars (.cpbar), the numbers the checkpoint numbers. */
+  .stboard { display:grid; grid-template-columns:repeat(auto-fill,minmax(285px,1fr)); gap:12px; padding:14px }
+  .stcard { border:1px solid var(--line); border-radius:6px; background:var(--surface);
+            padding:12px 13px; animation:rise .22s both }
+  .stcard.done { opacity:.62 }
+  .sthead { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-bottom:9px }
+  .stjob { font-size:24px; font-weight:700; line-height:1 }
+  .stcust { font-size:13px; color:var(--ink-2); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .stfed { font-size:11px; color:var(--ink-4); white-space:nowrap }
+  .stchips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px }
+  .stchip { font-size:11.5px; padding:3px 8px; border:1px solid var(--line-soft); border-radius:4px;
+            background:var(--surface-2); color:var(--ink-2) }
+  /* a passing failure, above whatever was last read - never in its place */
+  .sttrouble { grid-column:1/-1; font-size:12px; color:var(--urgent); padding:2px 2px 4px }
+  /* the stacked bar the floor reads on the tablet, drawn the same way here so
+     the two screens say the same thing the same way: label row with the count
+     on the right, full-width track under it, and who last moved it under that */
+  .stbars { display:grid; gap:10px }
+  .stbar { display:grid; gap:3px }
+  .stbhead { display:flex; align-items:baseline; justify-content:space-between; gap:9px }
+  .stbl { font-size:12.5px; color:var(--ink-2) }
+  .stwho { font-size:11px; color:var(--ink-4) }
+  .stlast { margin-top:9px; font-size:11.5px; color:var(--ink-3); overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap }
+  /* the job's own log lines in the drawer, newest first */
+  .stlog { display:grid; gap:5px; margin-top:4px }
+  .stlrow { display:grid; grid-template-columns:minmax(70px,auto) 1fr auto; gap:8px;
+            align-items:baseline; font-size:12px; padding:4px 0; border-bottom:1px solid var(--line-soft) }
+  .stlwho { font-weight:600; color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .stlwhat { color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .stlwhen { color:var(--ink-4); white-space:nowrap }
+  .stfull { align-self:start; margin-top:2px }
+  @media (max-width:560px){
+    .stboard { grid-template-columns:1fr; padding:11px }
+  }
+  /* the floor log window: filters, the counts they add up to, and the lines */
+  .lgbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+           padding:10px 14px; border-bottom:1px solid var(--line) }
+  .lgbar .txt { min-height:38px }
+  .lgcounts { display:grid; gap:6px; padding:9px 14px; border-bottom:1px solid var(--line);
+              background:var(--surface-2) }
+  .lgcrow { display:flex; flex-wrap:wrap; gap:8px; align-items:center }
+  .lgcount { font-size:12px; padding:3px 9px; border:1px solid var(--line-soft); border-radius:12px;
+             background:var(--surface); color:var(--ink-2) }
+  .lgc2 { color:var(--ink-4) }
+  .lglist { display:grid }
+  .lgrow { display:grid; grid-template-columns:78px 62px minmax(74px,auto) 84px 1fr auto;
+           gap:10px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line-soft);
+           font-size:12.5px }
+  .lgwhen { color:var(--ink-4); white-space:nowrap }
+  .lgmore { margin:12px 14px }
+  @media (max-width:700px){
+    .lgrow { grid-template-columns:70px 1fr auto; row-gap:3px }
+  }
   /* alerts: who gets emailed about a job. Same thumb-sized controls as the
      checkpoints - the admin adds people from a phone as often as a desk. */
   .alchips { display:flex; flex-wrap:wrap; gap:7px }
@@ -537,7 +592,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span> &middot; <span id="build">build 20260907-1315</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260908-1608</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -549,10 +604,11 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260907-1315"></script>
-<script src="graph.js?v=20260907-1315"></script>
-<script src="checkpoints.js?v=20260907-1315"></script>
-<script src="export.js?v=20260907-1315"></script>
-<script src="app.js?v=20260907-1315"></script>
+<script src="parser.js?v=20260908-1608"></script>
+<script src="graph.js?v=20260908-1608"></script>
+<script src="checkpoints.js?v=20260908-1608"></script>
+<script src="station-core.js?v=20260908-1608"></script>
+<script src="export.js?v=20260908-1608"></script>
+<script src="app.js?v=20260908-1608"></script>
 </body>
 </html>

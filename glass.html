@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glass station</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔷</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* The same tokens as the master dashboard, so the two screens are
+     recognisably one thing - but this one starts DARK, because that is what
+     the owner picked out of the phone screenshot and what a workshop screen
+     read at arm's length wants. The light set is behind data-theme="light",
+     which the header button sets and the device remembers (cw_stationtheme).
+     There is deliberately no link from here to the master dashboard. */
+  :root {
+    --bg:#16161a; --surface:#1e1e23; --surface-2:#24242a; --line:#33333b; --line-soft:#2b2b32;
+    --ink:#f2f1ee; --ink-2:#c9c6bf; --ink-3:#9a968d; --ink-4:#7a776f;
+    --brand:#0e0e11; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#6aa9ec;
+    --fab:#e8e04a; --done:#e0c98a; --urgent:#f07a72;
+  }
+  :root[data-theme="light"] {
+    --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
+    --ink:#17171a; --ink-2:#4d4a44; --ink-3:#6d6a62; --ink-4:#8e8b84;
+    --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#184f95;
+    --fab:#8a6d00; --done:#8a6a1e; --urgent:#b3261e;
+  }
+  * { box-sizing:border-box }
+  [hidden] { display:none !important }
+  body { margin:0; background:var(--bg); color:var(--ink); font-size:15px;
+         font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+         -webkit-text-size-adjust:100% }
+  .cond { font-family:"Barlow Condensed",sans-serif; font-variant-numeric:tabular-nums }
+  .tab { font-variant-numeric:tabular-nums }
+  button { font:inherit; cursor:pointer }
+  @keyframes rise { from{transform:translateY(9px);opacity:0} to{transform:none;opacity:1} }
+  @keyframes shake { 10%,90%{transform:translateX(-2px)} 30%,70%{transform:translateX(5px)}
+                     50%{transform:translateX(-7px)} 100%{transform:none} }
+
+  /* ---- sign in ---- */
+  #gate { position:fixed; inset:0; background:var(--brand); color:var(--onbrand); z-index:80;
+          display:flex; align-items:center; justify-content:center }
+  .gatebox { max-width:420px; padding:30px; text-align:left }
+  .gatebox h1 { font-family:"Barlow Condensed",sans-serif; font-size:42px; margin:0 0 6px;
+                text-transform:uppercase; letter-spacing:.02em }
+  .gatebox p { color:#a8a49a; line-height:1.55; margin:0 0 22px; font-size:14.5px }
+  .signin { background:#fff; color:#17171a; border:0; padding:15px 24px; border-radius:6px;
+            font-size:16px; font-weight:600; display:inline-flex; align-items:center; gap:10px; min-height:52px }
+  #gateerr { margin-top:18px; color:#f07a72; font-size:13.5px; line-height:1.5; white-space:pre-wrap;
+             display:none; background:#2a1a1a; padding:11px 13px; border-radius:5px; border:1px solid #5a2a2a }
+
+  /* ---- the bar across the top ---- */
+  header.top { position:sticky; top:0; z-index:30; background:var(--brand); color:var(--onbrand);
+               padding:11px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+  .brand { font-family:"Barlow Condensed",sans-serif; font-size:25px; font-weight:700; text-transform:uppercase }
+  #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
+           background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
+           padding:8px 16px; min-height:40px; display:flex; align-items:center }
+  #whois:empty { display:none }
+  #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+               border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600 }
+  #upd { font-size:12px; color:#a8a49a; margin-left:auto }
+  #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
+                       border-radius:5px; min-height:44px; padding:0 14px; font-size:13px }
+
+  /* ---- the board ---- */
+  #main { padding:14px; max-width:1180px; margin:0 auto }
+  #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
+  .grp { display:grid; grid-template-columns:1fr; gap:13px }
+  .grouphead { font-size:11px; letter-spacing:.15em; text-transform:uppercase; cursor:pointer;
+               font-weight:600; color:var(--ink-4); margin:16px 0 8px; min-height:44px;
+               display:flex; align-items:center }
+  .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
+  .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
+           border-radius:6px; background:var(--surface); color:var(--ink); font-size:15px }
+
+  .card { border:1px solid var(--line); border-radius:7px; background:var(--surface);
+          padding:13px 14px; animation:rise .22s both }
+  .card.done { opacity:.6 }
+  .chead { display:flex; align-items:baseline; gap:10px; min-height:48px; cursor:pointer }
+  .job { font-size:30px; font-weight:700; line-height:1 }
+  .cust { font-size:14px; color:var(--ink-2); flex:1; min-width:0;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .chev { color:var(--ink-4); font-size:15px }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 11px }
+  .chip { font-size:12.5px; padding:4px 9px; border:1px solid var(--line-soft); border-radius:4px;
+          background:var(--surface-2); color:var(--ink-2) }
+
+  /* The stacked bar: the label row with the count on the right, and a
+     full-width track under it. The same shape at every width - it is the
+     layout the owner picked, and it reads from further away than a grid. */
+  .bars { display:grid; gap:11px }
+  .bar { display:grid; gap:4px }
+  .barhead { display:flex; align-items:baseline; justify-content:space-between; gap:10px }
+  .barl { font-size:13px; color:var(--ink-2) }
+  .barn { font-size:12.5px; color:var(--ink-3); white-space:nowrap }
+  .track { height:12px; border-radius:3px; background:var(--line-soft); overflow:hidden; display:block }
+  .track i { display:block; height:100%; transition:width .18s ease }
+
+  .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
+  .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
+
+  /* the steppers. Everything tapped here is at least 48 px, because it is
+     tapped with a work glove on. A stage this person does not hold is greyed
+     and disabled - still readable, never movable. */
+  .rows { margin-top:13px; border-top:1px solid var(--line-soft); padding-top:11px; display:grid; gap:14px }
+  .grow { display:grid; gap:8px }
+  .gtype { font-size:13.5px; font-weight:600 }
+  .gtot { font-size:12px; color:var(--ink-4); font-weight:400 }
+  .step { display:grid; grid-template-columns:minmax(84px,1fr) 74px auto; gap:9px; align-items:center }
+  .step.locked { opacity:.5 }
+  .stepl { font-size:13px; color:var(--ink-2) }
+  .nomine { font-size:11px; color:var(--ink-4) }
+  .stepn { font-size:15px; font-weight:600; white-space:nowrap }
+  .stepc { display:flex; gap:7px; justify-content:flex-end }
+  .sbtn { width:48px; height:48px; border:1px solid var(--line); border-radius:6px;
+          background:var(--surface-2); color:var(--ink); font-size:21px; line-height:1 }
+  .sall { min-height:48px; padding:0 15px; border:1px solid var(--line); border-radius:6px;
+          background:var(--surface-2); color:var(--ink-2); font-size:13.5px; white-space:nowrap }
+  .sbtn:active, .sall:active { background:var(--line-soft) }
+  .sbtn:disabled, .sall:disabled { opacity:.4; cursor:default }
+
+  /* ---- who are you? ---- */
+  .picker { max-width:560px; margin:0 auto; padding:18px 4px 40px }
+  .pickh { font-family:"Barlow Condensed",sans-serif; font-size:34px; font-weight:700;
+           text-transform:uppercase; letter-spacing:.02em; margin-bottom:4px }
+  .picksub { font-size:14px; color:var(--ink-3); margin-bottom:18px }
+  .pgrid { display:grid; gap:12px; margin-top:14px }
+  .pbtn { min-height:64px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+          color:var(--ink); text-align:left; padding:10px 18px; display:flex; flex-direction:column;
+          justify-content:center; gap:3px }
+  .pbtn:active { background:var(--surface-2) }
+  .pname { font-size:19px; font-weight:600 }
+  .pstages { font-size:12.5px; color:var(--ink-3) }
+  .pindots { font-size:32px; letter-spacing:.3em; color:var(--ink-2); min-height:44px; margin:6px 0 2px }
+  .pindots.shake { animation:shake .4s both }
+  .pinbad { color:var(--urgent); font-size:13.5px; font-weight:600; margin-bottom:6px }
+  .pinpad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:10px }
+  .pk { min-height:56px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+        color:var(--ink); font-size:22px; font-weight:600 }
+  .pk:active { background:var(--surface-2) }
+  .pk.go { background:var(--surface-2); font-size:17px }
+  .pcancel { margin-top:16px; min-height:48px; width:100%; border:1px solid var(--line);
+             border-radius:6px; background:transparent; color:var(--ink-3); font-size:14px }
+
+  /* two columns of cards once there is room for them - a tablet in portrait
+     is 768 px, so the break is under it */
+  @media (min-width:700px){
+    .grp { grid-template-columns:1fr 1fr }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gatebox">
+    <h1>Glass station</h1>
+    <p>Sign in with the station account to see today's glass and record what has
+       been cut, hotmelted and glazed.</p>
+    <button class="signin" id="signinbtn">
+      <svg width="18" height="18" viewBox="0 0 23 23"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/><path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/></svg>
+      Sign in
+    </button>
+    <div id="gateerr"></div>
+  </div>
+</div>
+
+<header class="top" hidden id="top">
+  <span class="brand">Glass station</span>
+  <span id="whois"></span>
+  <button id="switchbtn" hidden>Switch person</button>
+  <span id="upd"></span>
+  <button id="themebtn">Light</button>
+  <button id="outbtn">Sign out</button>
+</header>
+
+<div id="main" hidden>
+  <div id="soft" hidden></div>
+  <div id="board"></div>
+</div>
+
+<script src="vendor/msal-browser.min.js"></script>
+<script src="graph.js?v=20260908-1608"></script>
+<script src="station-core.js?v=20260908-1608"></script>
+<script src="station.js?v=20260908-1608"></script>
+</body>
+</html>

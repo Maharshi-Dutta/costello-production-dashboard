@@ -11,6 +11,12 @@ const TENANT_ID = "cb4cfc4c-96f4-44c0-b37b-a467826f86d6";
 const SCOPES = ["Files.ReadWrite.All", "User.Read"];
 const LIST_SCOPES = ["Files.ReadWrite.All", "Sites.ReadWrite.All", "User.Read"];
 const SITE_PATH = "costellowindowsie.sharepoint.com:/sites/ProductionProgress";
+/* The separate site the floor stations live in, on the same hostname. It is
+   named here rather than taken from station-core.js because graph.js is loaded
+   on its own by the phases tests, and because this is the URL segment of the
+   site - station-core.js' STATION_SITE is the same word for the same site and
+   the two must match. */
+const STATION_SITE_NAME = "FloorStations";
 const FILE_MATCH = "production work in progress";
 const G = "https://graph.microsoft.com/v1.0";
 
@@ -43,8 +49,12 @@ async function initAuth() {
   return account;
 }
 
-async function signIn() {
-  const res = await app().loginPopup({ scopes: SCOPES, prompt: "select_account" });
+/* The master dashboard signs in with SCOPES, so a tenant that has not
+   consented to Sites.ReadWrite.All still gets a working dashboard. The station
+   page has nothing BUT lists, so it passes LIST_SCOPES and asks for the list
+   permission at the door - there is no consent flow on a shared tablet. */
+async function signIn(scopes) {
+  const res = await app().loginPopup({ scopes: scopes || SCOPES, prompt: "select_account" });
   account = res.account;
   return account;
 }
@@ -57,7 +67,7 @@ let tokenOverride = null;     // rehearsal harness only: a token without the sig
 /* quiet = never open a consent popup (background reads); a popup is only ever
    opened for the sign-in scopes, or for the list scopes from a user's click. */
 async function token(scopes, quiet) {
-  if (tokenOverride) return tokenOverride();
+  if (tokenOverride) return tokenOverride(scopes || SCOPES, !!quiet);
   if (!account) throw new Error("not signed in");
   scopes = scopes || SCOPES;
   try {
@@ -71,13 +81,56 @@ async function token(scopes, quiet) {
 }
 /** Ask (once, with a popup if needed) for the list permission - from a click only. */
 async function listConsent() { return token(LIST_SCOPES, false); }
+/** Have we got the list permission already? A quiet attempt, so it can be
+    asked in the background - before a feed run, say - without a popup ever
+    appearing in front of someone who did not click anything. */
+async function hasListConsent() {
+  try { await token(LIST_SCOPES, true); return true; } catch (e) { return false; }
+}
+
+/* Which requests need Sites.ReadWrite.All. This decides on the SHAPE of the
+   path and never on a stray character: every A1 address in the app has a colon
+   in it (range(address='A1:K600')), so "has a colon" would quietly send every
+   fill, row move, log line and progress row asking for the list permission -
+   which fails outright on a tenant that has not granted it, and loses the
+   interactive re-auth popup on one that has.
+
+     · /workbook or /drive/ - the file itself: SCOPES, and not quiet, so an
+       expired token still opens the popup that gets the work saved;
+     · /lists - a SharePoint list: LIST_SCOPES, quietly;
+     · /sites/{host}:/{path} - looking a site up by its path: LIST_SCOPES,
+       quietly, EXCEPT the workbook's own site, which findFile() resolves at
+       sign-in and which must keep working for a tenant that has never
+       consented to the list permission.
+
+   The one awkward case is the interim arrangement in which the floor's lists
+   live in the workbook's own site: stationSite() then looks that site up too,
+   and that lookup is a list call - quiet, and never allowed to throw a consent
+   window at a tablet on the floor. It is the same path findFile() uses, so it
+   is marked with a $select that findFile() never sends, and the rule below
+   reads the mark. Nothing else in the app sends it.                        */
+const SITE_AS_LIST = "?$select=id,displayName";
+function needsListScope(path) {
+  if (path == null) return false;
+  /* a list path is a list call whatever else is in it. This is tested first so
+     that a site whose id or name happens to carry "/drive" in it - and any
+     future list path that does - cannot be read as a workbook call and sent
+     with the wrong scopes, non-quietly, at a tablet on the floor. */
+  if (path.indexOf("/lists") >= 0) return true;
+  if (path.indexOf("/workbook") >= 0 || path.indexOf("/drive/") >= 0) return false;
+  if (!/^\/sites\/[^/]+:\//.test(path)) return false;
+  return path.indexOf(SITE_PATH) < 0 || path.indexOf(SITE_AS_LIST) >= 0;
+}
+/** The scopes one request is made with - the single place that decides, so a
+    test can ask the same question the request asks. */
+function scopeFor(path) { return needsListScope(path) ? LIST_SCOPES : SCOPES; }
 
 /* The workbook session header belongs to workbook requests only: sending a
    stale one at /sites/{id}/lists would earn an InvalidSession 400 on a call
    that has nothing to do with the workbook. */
 async function headers(extra, path) {
-  const isList = path != null && path.indexOf("/lists") >= 0;
-  const h = { Authorization: "Bearer " + (await token(isList ? LIST_SCOPES : SCOPES, isList)) };
+  const isList = needsListScope(path);
+  const h = { Authorization: "Bearer " + (await token(scopeFor(path), isList)) };
   if (sessionId && (path == null || path.indexOf("/workbook") >= 0)) h["workbook-session-id"] = sessionId;
   return Object.assign(h, extra || {});
 }
@@ -844,7 +897,32 @@ async function moveJobRow(jobId, targetIdx, tmplFor, onStep) {
    answers null and listItems() answers null with it, so the dashboard can say
    so plainly instead of trying to create anything.                          */
 const LISTIDS_KEY = "cw_listids";
-const listIdMemo = {};                 // display name -> id, for this page load
+const listIdMemo = {};                 // cache key -> id, for this page load
+
+/* Every function below takes an optional opts = { siteId, fields }. Without
+   it they behave exactly as they always have: the workbook's own site, and the
+   phases list's five columns. With it they address another site - the floor
+   stations site, which the station account can see and the workbook's site it
+   cannot - and ask for another set of columns. That is the whole of the
+   generalisation: no call site that omits opts changes behaviour. */
+const PHASE_SELECT = "Title,Phase,PhaseName,SetBy,SetAt";
+/** The site a list call is about: the workbook's, unless one was named. A
+    named site is never looked up through findFile(), because the account
+    reading it may have no access to the workbook at all. */
+async function listSiteId(opts) {
+  if (opts && opts.siteId) return opts.siteId;
+  /* A caller that named a site and passed nothing has not resolved one yet.
+     Falling through to findFile() here is how the station page ends up asking
+     for /drive/root/children - the one request it must never make - so an
+     explicit empty siteId is an error rather than a default. */
+  if (opts && "siteId" in opts) throw new Error("no site resolved for this list yet");
+  const f = await findFile();
+  return f.siteId;
+}
+/** Two sites can hold two lists with the same display name, so the cache is
+    keyed by both - and the default site keeps the bare display name it has
+    always used, so cw_listids does not change shape for anyone. */
+const listKey = (displayName, siteId) => (siteId ? siteId + "|" : "") + displayName;
 
 function listIdCache() {
   try { return JSON.parse(localStorage.getItem(LISTIDS_KEY) || "{}"); } catch (e) { return {}; }
@@ -860,17 +938,18 @@ function rememberListId(name, id) {
     memory for this page and in localStorage for the next one. A list that is
     not there is never cached: the moment the manager creates it, the next call
     finds it without anyone clearing anything. */
-async function listId(displayName) {
-  if (listIdMemo[displayName]) return listIdMemo[displayName];
-  const cached = listIdCache()[displayName];
-  if (cached) { listIdMemo[displayName] = cached; return cached; }
-  const f = await findFile();
-  const r = await call("GET", "/sites/" + f.siteId + "/lists?$select=id,displayName");
+async function listId(displayName, opts) {
+  const siteId = await listSiteId(opts);
+  const key = listKey(displayName, opts && opts.siteId ? siteId : null);
+  if (listIdMemo[key]) return listIdMemo[key];
+  const cached = listIdCache()[key];
+  if (cached) { listIdMemo[key] = cached; return cached; }
+  const r = await call("GET", "/sites/" + siteId + "/lists?$select=id,displayName");
   const want = String(displayName).toLowerCase();
   const hit = (r.value || []).find(l => String(l.displayName || "").toLowerCase() === want);
   if (!hit) return null;
-  listIdMemo[displayName] = hit.id;
-  rememberListId(displayName, hit.id);
+  listIdMemo[key] = hit.id;
+  rememberListId(key, hit.id);
   return hit.id;
 }
 
@@ -886,21 +965,117 @@ function graphPath(url) {
   return s.replace(/^\/(v1\.0|beta)(?=\/)/, "");
 }
 
+const LIST_PAGE_CAP = 50;                   // 50 pages of 999: a runaway guard
 /** Every item of a list, following @odata.nextLink to the end.
     null (not []) means the list does not exist. */
-async function listItems(displayName) {
-  const id = await listId(displayName);
+async function listItems(displayName, opts) {
+  const id = await listId(displayName, opts);
   if (!id) return null;
-  const f = await findFile();
-  let path = "/sites/" + f.siteId + "/lists/" + id +
-             "/items?expand=fields(select=Title,Phase,PhaseName,SetBy,SetAt)&$top=999";
+  const siteId = await listSiteId(opts);
+  const select = opts && opts.fields && opts.fields.length ? opts.fields.join(",") : PHASE_SELECT;
+  let path = "/sites/" + siteId + "/lists/" + id +
+             "/items?expand=fields(select=" + select + ")&$top=999";
   const out = [];
-  for (let page = 0; page < 50 && path; page++) {
+  let page = 0;
+  for (; page < LIST_PAGE_CAP && path; page++) {
     const r = await call("GET", path);
     (r.value || []).forEach(it => out.push({ id: String(it.id), fields: it.fields || {} }));
     path = r["@odata.nextLink"] ? graphPath(r["@odata.nextLink"]) : null;
   }
+  /* the cap is a guard against a runaway loop, not a page size - if it is ever
+     reached, the caller is holding an incomplete list and should know */
+  if (path) console.warn("[graph] “" + displayName + "” has more than " +
+    (LIST_PAGE_CAP * 999) + " items: only the first " + out.length + " were read.");
   return out;
+}
+
+/* ---- what moved since last time -------------------------------------------
+   The floor taps a counter and the office is meant to see it inside ten
+   seconds. Re-reading the whole list six times a minute on two screens would
+   be six hundred rows a minute of the same unchanged text, so the polls use
+   Graph's delta feed instead: the first call enumerates the list and hands
+   back a deltaLink, and every call after it passes that token and gets only
+   the items that have changed since.
+
+   Three things about the feed the callers have to know, all of them handled
+   here rather than in the pages:
+
+     · a deleted item arrives carrying "@removed" instead of a fields bag;
+     · the same item can appear more than once in one feed, and the LAST
+       occurrence is the true one (ST.mergeDelta applies that rule);
+     · a token that is too old, or a list whose server state has moved on,
+       is answered 410 Gone with resyncChangesApplyDifferences or
+       resyncChangesUploadDifferences - which means "start again", not "this
+       failed".
+
+   So every 4xx from the delta endpoint - 410 included - is re-thrown as one
+   recognisable error, and the caller answers it the one way that is always
+   right: read the whole list with listItems() once, then start a fresh delta
+   enumeration with no token. Anything else (offline, a 5xx that outlived
+   call()'s retries) is thrown untouched, so a passing failure stays a passing
+   failure and does not cost a full read.                                    */
+const DELTA_FAIL = "delta must be restarted";
+const DELTA_TOP = 500;
+/** Is this the error that means "throw the token away and read the lot"? */
+function isDeltaRestart(e) {
+  const m = (e && e.message) || String(e || "");
+  return m.indexOf(DELTA_FAIL) >= 0;
+}
+/** ... and was it the 410 Gone that says "your token is too old, enumerate
+    again"? That one means delta itself is perfectly well - anything else from
+    the delta endpoint means this list will not serve one, and a caller that
+    cannot tell them apart asks a refusing list six times a minute for ever. */
+function isDeltaResync(e) {
+  if (!isDeltaRestart(e)) return false;
+  const m = (e && e.message) || String(e || "");
+  return /->\s*410\b/.test(m) || m.indexOf("resyncChanges") >= 0;
+}
+/** One delta pass. Without opts.token it enumerates the list from scratch;
+    with it, only what has changed since that token was issued.
+    Answers { items:[{id, fields, removed}], next } - `next` is the deltaLink
+    to hand back next time. null (not {}) means the list does not exist. */
+async function listDelta(displayName, opts) {
+  let path;
+  if (opts && opts.token) {
+    path = graphPath(opts.token);
+    /* Graph normally carries the $expand through the deltaLink, but it is not
+       obliged to, and a token path without it answers items with no fields at
+       all - which reads on the other end as "every row went blank". Put it
+       back if it is not there. */
+    if (path.indexOf("expand=fields") < 0) {
+      const sel = opts.fields && opts.fields.length ? opts.fields.join(",") : PHASE_SELECT;
+      path += (path.indexOf("?") >= 0 ? "&" : "?") + "expand=fields(select=" + sel + ")";
+    }
+  } else {
+    const id = await listId(displayName, opts);
+    if (!id) return null;
+    const siteId = await listSiteId(opts);
+    const select = opts && opts.fields && opts.fields.length ? opts.fields.join(",") : PHASE_SELECT;
+    path = "/sites/" + siteId + "/lists/" + id +
+           "/items/delta?expand=fields(select=" + select + ")&$top=" + DELTA_TOP;
+  }
+  const items = [];
+  let next = null;
+  for (let page = 0; page < 50 && path; page++) {
+    let r;
+    try {
+      r = await call("GET", path);
+    } catch (e) {
+      const m = (e && e.message) || String(e || "");
+      /* 4xx, and the 410 Gone that carries a resync code, both mean the same
+         thing to a caller: this token is no use, read the list instead */
+      if (/->\s*4\d\d\b/.test(m) || m.indexOf("resyncChanges") >= 0)
+        throw new Error(DELTA_FAIL + ": " + m);
+      throw e;
+    }
+    (r.value || []).forEach(it => {
+      items.push({ id: String(it.id), fields: it.fields || {}, removed: !!it["@removed"] });
+    });
+    if (r["@odata.nextLink"]) { path = graphPath(r["@odata.nextLink"]); continue; }
+    next = r["@odata.deltaLink"] || null;
+    path = null;
+  }
+  return { items: items, next: next };
 }
 
 /* ---- one item per Title, even with two browsers writing at once -----------
@@ -919,20 +1094,20 @@ const itemIdOrder = (a, b) => {
   return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0;
 };
 /** Every item of a list carrying one Title, oldest first. */
-async function listItemsFor(displayName, title) {
-  const all = (await listItems(displayName)) || [];
+async function listItemsFor(displayName, title, opts) {
+  const all = (await listItems(displayName, opts)) || [];
   const key = String(title).trim().toUpperCase();
   return all.filter(x => String(x.fields.Title == null ? "" : x.fields.Title).trim().toUpperCase() === key)
             .sort(itemIdOrder);
 }
 
-async function listUpsert(displayName, title, fields) {
+async function listUpsert(displayName, title, fields, opts) {
   await listConsent();                    // a click: the one place the list permission may be asked for
 
-  const id = await listId(displayName);
+  const id = await listId(displayName, opts);
   if (!id) throw new Error("The \u201c" + displayName + "\u201d list is not in SharePoint.");
-  const f = await findFile();
-  const base = "/sites/" + f.siteId + "/lists/" + id;
+  const siteId = await listSiteId(opts);
+  const base = "/sites/" + siteId + "/lists/" + id;
   const key = String(title).trim().toUpperCase();
   const body = Object.assign({ Title: key }, fields || {});
   /* keep the oldest, remove the rest, and write the intended fields onto it */
@@ -943,7 +1118,7 @@ async function listUpsert(displayName, title, fields) {
     return { id: keep.id, created: false, deduped: mine.length - 1 };
   }
   return serialised("list:" + displayName, async () => {
-    const mine = await listItemsFor(displayName, key);
+    const mine = await listItemsFor(displayName, key, opts);
     if (mine.length) return await settle(mine);
     let made;
     try {
@@ -952,11 +1127,11 @@ async function listUpsert(displayName, title, fields) {
       /* refused: either the unique-values rule caught a second browser, or
          something else went wrong. Only the first of those leaves an item
          behind, so look before deciding it was a real failure. */
-      const now = await listItemsFor(displayName, key);
+      const now = await listItemsFor(displayName, key, opts);
       if (!now.length) throw e;
       return await settle(now);
     }
-    const after = await listItemsFor(displayName, key);
+    const after = await listItemsFor(displayName, key, opts);
     if (after.length > 1) return await settle(after);      // both browsers got through
     return { id: made && made.id != null ? String(made.id) : (after[0] && after[0].id) || null,
              created: true, deduped: 0 };
@@ -982,6 +1157,185 @@ async function listDelete(displayName, title) {
   });
 }
 
+/* ---- plain writes, for the station feeder and the floor's counters ---------
+   listUpsert above reads before it writes, because two people can set the same
+   phase at the same second. These two do not: the feeder is the only writer of
+   a job's facts and the floor is the only writer of its counters, and both
+   already know the item id they mean, so a POST or a PATCH is the whole of it.
+   Neither ever opens a consent popup - headers() asks for the list scopes
+   quietly, so a background feed on a tenant that has not granted them fails
+   with "permission needed" instead of throwing a window at somebody.       */
+async function listAdd(displayName, fields, opts) {
+  const id = await listId(displayName, opts);
+  if (!id) throw new Error("The “" + displayName + "” list is not in SharePoint.");
+  const siteId = await listSiteId(opts);
+  const made = await call("POST", "/sites/" + siteId + "/lists/" + id + "/items", { fields: fields || {} });
+  return { id: made && made.id != null ? String(made.id) : null };
+}
+async function listPatch(displayName, itemId, fields, opts) {
+  const id = await listId(displayName, opts);
+  if (!id) throw new Error("The “" + displayName + "” list is not in SharePoint.");
+  const siteId = await listSiteId(opts);
+  return call("PATCH", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId + "/fields", fields || {});
+}
+
+/* ---- where the floor's lists live -----------------------------------------
+   The intended home is a separate SharePoint site on the same hostname as the
+   workbook's, holding one list per station: the station account is a member of
+   THAT site and of nothing else, which is what keeps the workbook out of its
+   reach.
+
+   Creating a site needs a Global Administrator, which the owner has not got
+   yet, so there is an interim arrangement: the three lists live in the
+   workbook's own site and the station account is a member of it. That trades
+   the isolation away - in this arrangement the station account CAN open the
+   workbook - and the owner accepted that for now. See docs/STATIONS.md.
+
+   So this resolves the Floor stations site if it is there and falls back to
+   the workbook's own site if it is not, and it keeps looking: the day the site
+   appears and the rows are copied across, both pages move to it on their own
+   with no code change and nothing for anybody to clear. The fallback is
+   resolved by a plain site lookup, never through findFile() - nothing in this
+   path may touch /drive/ or /workbook, because the whole point of the station
+   account is that it has no business there.                                 */
+const STATION_SITE_KEY = "cw_stationsite";
+const STATION_MISS_MS = 60000;        // nothing resolved at all, or a refusal: look again in a minute
+const STATION_RECHECK_MS = 600000;    // running on the fallback: look for the real site every ten minutes
+let stationSiteId = null;             // the site the lists are being read from
+let stationSiteOwn = false;           // ... and whether that is the fallback (the workbook's own site)
+let stationSiteMissAt = 0;            // when the Floor stations site was last looked for and not found
+let stationSoftMiss = false;          // that miss was a refusal, not a 404: worth trying again soon
+let stationSiteGen = 0;               // bumped when the lists move from one site to another
+let stationSiteRead = false;          // has localStorage been consulted this page?
+
+/** What is remembered between page loads: the id, and which of the two sites
+    it is. An older build stored a bare id string; that is read as the real
+    site, which is what it was. */
+function loadStationSite() {
+  if (stationSiteRead) return;
+  stationSiteRead = true;
+  let raw = null;
+  try { raw = localStorage.getItem(STATION_SITE_KEY); } catch (e) { return; }
+  if (!raw) return;
+  if (raw.charAt(0) === "{") {
+    try {
+      const o = JSON.parse(raw);
+      if (o && o.id) { stationSiteId = String(o.id); stationSiteOwn = !!o.own; }
+    } catch (e) {}
+    return;
+  }
+  stationSiteId = raw; stationSiteOwn = false;
+}
+function rememberStationSite(id, own) {
+  if (stationSiteId && stationSiteId !== id) {
+    /* the lists have moved. A list id is only meaningful in the site it was
+       found in, so the ones cached against the old site go with it. */
+    forgetListIdsFor(stationSiteId);
+    stationSiteGen++;
+  }
+  stationSiteId = id; stationSiteOwn = !!own;
+  stationSiteRead = true;
+  try { localStorage.setItem(STATION_SITE_KEY, JSON.stringify({ id: id, own: !!own })); } catch (e) {}
+}
+/** Forget the list ids found in one site, in memory and in localStorage. */
+function forgetListIdsFor(siteId) {
+  const pre = siteId + "|";
+  Object.keys(listIdMemo).forEach(k => { if (k.indexOf(pre) === 0) delete listIdMemo[k]; });
+  const all = listIdCache();
+  let hit = false;
+  Object.keys(all).forEach(k => { if (k.indexOf(pre) === 0) { delete all[k]; hit = true; } });
+  if (hit) try { localStorage.setItem(LISTIDS_KEY, JSON.stringify(all)); } catch (e) {}
+}
+
+/** The site the floor's lists are in, or null if neither can be resolved.
+    Anything that is not an answer - offline, a bad gateway - is thrown, so the
+    pages can tell "there is nowhere to read this from" apart from "I cannot
+    see it just now" and leave the board they are already showing alone. */
+async function stationSite() {
+  loadStationSite();
+  /* the real site, already found: there is nothing left to look for */
+  if (stationSiteId && !stationSiteOwn) return stationSiteId;
+
+  /* on the fallback (or with nothing at all yet), the Floor stations site is
+     looked for again from time to time - every ten minutes while the fallback
+     is working, and every minute when nothing resolved or the lookup was
+     refused, because a refusal is usually a permission somebody is about to
+     grant rather than a site that will never exist */
+  const hold = stationSiteId && !stationSoftMiss ? STATION_RECHECK_MS : STATION_MISS_MS;
+  if (stationSiteMissAt && Date.now() - stationSiteMissAt < hold) return stationSiteId;
+
+  const host = SITE_PATH.split(":")[0];
+  let real = null, missed = false, soft = false;
+  try {
+    const site = await call("GET", "/sites/" + host + ":/sites/" + STATION_SITE_NAME);
+    real = (site && site.id) || null;
+    missed = !real;
+  } catch (e) {
+    /* not there (404) and cannot see it (403) both mean "not today". Only the
+       first is a settled fact; a refusal is worth asking about again soon. */
+    if (!isMissing(e) && !isRefused(e)) throw e;
+    missed = true; soft = isRefused(e) && !isMissing(e);
+  }
+  if (real) {
+    stationSiteMissAt = 0; stationSoftMiss = false;
+    rememberStationSite(real, false);
+    return stationSiteId;
+  }
+  if (missed) { stationSiteMissAt = Date.now(); stationSoftMiss = soft; }
+  if (stationSiteId) return stationSiteId;              // carry on with the fallback
+
+  /* nothing to fall back to yet: resolve the workbook's own site, by path.
+     SITE_AS_LIST marks it as the station's lookup rather than findFile()'s, so
+     it is asked for quietly with the list scopes and can never put a consent
+     window in front of somebody holding a sheet of glass. */
+  let own = null;
+  try {
+    const site = await call("GET", "/sites/" + SITE_PATH + SITE_AS_LIST);
+    own = (site && site.id) || null;
+  } catch (e) {
+    if (!isMissing(e) && !isRefused(e)) throw e;
+    return null;
+  }
+  if (!own) return null;
+  rememberStationSite(own, true);
+  return stationSiteId;
+}
+/** Graph's two ways of saying "there is no such thing here". */
+function isMissing(e) {
+  const m = (e && e.message) || String(e || "");
+  return /->\s*404\b/.test(m) || m.indexOf("itemNotFound") >= 0;
+}
+/** ... and its way of saying "there may well be, but not for you". */
+function isRefused(e) {
+  const m = (e && e.message) || String(e || "");
+  return /->\s*403\b/.test(m) || m.indexOf("accessDenied") >= 0;
+}
+/** Forget the cached site, so the next call resolves it again. Called when a
+    call against the cached id says the thing is not there: the id may be from
+    another tenant, another browser profile, or a site since rebuilt.
+
+    The move counter goes up unconditionally, and this is the whole point of
+    it. Without that, a page that forgot the site and then resolved a DIFFERENT
+    one would tell nobody: rememberStationSite() sees no previous id to compare
+    against, so it stays quiet, and both screens carry on polling a delta token
+    issued in the old site while writing into the new one. Forgetting a site is
+    a move whether or not anything is known about where to next.
+
+    The re-check cadence is NOT reset. `lookAgain` is for a person tapping "Try
+    again", which is a reason to look right now; a failed call is not.        */
+function forgetStationSite(lookAgain) {
+  if (stationSiteId) forgetListIdsFor(stationSiteId);
+  stationSiteId = null; stationSiteOwn = false; stationSiteRead = true;
+  stationSiteGen++;
+  if (lookAgain) { stationSiteMissAt = 0; stationSoftMiss = false; }
+  try { localStorage.removeItem(STATION_SITE_KEY); } catch (e) {}
+}
+/** Which site the lists are being read from now, for a caller holding state
+    that only means anything in one site - a delta token, say. It changes when
+    the lists move, and never otherwise. */
+function stationSiteMoves() { return stationSiteGen; }
+
+
 window.CW = {
   initAuth, signIn, signOut, token, findFile, openSession, lastModified,
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
@@ -990,8 +1344,10 @@ window.CW = {
   ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,
   ensureAlertsSheet, addAlert, removeAlert, ALERTS_SHEET,
   listVersions, downloadVersion, restoreVersion,
-  listId, listItems, listItemsFor, listUpsert, listDelete,
-  listConsent, LIST_SCOPES,
+  listId, listItems, listItemsFor, listUpsert, listDelete, listAdd, listPatch,
+  listDelta, isDeltaRestart, isDeltaResync,
+  listConsent, hasListConsent, LIST_SCOPES, SCOPES,
+  stationSite, forgetStationSite, isMissing, isRefused, stationSiteMoves, STATION_SITE_NAME,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   /* tests only: forget which dashboard sheets have been seen, so the creation
@@ -999,5 +1355,24 @@ window.CW = {
   _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
   /* tests only: forget the list ids found so far */
   _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); },
+  /* tests only: which scopes a path is asked for - the same call headers()
+     makes, so the answer cannot drift from what really goes out */
+  _scopeFor: scopeFor,
+  /* tests only: pin (or forget, with null) the site the lists are read from */
+  _setStationSite(id, own) {
+    stationSiteId = id || null; stationSiteOwn = !!own;
+    stationSiteMissAt = 0; stationSoftMiss = false;
+    /* clearing it puts the page back to before it had ever looked, so a test
+       can put something in localStorage and watch it be read the way a fresh
+       page load would read it */
+    stationSiteRead = !!id;
+    try { if (id) localStorage.setItem(STATION_SITE_KEY, JSON.stringify({ id: id, own: !!own }));
+          else localStorage.removeItem(STATION_SITE_KEY); } catch (e) {}
+  },
+  /* tests only: which site is in use, and whether it is the fallback */
+  _stationSiteInfo() { return { id: stationSiteId, own: stationSiteOwn, gen: stationSiteGen }; },
+  /* tests only: pretend the last look for the Floor stations site was then, so
+     a ten-minute re-check can be reached without waiting ten minutes */
+  _stationSiteLookedAt(at) { stationSiteMissAt = at; },
   get account() { return account; }
 };
