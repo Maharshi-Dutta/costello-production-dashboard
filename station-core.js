@@ -32,8 +32,8 @@ const STATION_NAME = "Glass";
 
 /* The three things the floor records, in the order they are shown. The keys
    are the board's own; the four maps below say which list columns they mean.
-   Every stage applies to every glass type: there is no type that skips one. */
-const STAGES = [["cut", "Glass cut"], ["hotmelt", "Hotmelt"], ["glazed", "Glazing"]];
+   Every stage applies to every glass unit: there is no unit that skips one. */
+const STAGES = [["cut", "Cutting"], ["hotmelt", "Hotmelting"], ["glazed", "Glazing"]];
 const STAGE_KEYS = STAGES.map(s => s[0]);
 const STAGE_FIELD = { cut: "Cut", hotmelt: "Hotmelt", glazed: "Glazed" };
 const STAGE_ROW = { cut: "cut", hotmelt: "hotmelt", glazed: "glazed" };
@@ -45,9 +45,17 @@ const stageLabel = k => (STAGES.find(s => s[0] === k) || [k, k])[1];
    writes Title and the six job facts plus FedAt/FedBy; the floor writes the
    eleven columns of FLOOR_FIELDS and nothing else, ever. No column here
    carries a phone number, an eircode, a county, a price, a comment or a
-   product: the floor is told a job number, a customer name, a glass type and
-   a count, and nothing else. */
+   product: the floor is told a job number, a customer name and a number of
+   glasses, and nothing else - not even which kinds of glass they are. */
 const FEEDER_FIELDS = ["Job", "Customer", "GlassType", "Total", "Seq", "Active"];
+/* The floor is told a number of glasses, never a kind of glass. The column
+   stays on the list (nothing creates or deletes columns) and every row carries
+   the same literal in it, so nothing can read a type back off the list even by
+   accident. DG and TG are the two kinds that make up that number: TUFF / NOT
+   TUFF describe those same units and are not added, and ARCH, ASTRAGAL, FANCY
+   and EXTRA are not glasses the floor cuts, hotmelts and glazes. */
+const GLASS_TYPE = "GLASS";
+const TOTAL_TYPES = ["DG", "TG"];
 /* The floor's whitelist: the three counters, a By/At pair for each of them,
    and the last-touch pair. A PATCH from the tablet is filtered to this list on
    the way into the queue and again on the way out of it. */
@@ -55,6 +63,16 @@ const FLOOR_FIELDS = ["Cut", "Hotmelt", "Glazed",
                       "CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt",
                       "DoneBy", "DoneAt"];
 const STATION_FIELDS = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], FLOOR_FIELDS);
+/* The three counters, and the ONE exception to "the feeder never writes the
+   floor's columns": a row the feeder is creating, or a row the floor has never
+   tapped (DoneAt empty), starts from what the office has already ticked off in
+   the workbook - otherwise a job the office finished last week arrives on the
+   tablet reading nothing done. The moment the floor touches a row, DoneAt is
+   set and the feeder never writes a counter on it again. The By/At pairs and
+   the last-touch pair are NEVER the feeder's, seeded or not: they say who did
+   it, and the office did not. */
+const SEED_FIELDS = ["Cut", "Hotmelt", "Glazed"];
+const FEEDER_WRITES = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], SEED_FIELDS);
 const PEOPLE_FIELDS = ["Title", "Station", "Stages", "PIN", "Active"];
 /* The office needs the names and the stages for the log window's filters, and
    has no business reading anybody's PIN: it asks for four of the five. */
@@ -116,35 +134,97 @@ function stRowOrder(a, b) {
   return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
 }
 
+/** How many glasses a job has, as the floor counts them: DG plus TG, and
+    nothing else. The sheet's other glass columns describe those same units
+    (TUFF / NOT TUFF) or are not glass the floor works on (ARCH, ASTRAGAL,
+    FANCY, EXTRA), so adding any of them would send the floor to cut sheets
+    that do not exist. */
+function glassTotal(j) {
+  const g = (j && j.glass) || {};
+  let n = 0;
+  Object.keys(g).forEach(k => {
+    if (TOTAL_TYPES.indexOf(stKey(k)) < 0) return;
+    n += Math.round(stNum(g[k], 0));
+  });
+  return Math.max(0, n);
+}
+
+/* ---- what the office has already ticked off --------------------------------
+   The office ticks glass off job by job in the workbook's own colours long
+   before a tablet appears on the floor, and a job that was finished in the
+   office last week must not arrive on the tablet reading nothing done. That
+   record is the glass checkpoints, and this turns it into the three counters
+   the floor's row starts at.
+
+   `counts` is plain data - one entry per glass item of the job, `{type, total,
+   status, done}` where status is the sheet's own word ("done", "process",
+   "cut" or nothing) and done is the office's count where it has one. It is
+   built by whoever has checkpoints.js to hand (app.js), so nothing in this
+   file has to know about a job object or a global.                          */
+function officeSeed(row, counts) {
+  const total = Math.max(0, Math.round(stNum(row && row.total, 0)));
+  const none = { cut: 0, hotmelt: 0, glazed: 0 };
+  if (!(total > 0)) return none;
+  const mine = (counts || []).filter(c => c && TOTAL_TYPES.indexOf(stKey(c.type)) >= 0);
+  if (!mine.length) return none;
+  const st = c => stTxt(c.status).trim().toLowerCase();
+  const all = n => ({ cut: n, hotmelt: n, glazed: n });
+  /* gold on every one of them: the office says this job's glass is done, so
+     the floor's row is done too */
+  if (mine.every(c => st(c) === "done")) return all(total);
+  /* part way there: the office's own count, a gold item counting its whole
+     quantity. All three stages start there - the office does not record which
+     stage its count belongs to, and starting them level is the reading that
+     asks the floor for the least re-typing. */
+  if (mine.some(c => st(c) === "done" || st(c) === "process")) {
+    let done = 0;
+    mine.forEach(c => {
+      const t = Math.max(0, Math.round(stNum(c.total, 0)));
+      done += st(c) === "done" ? t : Math.max(0, Math.round(stNum(c.done, 0)));
+    });
+    return all(stClamp(done, total));
+  }
+  /* the sheet's Cut green and nothing else: cut, and only cut */
+  if (mine.some(c => st(c) === "cut")) return { cut: total, hotmelt: 0, glazed: 0 };
+  return none;
+}
+
 /* ---- what the feeder should be sending ------------------------------------
-   One row per job AND glass type, for jobs that are IN PRODUCTION and have
-   glass. Nothing else: the floor's list is today's work, not a copy of the
-   workbook, so a job that has been delivered or was never on the floor has no
-   business being sent at all. A job that leaves production is not removed from
-   the slice's world - feedPlan marks the item it already made as Active = No -
-   so the list settles at the floor's jobs plus a short tail of finished ones.
-   Every row here therefore carries active:true; the field stays because it is
-   what becomes the Active column, and because feedPlan reads it.            */
-function glassSlice(jobs, blockNames) {
+   ONE row per job, for jobs that are IN PRODUCTION and have glass. The floor
+   is told a job number, a customer name and a number of glasses; the kinds of
+   glass are the office's business and stay in the office. Nothing else: the
+   floor's list is today's work, not a copy of the workbook, so a job that has
+   been delivered or was never on the floor has no business being sent at all.
+   A job that leaves production is not removed from the slice's world -
+   feedPlan marks the item it already made as Active = No - so the list settles
+   at the floor's jobs plus a short tail of finished ones. Every row here
+   therefore carries active:true; the field stays because it is what becomes
+   the Active column, and because feedPlan reads it.
+
+   `countsOf` is optional and is how the office's own record reaches the seed:
+   a function from the job to its glass counts, or a map of them by job number.
+   Without it every row seeds at nothing, which is what a caller with no
+   checkpoints to hand should send.                                          */
+function glassSlice(jobs, blockNames, countsOf) {
   const names = blockNames || (jobs && jobs.blockNames) || [];
+  const look = j => {
+    if (typeof countsOf === "function") return countsOf(j) || [];
+    if (countsOf && typeof countsOf === "object") return countsOf[stKey(j.id)] || [];
+    return [];
+  };
   const out = [];
   (jobs || []).forEach(j => {
     if (!j || !j.id) return;
-    const glass = j.glass || {};
     const job = stKey(j.id);
     if (!job) return;
     const active = inProduction(j, names);
     if (!active) return;                    // not on the floor: not the floor's business
-    const seq = stNum(j.seq, 99999);
-    const cust = stTxt(j.cust).trim().slice(0, CUSTOMER_MAX);
-    Object.keys(glass).forEach(k => {
-      const total = Math.round(stNum(glass[k], 0));
-      if (!(total > 0)) return;
-      const type = stKey(k);
-      if (!type) return;
-      out.push({ title: job + "|" + type, job: job, customer: cust,
-                 type: type, total: total, seq: seq, active: active });
-    });
+    const total = glassTotal(j);
+    if (!(total > 0)) return;               // no glass, nothing for the glass station to do
+    const row = { title: job, job: job, customer: stTxt(j.cust).trim().slice(0, CUSTOMER_MAX),
+                  total: total, seq: stNum(j.seq, 99999), active: active };
+    row.seed = officeSeed(row, look(j));
+    out.push(row);
   });
   out.sort(stRowOrder);
   return out;
@@ -152,9 +232,19 @@ function glassSlice(jobs, blockNames) {
 
 /** The six job facts of one slice row, in list shape. */
 function feederFields(row) {
-  return { Job: row.job, Customer: row.customer, GlassType: row.type,
+  return { Job: row.job, Customer: row.customer, GlassType: GLASS_TYPE,
            Total: row.total, Seq: row.seq, Active: row.active ? "Yes" : "No" };
 }
+/** The three counters of a slice row's seed, in list shape. */
+function seedFields(row) {
+  const s = (row && row.seed) || {};
+  const out = {};
+  STAGE_KEYS.forEach(k => { out[STAGE_FIELD[k]] = stClamp(s[k], stNum(row && row.total, 0)); });
+  return out;
+}
+/** Has the floor ever tapped this row? DoneAt is set by the first tap and by
+    nothing else, so an empty one means the row is still the office's to seed. */
+const untouched = fields => stTxt(fields && fields.DoneAt).trim() === "";
 /** Is the value already in the list the same as the one the feeder wants?
     Numbers are compared as numbers (SharePoint may answer 6 or "6"); a missing
     or blank cell is never "the same as" anything, so it gets written. */
@@ -168,9 +258,12 @@ function sameField(have, want) {
 
 /* ---- the plan --------------------------------------------------------------
    HARD RULE, and the reason this is a separate pure function whose output the
-   tests read: the plan NEVER contains any of FLOOR_FIELDS, and never contains
-   a delete. A job that leaves production is marked Active = No; its counters,
-   and whoever recorded them, stay where they are.
+   tests read: the plan never contains a delete, and the only floor columns it
+   can ever name are the three counters - on a row it is creating, or on a row
+   whose DoneAt is still empty. A By, an At or the last-touch pair is never in
+   a plan at all, and a row the floor has tapped keeps every number on it. A
+   job that leaves production is marked Active = No; its counters, and whoever
+   recorded them, stay where they are.
 
    Duplicates: two items carrying one Title should not happen (Title is unique
    on the list and the feeder is its only writer) but if they do, the oldest is
@@ -202,12 +295,23 @@ function feedPlan(slice, items, opts) {
     const want = feederFields(r);
     const mine = byTitle[t];
     if (!mine || !mine.length) {
-      adds.push(Object.assign({ Title: r.title }, want, { FedAt: at, FedBy: by }));
+      /* a row this feeder is creating starts where the office's own record
+         already is - that is the whole of the seeding rule on a new row */
+      adds.push(Object.assign({ Title: r.title }, want, seedFields(r), { FedAt: at, FedBy: by }));
       return;
     }
     const have = mine[0].fields || {};
     const diff = {};
     FEEDER_FIELDS.forEach(k => { if (!sameField(have[k], want[k])) diff[k] = want[k]; });
+    /* and a row the floor has never tapped is still the office's to say. Once
+       DoneAt is set - the first tap writes it - this is skipped for ever, so
+       nothing the office does can walk over the floor's own count. */
+    if (untouched(have)) {
+      const seed = seedFields(r);
+      /* a blank counter IS nought here, unlike a blank job fact: a row nobody
+         has ever written a number on does not need three zeros put in it */
+      SEED_FIELDS.forEach(k => { if (stNum(have[k], 0) !== seed[k]) diff[k] = seed[k]; });
+    }
     if (!Object.keys(diff).length) { unchanged++; return; }
     /* FedAt/FedBy say when this item was last brought up to date and by whose
        dashboard - the FedAt column's whole meaning - so they ride along with
@@ -235,12 +339,16 @@ function feedPlan(slice, items, opts) {
     matches the last one and that run is under ten minutes old, so a dashboard
     left open on a quiet afternoon does not re-read the list every refresh.
     JSON.stringify does the separating, so a customer name carrying a bar or a
-    comma cannot make two different slices hash to the same string. */
+    comma cannot make two different slices hash to the same string. The seed is
+    in it as well: a job the office has just ticked off has to reach the floor
+    on the next load, not in ten minutes' time. */
 function sliceHash(slice) {
   const rows = (slice || []).slice().sort(stRowOrder);
   let s = "";
   rows.forEach(r => {
-    s += JSON.stringify([r.title, r.job, r.customer, r.type, r.total, r.seq, !!r.active]) + "\n";
+    const seed = r.seed || {};
+    s += JSON.stringify([r.title, r.job, r.customer, r.total, r.seq, !!r.active,
+                         seed.cut || 0, seed.hotmelt || 0, seed.glazed || 0]) + "\n";
   });
   let h = 0x811c9dc5;                                     // FNV-1a, 32 bit
   for (let i = 0; i < s.length; i++) {
@@ -251,73 +359,82 @@ function sliceHash(slice) {
 }
 
 /* ---- what the screens draw --------------------------------------------------
-   Items grouped into jobs, with the three bars. `keep` decides which items are
-   in: the two boards take the active ones, the office drawer takes one job's
-   items whether it is still on the floor or not. Counters are clamped for
-   display: if the office shortens a job from 8 units to 4 after the floor has
-   cut 6, the bar reads 4 of 4 rather than 150%. The clamp is display only -
-   nothing here writes a corrected number back anywhere.
+   One card per job, because there is one list row per job. `keep` decides
+   which rows are in: the two boards take the active ones, the office drawer
+   takes one job's row whether it is still on the floor or not. Counters are
+   clamped for display: if the office shortens a job from 8 glasses to 4 after
+   the floor has cut 6, the card reads 4 of 4 rather than 150%. The clamp is
+   display only - nothing here writes a corrected number back anywhere.
 
-   Each bar also carries the who and the when of the latest change to that
-   stage anywhere on the job, which is what the office drawer reads out as
-   "Glass cut 8 of 8 - Person A - Tue 14:02".                                */
+   Each stage also carries the who and the when of the last change to it, which
+   is what the office reads out as "Cutting 8 of 8 - Person A - Tue 14:02".
+
+   A job is finished, and goes gold on both screens, when all three counters
+   have reached the total and there is a total to reach: a row with no glasses
+   on it is not something anybody finished.                                  */
 const isActive = f => stTxt(f && f.Active).trim().toLowerCase() === "yes";
 
+/** The job a list row is about, whichever iteration wrote it: v3 writes the
+    job number as the Title, v2 wrote `JOB|TYPE`. */
+const rowJob = f => stKey(f && f.Job) || stKey(f && f.Title).split("|")[0];
+/** Is this row the v3 one - the row whose Title IS the job number? */
+const titleIsJob = f => !!stKey(f && f.Title) && stKey(f && f.Title) === rowJob(f);
+
 function buildJobs(items, keep) {
-  const oldest = {};
+  const best = {};
   (items || []).forEach(it => {
     if (!it) return;
     const f = it.fields || {};
     if (!keep(f)) return;
-    const t = stKey(f.Title) || (stKey(f.Job) + "|" + stKey(f.GlassType));
-    if (!t || t === "|") return;
-    const prev = oldest[t];
-    if (prev && stItemAge(prev, it) <= 0) return;      // the oldest item for a Title wins
-    oldest[t] = it;
+    const job = rowJob(f);
+    if (!job) return;
+    /* One card per JOB, not per row. The live list still holds the v2 rows -
+       one per job AND glass type, Title `JOB|TYPE` - until they are cleared,
+       and a job must not appear twice on the board or be called finished
+       because some old ARCH row happens to be full. The row whose Title is
+       the job number is the one this iteration maintains, so it wins; between
+       two of the same kind the oldest id wins, as everywhere else. */
+    const prev = best[job];
+    if (prev) {
+      const pf = prev.fields || {};
+      if (titleIsJob(pf) !== titleIsJob(f)) { if (titleIsJob(pf)) return; }
+      else if (stItemAge(prev, it) <= 0) return;
+    }
+    best[job] = it;
   });
 
-  const jobs = {}, order = [];
-  Object.keys(oldest).sort().forEach(t => {
-    const it = oldest[t], f = it.fields || {};
-    const job = stKey(f.Job) || t.split("|")[0];
-    const type = stKey(f.GlassType) || t.split("|")[1] || "";
+  const out = Object.keys(best).sort().map(t => {
+    const it = best[t], f = it.fields || {};
     const total = Math.max(0, Math.round(stNum(f.Total, 0)));
-    let g = jobs[job];
-    if (!g) { g = jobs[job] = { job: job, customer: "", seq: 99999, fedAt: "", active: false, rows: [] }; order.push(job); }
-    if (!g.customer) g.customer = stTxt(f.Customer);
-    const sq = stNum(f.Seq, 99999);
-    if (sq < g.seq) g.seq = sq;
-    const fa = stTxt(f.FedAt);
-    if (fa > g.fedAt) g.fedAt = fa;                    // ISO stamps: the newest sorts last
-    if (isActive(f)) g.active = true;
-    const row = { id: stTxt(it.id), type: type, total: total, by: {}, at: {} };
+    const g = { id: stTxt(it.id), job: stKey(f.Job) || t, customer: stTxt(f.Customer),
+                seq: stNum(f.Seq, 99999), fedAt: stTxt(f.FedAt), active: isActive(f),
+                total: total, by: {}, at: {}, bars: {} };
     STAGE_KEYS.forEach(k => {
-      row[STAGE_ROW[k]] = stClamp(f[STAGE_FIELD[k]], total);
-      row.by[k] = stTxt(f[STAGE_BY[k]]);
-      row.at[k] = stTxt(f[STAGE_AT[k]]);
+      g[STAGE_ROW[k]] = stClamp(f[STAGE_FIELD[k]], total);
+      g.by[k] = stTxt(f[STAGE_BY[k]]);
+      g.at[k] = stTxt(f[STAGE_AT[k]]);
+      g.bars[k] = { done: g[STAGE_ROW[k]], total: total, by: g.by[k], at: g.at[k] };
     });
-    g.rows.push(row);
-  });
-
-  const out = order.map(k => {
-    const g = jobs[k];
-    g.rows.sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));
-    g.bars = {};
-    STAGE_KEYS.forEach(s => {
-      let done = 0, total = 0, at = "", by = "";
-      g.rows.forEach(r => {
-        done += r[STAGE_ROW[s]]; total += r.total;
-        if (r.at[s] && r.at[s] > at) { at = r.at[s]; by = r.by[s]; }
-      });
-      g.bars[s] = { done: Math.min(done, total), total: total, by: by, at: at };
-    });
-    /* a bar with nothing in it is not something anyone can finish, so it never
-       holds the job back */
-    g.finished = STAGE_KEYS.every(s => { const b = g.bars[s]; return b.total === 0 || b.done >= b.total; });
+    g.finished = total > 0 && STAGE_KEYS.every(k => g[STAGE_ROW[k]] >= total);
     return g;
   });
   out.sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
   return out;
+}
+
+/** "12 glasses", "1 glass" - the one number the floor is given about a job,
+    said the same way on the tablet and on the office's board. */
+const glassWords = n => Math.max(0, Math.round(stNum(n, 0))) +
+  (Math.round(stNum(n, 0)) === 1 ? " glass" : " glasses");
+
+/** The cards somebody typing in the tablet's search box is looking for: a job
+    number or a customer name, matched anywhere in either. An empty box is
+    every card - the box narrows the board, it never becomes the board. */
+function boardFilter(board, q) {
+  const want = stTxt(q).trim().toLowerCase();
+  if (!want) return (board || []).slice();
+  return (board || []).filter(g =>
+    (g.job + " " + g.customer).toLowerCase().indexOf(want) >= 0);
 }
 
 /** The floor's board: the jobs that are on the floor now. */
@@ -331,7 +448,10 @@ function jobBoard(items) { return buildJobs(items, isActive); }
 function jobRecord(items, job) {
   const want = stKey(job);
   if (!want) return null;
-  const mine = buildJobs(items, f => (stKey(f.Job) || stKey(f.Title).split("|")[0]) === want);
+  /* rowJob reads a v2 `JOB|TYPE` Title as well as a v3 one, and buildJobs
+     prefers the v3 row, so a leftover old row can neither become the drawer's
+     record nor hide the real one */
+  const mine = buildJobs(items, f => rowJob(f) === want);
   return mine[0] || null;
 }
 
@@ -438,10 +558,12 @@ function tapFields(stage, value, who, at) {
 }
 /** One Station log line. From is the value last known to be in the list, To is
     the value sent - so a run of quick taps that the queue merged into one
-    write is one line saying 5 to 8, not three lines saying 5, 6, 7, 8. */
+    write is one line saying 5 to 8, not three lines saying 5, 6, 7, 8.
+    GlassType is the same literal every row of the board carries: the column is
+    still on the list, and there are no glass types on the floor to put in it. */
 function logFields(e) {
   return { Title: stKey(e && e.job), Station: stTxt((e && e.station) || STATION_NAME),
-           GlassType: stKey(e && e.type), Stage: stTxt(e && e.stage).toLowerCase(),
+           GlassType: stKey((e && e.type) || GLASS_TYPE), Stage: stTxt(e && e.stage).toLowerCase(),
            From: Math.round(stNum(e && e.from, 0)), To: Math.round(stNum(e && e.to, 0)),
            Who: stTxt(e && e.who), At: stTxt(e && e.at) || new Date().toISOString() };
 }
@@ -524,9 +646,8 @@ function logLast(rows, job) {
    another job's counters, a FedAt that did not change the words on screen -
    cannot make a card redraw.                                                */
 function cardSig(g) {
-  return JSON.stringify([g.job, g.customer, g.seq, g.finished,
-    g.rows.map(r => [r.id, r.type, r.total].concat(STAGE_KEYS.map(k => [r[STAGE_ROW[k]], r.by[k], r.at[k]]))),
-    STAGE_KEYS.map(k => [g.bars[k].done, g.bars[k].total, g.bars[k].by, g.bars[k].at])]);
+  return JSON.stringify([g.id, g.job, g.customer, g.seq, g.total, g.finished,
+    STAGE_KEYS.map(k => [g[STAGE_ROW[k]], g.by[k], g.at[k]])]);
 }
 function boardDiff(prev, next) {
   const was = {}, now = {};
@@ -581,9 +702,10 @@ const ST = {
   STATION_LIST, PEOPLE_LIST, LOG_LIST, STATION_SITE, STATION_NAME,
   STAGES, STAGE_KEYS, STAGE_FIELD, STAGE_ROW, STAGE_BY, STAGE_AT, stageLabel,
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,
+  SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
-  inProduction, glassSlice, feederFields, feedPlan, sliceHash,
-  jobBoard, jobRecord, applyTap, boardDiff, mergeDelta,
+  inProduction, glassTotal, officeSeed, glassSlice, feederFields, seedFields, feedPlan, sliceHash,
+  jobBoard, jobRecord, boardFilter, glassWords, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };

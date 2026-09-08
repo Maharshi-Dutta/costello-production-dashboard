@@ -2,8 +2,9 @@
 
 Everything in this document describes the **glass station**, the first floor
 station, **shipped 2026-09-08** — built to
-`docs/specs/2026-09-08-glass-station.md` and its second iteration
-`docs/specs/2026-09-08-glass-station-v2.md` (the second supersedes the first;
+`docs/specs/2026-09-08-glass-station.md` and its second and third iterations
+`docs/specs/2026-09-08-glass-station-v2.md` and
+`docs/specs/2026-09-08-glass-station-v3.md` (each supersedes the one before;
 see `docs/specs/README.md`). This document is kept accurate to the code
 (`station-core.js`, `station.js`, `glass.html`, and the station parts of
 `app.js`/`graph.js`) — if something here looks wrong, the code wins and this
@@ -14,9 +15,10 @@ file needs fixing.
 A station is a separate, single-purpose page for one area of the factory
 floor, used on a shared tablet signed in with a shared account that has **no
 access to the production workbook at all**. It shows only what that area
-needs — for the glass station: job number, customer name, the glass units of
-that job by type, and progress on glass cutting, hotmelt and glazing — and
-lets the floor record progress by tapping. It never shows job facts, comments,
+needs — for the glass station: job number, customer name, **one total number
+of glasses**, and progress on cutting, hotmelting and glazing — and lets the
+floor record progress by tapping. There are no glass types on the floor at
+all: DG, TG, TUFF and the rest are the office's business. It never shows job facts, comments,
 prices, phone numbers, eircodes, counties, or anything from any other area.
 
 The master dashboard is the **only** thing that ever writes job facts into a
@@ -34,36 +36,72 @@ them is ever created by code — if one is missing, the pages say which.
 
 ### `Glass station`
 
-One item per (job, glass type). Columns:
+**One item per job** (this changed in v3; it used to be one per job and glass
+type, with a Title of `JOB|TYPE`). Both screens read the list one row per job:
+where a job still has old `JOB|TYPE` rows beside its new one, **the row whose
+Title is the job number wins and the older rows are ignored** — they cannot
+put a job on the board twice, cannot feed the drawer, and cannot make a job
+read as finished because some old ARCH row happened to be full. The old rows
+are cleared out of the live list by hand (a one-off script) before this
+iteration is deployed; the code tolerates them either way. Columns:
 
 | column | type | written by | meaning |
 |---|---|---|---|
-| Title | text, unique | feeder | `JOB\|TYPE`, upper-case, e.g. `R5303\|TG` |
-| Job | text | feeder | job number, upper-case |
+| Title | text, unique | feeder | the job number, upper-case, e.g. `R5303` |
+| Job | text | feeder | the same job number |
 | Customer | text | feeder | customer name, max 70 chars |
-| GlassType | text | feeder | DG, TG, TUFF, NOT TUFF, ARCH, ASTRAGAL, FANCY, or EXTRA |
-| Total | number | feeder | units of that type for the job |
+| GlassType | text | feeder | the literal `GLASS` on every row — the column is kept, nothing reads it |
+| Total | number | feeder | **glasses on the job = DG + TG** |
 | Seq | number | feeder | the job's position in the master list, so the floor sees the office's order |
-| Active | text | feeder | `Yes` while the job is in production and has that glass type, `No` afterwards |
+| Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |
-| Cut | number | station | units cut |
-| Hotmelt | number | station | units hotmelted (every glass type gets hotmelt) |
-| Glazed | number | station | units glazed |
-| CutBy / CutAt | text | station | who last moved the Cut counter, and when (ISO) |
-| HotmeltBy / HotmeltAt | text | station | the same, for Hotmelt |
-| GlazedBy / GlazedAt | text | station | the same, for Glazing |
-| DoneBy | text | station | the person's name from the last touch of any counter |
-| DoneAt | text | station | ISO timestamp of that last touch |
+| Cut | number | station, **or the feeder while the floor has not touched the row** | glasses cut |
+| Hotmelt | number | station, same | glasses hotmelted |
+| Glazed | number | station, same | glasses glazed |
+| CutBy / CutAt | text | station only | who last moved the Cut counter, and when (ISO) |
+| HotmeltBy / HotmeltAt | text | station only | the same, for Hotmelting |
+| GlazedBy / GlazedAt | text | station only | the same, for Glazing |
+| DoneBy | text | station only | the person's name from the last touch of any counter |
+| DoneAt | text | station only | ISO timestamp of that last touch |
 
-The three stages are **Glass cut, Hotmelt, Glazing**, and every one of them
-applies to every glass type. (Toughening was in the first iteration and is
-gone; there is no `Toughened` column any more.)
+The three stages are **Cutting, Hotmelting, Glazing**. (Toughening was in the
+first iteration and is gone; there is no `Toughened` column any more.)
 
-The feeder writes only the first nine columns; the floor writes only the
-eleven from `Cut` down, and neither side can write the other's. Only job
-number, customer name, glass type and count reach this list: no phone number,
-no eircode, no county, no price, no comment, no product name or count.
+**Why DG + TG.** TUFF and NOT TUFF describe those same units — adding them
+would send the floor to cut sheets that do not exist — and ARCH, ASTRAGAL,
+FANCY and EXTRA are not glass the floor cuts, hotmelts and glazes. A job whose
+only glass is one of those is never fed at all. One constant,
+`TOTAL_TYPES` in `station-core.js`, says which kinds count.
+
+**Seeding, the one exception to "the feeder never writes the floor's
+columns".** The office ticks a job's glass off in the workbook's own colours
+long before a tablet appears on the floor, and a job already finished in the
+office must not arrive on the tablet reading nothing done. So the feeder
+writes `Cut`, `Hotmelt` and `Glazed` — and only those three — on **a row it is
+creating, or a row whose `DoneAt` is empty** (the floor has never tapped it).
+The first tap sets `DoneAt`, and from that moment the feeder never writes a
+counter on that row again, whatever the office does afterwards. That guard is
+checked **twice**: once when the plan is made from the list, and again with a
+one-item read immediately before each write that carries a counter — the plan
+is made from a single read and then sent as up to sixty writes, and a tap
+landing in between must win. The same read skips the seed when the row's
+`FedAt` is newer than this dashboard's own copy of the workbook, so a
+dashboard holding a stale file cannot park a row on older numbers. The By/At
+pairs and the last-touch pair are never the feeder's, seeded or not: they say
+who did the work, and the office did not.
+
+The seed is read from the glass checkpoints (`checkpoints.js`) by these rules,
+in order: every DG/TG item gold → all three counters at the total; otherwise
+any item gold or yellow → all three at the office's own done count (a gold
+item counting its whole quantity); otherwise any item green ("cut") → `Cut` at
+the total and the other two at nought; otherwise nought. It is
+`ST.officeSeed()`, a pure function, and `test_station.js` covers all four
+rules.
+
+Only job number, customer name and a number of glasses reach this list: no
+glass type, no phone number, no eircode, no county, no price, no comment, no
+product name or count.
 
 ### `Station people`
 
@@ -129,9 +167,9 @@ next reload. Nothing in the repository changes.
 
 A tap that a tablet had not managed to send when the lists moved is not lost
 and is not written to the wrong row: each queued tap is stamped with the site
-it was made in, and after a move the row is found again by its `JOB|TYPE`
-Title (which is unique, and is the one thing about a row that does not change
-between the two lists). A tap whose row did not come across at all is dropped
+it was made in, and after a move the row is found again by its Title — the job
+number, which is unique and is the one thing about a row that does not change
+between the two lists. A tap whose row did not come across at all is dropped
 with a line in the console rather than written onto whatever row happens to
 carry that item id in the new list.
 
@@ -145,7 +183,7 @@ deletes from it.
 |---|---|---|
 | Title | text | job number |
 | Station | text | `Glass` |
-| GlassType | text | e.g. `TG` |
+| GlassType | text | the literal `GLASS` — the column is kept, nothing reads it |
 | Stage | text | `cut` / `hotmelt` / `glazed` |
 | From | number | the counter before |
 | To | number | the counter after |
@@ -160,14 +198,16 @@ write, so one line reads `5 → 8` rather than three lines counting up to it.
 From the master dashboard's "Sheet" dropdown (next to the search box),
 picking **Glass station** replaces the job list with a read-only board: one
 card per active job, sorted in the office's own order, with the job number,
-customer, a chip per glass type (`cut/total`), the three bars (Glass cut,
-Hotmelt, Glazing) each showing who last moved it and when, "fed 3 min ago" (or
-"not fed yet"), and — once anything has been recorded — a one-line "last:
-Person A cut TG 5→8, 2 min ago" pulled from the log. Nothing on this board can
-be clicked to change anything.
+customer, "12 glasses", the three counters (Cutting, Hotmelting, Glazing) each
+reading "12 of 12" with who last moved it and when under it, "fed 3 min ago"
+(or "not fed yet"), and — once anything has been recorded — a one-line "last:
+Person A Cutting 5→8, 2 min ago" pulled from the log. A job whose three
+counters have all reached the total goes **gold** and drops to the bottom of
+the board, the same rule and the same colour as the tablet. Nothing on this
+board can be clicked to change anything.
 
 Opening a job's **drawer** (from the ordinary job list) shows a "Glass
-station" section under "Glass units" with the same three bars, and under them
+station" section under "Glass units" with the same three lines, and under them
 a timeline of that job's own log lines, newest first, capped at twelve, with
 a "Full log" link. A job that has left production but was fed at some point
 still shows its record here, worded "Finished on the floor" rather than "Not
@@ -314,8 +354,11 @@ the dashboard:
 3. Resolves the `Floor stations` site and the `Glass station` list; skips
    silently if either doesn't exist yet.
 4. Reads the list once, works out which items need adding, which need their
-   fact columns patched, and which jobs have left production (and so need
-   `Active` set to `No`) — never deleting an item.
+   fact columns patched, which need their counters seeded (see "Seeding"
+   above — a new row, or one the floor has never tapped), and which jobs have
+   left production (and so need `Active` set to `No`) — never deleting an
+   item. The hash in step 2 includes the seed, so a job the office has just
+   ticked off reaches the floor on the next load rather than in ten minutes.
 5. Sends the writes (a modest number per run, so one page load never floods
    the API), and remembers when it last ran.
 
@@ -327,15 +370,21 @@ dashboard and never block on a retry loop.
 ## What the floor can and cannot do
 
 **Can:**
-- See every active job on the glass line, in the office's own order, with
-  its glass units by type.
+- See every active job on the glass line, in the office's own order, with one
+  total number of glasses each (no glass types).
+- Type a job number or a customer name into the header's search box to narrow
+  the cards down (Switch person clears it again for the next person).
 - Pick their own name from `Station people` (and enter their PIN, if the
   owner has given them one). The chosen name locks itself after ten minutes
   without a tap, and there is a **Switch person** button in the header.
-- Tap to record progress on **glass cutting, hotmelt and glazing**, per glass
-  type, per job — but **only for the stages that person holds**. The stages
-  they do not hold are shown greyed and disabled, values still readable, and
-  a tap on one does nothing.
+- Tap to record progress on **cutting, hotmelting and glazing**, per job, on
+  the card itself: −, +, and one **All** (which becomes **None** at the
+  total). There is nothing to expand and nothing to scroll inside a card.
+  They may move **only the stages that person holds**; the stages they do not
+  hold are shown greyed and disabled, values still readable, and a tap on one
+  does nothing.
+- Watch a job go **gold** and drop into the collapsed "Finished · n" group at
+  the bottom when all three counters reach the total.
 - Switch the tablet between the dark and light themes; it starts dark.
 
 **Cannot:**

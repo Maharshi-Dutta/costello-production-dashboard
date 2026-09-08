@@ -170,6 +170,15 @@ function routeFlist(method, path, body, base) {
   const store = storeFor(id, base);
   if (!store) return { status: 404, body: { error: { code: "itemNotFound" } } };
   if (method === "GET" && tail.indexOf("/delta") === 0) return routeDelta(id, tail, base);
+  /* one item by its id - what listItem() asks for. It is a different route
+     from the collection, and answering the collection to it would make the
+     seed guard read the wrong row's DoneAt. */
+  const mone = /^\/([^/?]+)(?:\?.*)?$/.exec(tail);
+  if (method === "GET" && mone) {
+    const hit = store.find(x => x.id === mone[1]);
+    if (!hit) return { status: 404, body: { error: { code: "itemNotFound" } } };
+    return ok({ id: hit.id, fields: Object.assign({}, hit.fields) });
+  }
   if (method === "GET") {
     const m = /[?&]page=(\d+)/.exec(tail);
     const page = m ? Number(m[1]) : 1;
@@ -328,12 +337,26 @@ const person = (name, stages, pin, active, station) =>
 
   /* ================= 1. the shape of the thing ================= */
   assert.deepStrictEqual(ST.STAGES.map(s => s[0]), ["cut", "hotmelt", "glazed"]);
-  assert.deepStrictEqual(ST.STAGES.map(s => s[1]), ["Glass cut", "Hotmelt", "Glazing"]);
+  assert.deepStrictEqual(ST.STAGES.map(s => s[1]), ["Cutting", "Hotmelting", "Glazing"]);
   assert.deepStrictEqual(ST.STAGE_FIELD, { cut: "Cut", hotmelt: "Hotmelt", glazed: "Glazed" });
   assert.deepStrictEqual(ST.STAGE_BY, { cut: "CutBy", hotmelt: "HotmeltBy", glazed: "GlazedBy" });
   assert.deepStrictEqual(ST.STAGE_AT, { cut: "CutAt", hotmelt: "HotmeltAt", glazed: "GlazedAt" });
-  assert.strictEqual(ST.stageLabel("hotmelt"), "Hotmelt");
-  pass("the three stages are Glass cut, Hotmelt and Glazing, each with its own counter and By/At pair");
+  assert.strictEqual(ST.stageLabel("hotmelt"), "Hotmelting");
+  pass("the three stages are Cutting, Hotmelting and Glazing, each with its own counter and By/At pair");
+
+  /* OWNER DECISION 1 and 2: one number per job, and it is DG + TG */
+  assert.strictEqual(ST.GLASS_TYPE, "GLASS", "every row carries the same literal in the type column");
+  assert.deepStrictEqual(ST.TOTAL_TYPES, ["DG", "TG"], "and the total is those two kinds, nothing else");
+  assert.strictEqual(ST.glassTotal({ glass: { dg: 4, tg: 8 } }), 12);
+  assert.strictEqual(ST.glassTotal({ glass: { dg: 4, tg: 8, tuff: 8, "not tuff": 4 } }), 12,
+    "TUFF and NOT TUFF describe those same units: adding them would double the job");
+  assert.strictEqual(ST.glassTotal({ glass: { arch: 2, astragal: 5, fancy: 1, extra: 3 } }), 0,
+    "and ARCH, ASTRAGAL, FANCY and EXTRA are not glasses the floor cuts");
+  assert.strictEqual(ST.glassTotal({}), 0);
+  assert.strictEqual(ST.glassTotal(null), 0);
+  assert.strictEqual(ST.glassWords(12), "12 glasses");
+  assert.strictEqual(ST.glassWords(1), "1 glass");
+  pass("a job is one number of glasses on the floor: DG plus TG, and nothing else counted twice");
 
   assert.strictEqual(ST.STATION_LIST, "Glass station");
   assert.strictEqual(ST.PEOPLE_LIST, "Station people");
@@ -361,6 +384,17 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.PEOPLE_FIELDS, ["Title", "Station", "Stages", "PIN", "Active"]);
   pass("the floor owns exactly eleven columns, and the three lists have the columns the brief names");
 
+  /* the seeding rule's own boundary: the feeder may name the three counters
+     and nothing else of the floor's - never a By, an At or the last touch */
+  assert.deepStrictEqual(ST.SEED_FIELDS, ["Cut", "Hotmelt", "Glazed"]);
+  assert.deepStrictEqual(ST.FEEDER_WRITES,
+    ["Title", "Job", "Customer", "GlassType", "Total", "Seq", "Active", "FedAt", "FedBy",
+     "Cut", "Hotmelt", "Glazed"]);
+  ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "DoneBy", "DoneAt"]
+    .forEach(k => assert.ok(ST.FEEDER_WRITES.indexOf(k) < 0,
+      "the feeder can never write " + k + ": it says who did it, and the office did not"));
+  pass("the feeder's whole vocabulary is the job facts plus the three counters, never a By or an At");
+
   ["Phone", "Eircode", "County", "Area", "Price", "Comment", "Notes", "Product", "Windows", "Doors"]
     .forEach(bad => ST.STATION_FIELDS.concat(ST.LOG_FIELDS, ST.PEOPLE_FIELDS).forEach(f =>
       assert.ok(f.toLowerCase().indexOf(bad.toLowerCase()) < 0, "no list may carry " + bad)));
@@ -372,18 +406,23 @@ const person = (name, stages, pin, active, station) =>
 
   /* ================= 2. the slice ================= */
   const jobs = [
-    mkJob({ id: "r5303", cust: "Customer One", glass: { tg: 6, dg: 2, arch: 0 }, blk: 4, seq: 0 }),
-    mkJob({ id: "R5304", cust: "Customer Two", glass: { tuff: 3 }, blk: 4, seq: 1 }),
+    mkJob({ id: "r5303", cust: "Customer One", glass: { tg: 6, dg: 2, arch: 3 }, blk: 4, seq: 0 }),
+    mkJob({ id: "R5304", cust: "Customer Two", glass: { dg: 3, tuff: 3 }, blk: 4, seq: 1 }),
     mkJob({ id: "R5305", cust: "Customer Three", glass: { dg: 4 }, blk: 3, seq: 2 }),        // Ready to fit
     mkJob({ id: "R5306", cust: "Customer Four", glass: {}, blk: 4, seq: 3 }),                 // no glass at all
-    mkJob({ id: "R5307", cust: "Customer Five", glass: { tg: 1 }, blk: -1, cat: "past", seq: 4 })
+    mkJob({ id: "R5307", cust: "Customer Five", glass: { tg: 1 }, blk: -1, cat: "past", seq: 4 }),
+    mkJob({ id: "R5308", cust: "Customer Six", glass: { arch: 4, fancy: 2 }, blk: 4, seq: 5 })
   ];
   let slice = ST.glassSlice(jobs, NAMES);
-  assert.deepStrictEqual(slice.map(r => r.title), ["R5303|DG", "R5303|TG", "R5304|TUFF"],
-    "one row per job AND type, in sheet order then title, job numbers upper-cased");
+  assert.deepStrictEqual(slice.map(r => r.title), ["R5303", "R5304"],
+    "ONE row per job, in sheet order, the job number upper-cased and nothing else in the Title");
+  assert.strictEqual(slice[0].total, 8, "eight glasses: the six TG and the two DG, and no ARCH");
+  assert.strictEqual(slice[1].total, 3, "and three: the DG, with TUFF describing those same three");
   assert.strictEqual(slice.filter(r => r.job === "R5306").length, 0, "a job with no glass produces nothing");
-  assert.strictEqual(slice.filter(r => r.type === "ARCH").length, 0, "and a type with a zero count is not a row");
-  pass("the slice is one row per job and glass type, and nothing for a job with no glass");
+  assert.strictEqual(slice.filter(r => r.job === "R5308").length, 0,
+    "and neither does one whose only glass is of a kind the floor does not work on");
+  assert.ok(slice.every(r => !("type" in r)), "there is no glass type in a slice row at all");
+  pass("the slice is one row per job with one total, and nothing for a job with no DG or TG");
 
   assert.ok(slice.every(r => r.active === true), "every row in the slice is a job on the floor");
   assert.strictEqual(slice.filter(r => r.job === "R5305").length, 0, "Ready to fit is not fed at all");
@@ -401,26 +440,80 @@ const person = (name, stages, pin, active, station) =>
   ["eir", "area", "ph3", "off", "notes", "prods", "wnd", "drs", "colour", "cp", "dates"]
     .forEach(k => assert.ok(!(k in sl2[0]), "the slice must not carry " + k));
   assert.deepStrictEqual(Object.keys(sl2[0]).sort(),
-    ["active", "customer", "job", "seq", "title", "total", "type"]);
+    ["active", "customer", "job", "seed", "seq", "title", "total"]);
   pass("a slice row is seven fields: no phone, eircode, county, product, comment or date among them");
+
+  /* ================= 2b. what the office has already ticked off =================
+     OWNER DECISION 4: a job the office finished last week must not arrive on
+     the tablet reading nothing done. The four rules, in order. */
+  const seedRow = { total: 12 };
+  const gl = (type, total, status, done) => ({ type: type, total: total, status: status, done: done });
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "done"), gl("tg", 8, "done")]),
+    { cut: 12, hotmelt: 12, glazed: 12 }, "every DG and TG item gold: the whole job is done");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "done"), gl("tg", 8, "process", 3)]),
+    { cut: 7, hotmelt: 7, glazed: 7 }, "part way: the office's count, a gold item counting its whole four");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "process", 0), gl("tg", 8, "")]),
+    { cut: 0, hotmelt: 0, glazed: 0 }, "in progress with no count known is nought, not a guess");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "cut"), gl("tg", 8, "")]),
+    { cut: 12, hotmelt: 0, glazed: 0 }, "the sheet's Cut green: cut, and only cut");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, ""), gl("tg", 8, "")]),
+    { cut: 0, hotmelt: 0, glazed: 0 }, "and nothing ticked is nothing on the floor");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "done"), gl("tg", 8, "cut")]),
+    { cut: 4, hotmelt: 4, glazed: 4 }, "a gold one and a green one: the gold one's count, not the green");
+  pass("the seed is the office's own record, read by its four rules and never invented");
+
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("arch", 4, "done"), gl("tuff", 8, "done")]),
+    { cut: 0, hotmelt: 0, glazed: 0 }, "only DG and TG are looked at, exactly as the total is");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, [gl("dg", 4, "process", 99)]),
+    { cut: 12, hotmelt: 12, glazed: 12 }, "and a count above the job's total is clamped to it");
+  assert.deepStrictEqual(ST.officeSeed({ total: 0 }, [gl("dg", 4, "done")]),
+    { cut: 0, hotmelt: 0, glazed: 0 }, "a job with no glasses cannot be part done");
+  assert.deepStrictEqual(ST.officeSeed(seedRow, null), { cut: 0, hotmelt: 0, glazed: 0 });
+  assert.deepStrictEqual(ST.officeSeed(null, null), { cut: 0, hotmelt: 0, glazed: 0 });
+  pass("the seed ignores the types the total ignores, clamps, and never crashes on a job with nothing");
+
+  /* and the slice carries it, from whatever the caller has to hand */
+  const seeded = ST.glassSlice([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6, dg: 2 }, blk: 4 })],
+    NAMES, j => [gl("tg", 6, "done"), gl("dg", 2, "done")]);
+  assert.deepStrictEqual(seeded[0].seed, { cut: 8, hotmelt: 8, glazed: 8 });
+  const seededMap = ST.glassSlice([mkJob({ id: "R5303", glass: { tg: 6 }, blk: 4 })], NAMES,
+    { R5303: [gl("tg", 6, "cut")] });
+  assert.deepStrictEqual(seededMap[0].seed, { cut: 6, hotmelt: 0, glazed: 0 },
+    "a map by job number does as well as a function: it is plain data either way");
+  assert.deepStrictEqual(slice[0].seed, { cut: 0, hotmelt: 0, glazed: 0 },
+    "and a caller with no checkpoints to hand seeds every row at nothing");
+  pass("the slice carries the seed, and station-core.js never reaches for a checkpoint itself");
 
   /* ================= 3. the plan ================= */
   const AT = "2026-09-08T09:00:00.000Z", BY = "office@example.test";
   let plan = ST.feedPlan(slice, [], { at: AT, by: BY });
-  assert.strictEqual(plan.adds.length, 3);
+  assert.strictEqual(plan.adds.length, 2);
   assert.strictEqual(plan.patches.length, 0);
-  assert.deepStrictEqual(plan.adds[0], { Title: "R5303|DG", Job: "R5303", Customer: "Customer One",
-    GlassType: "DG", Total: 2, Seq: 0, Active: "Yes", FedAt: AT, FedBy: BY });
-  assert.deepStrictEqual(plan.adds.map(a => a.Title), ["R5303|DG", "R5303|TG", "R5304|TUFF"],
-    "Seq then Title, always");
+  assert.deepStrictEqual(plan.adds[0], { Title: "R5303", Job: "R5303", Customer: "Customer One",
+    GlassType: "GLASS", Total: 8, Seq: 0, Active: "Yes",
+    Cut: 0, Hotmelt: 0, Glazed: 0, FedAt: AT, FedBy: BY });
+  assert.deepStrictEqual(plan.adds.map(a => a.Title), ["R5303", "R5304"], "Seq then Title, always");
   pass("an empty list is filled by adds, in Seq then Title order");
 
+  /* OWNER DECISION 4, first half: a row the feeder creates starts where the
+     office's own record already is */
+  const seedSlice = ST.glassSlice([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6, dg: 2 }, blk: 4, seq: 0 })],
+    NAMES, j => [gl("tg", 6, "done"), gl("dg", 2, "process", 1)]);
+  const seedPlan = ST.feedPlan(seedSlice, [], { at: AT, by: BY });
+  assert.strictEqual(seedPlan.adds[0].Cut, 7, "seven of the eight are already done in the office");
+  assert.strictEqual(seedPlan.adds[0].Hotmelt, 7);
+  assert.strictEqual(seedPlan.adds[0].Glazed, 7);
+  ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "DoneBy", "DoneAt"]
+    .forEach(k => assert.ok(!(k in seedPlan.adds[0]),
+      "a seeded row still has no " + k + ": nobody on the floor did this"));
+  pass("a row the feeder creates is seeded with what the office has already ticked off");
+
   ITEMS = plan.adds.map((f, i) => item(f, 200 + i));
-  ITEMS[1].fields.Cut = 6; ITEMS[1].fields.Hotmelt = 4; ITEMS[1].fields.Glazed = 1;
-  ITEMS[1].fields.CutBy = "Person A"; ITEMS[1].fields.CutAt = "2026-09-08T10:00:00.000Z";
-  ITEMS[1].fields.DoneBy = "Person A"; ITEMS[1].fields.DoneAt = "2026-09-08T10:00:00.000Z";
+  ITEMS[0].fields.Cut = 6; ITEMS[0].fields.Hotmelt = 4; ITEMS[0].fields.Glazed = 1;
+  ITEMS[0].fields.CutBy = "Person A"; ITEMS[0].fields.CutAt = "2026-09-08T10:00:00.000Z";
+  ITEMS[0].fields.DoneBy = "Person A"; ITEMS[0].fields.DoneAt = "2026-09-08T10:00:00.000Z";
   plan = ST.feedPlan(slice, ITEMS, { at: AT, by: BY });
-  assert.deepStrictEqual(plan, { adds: [], patches: [], unchanged: 3 },
+  assert.deepStrictEqual(plan, { adds: [], patches: [], unchanged: 2 },
     "nothing changed on the sheet, so nothing is written");
   pass("a list that already agrees with the sheet gets no writes at all");
 
@@ -429,49 +522,86 @@ const person = (name, stages, pin, active, station) =>
   slice = ST.glassSlice(jobs2, NAMES);
   plan = ST.feedPlan(slice, ITEMS, { at: "2026-09-08T11:00:00.000Z", by: BY });
   assert.strictEqual(plan.adds.length, 0);
-  assert.strictEqual(plan.patches.length, 2, "one for the name, one for the name and the total");
-  assert.deepStrictEqual(plan.patches.find(p => p.id === "201").fields,
-    { Customer: "Customer One Ltd", Total: 8, FedAt: "2026-09-08T11:00:00.000Z", FedBy: BY },
+  assert.strictEqual(plan.patches.length, 1, "one job changed its name and its count");
+  assert.deepStrictEqual(plan.patches[0].fields,
+    { Customer: "Customer One Ltd", Total: 10, FedAt: "2026-09-08T11:00:00.000Z", FedBy: BY },
     "only the fields that actually differ, plus FedAt/FedBy");
   assert.strictEqual(plan.unchanged, 1);
   pass("a patch carries only the feeder fields that changed, and says when and by whom");
 
+  /* OWNER DECISION 4, second half, and the hard rule that guards it: a row the
+     floor has tapped is the floor's for ever - the feeder can change what the
+     job IS, and never what has been done to it. */
+  const touchedSlice = ST.glassSlice([mkJob({ id: "R5303", cust: "Customer One Ltd", glass: { tg: 8, dg: 2 }, blk: 4, seq: 0 })],
+    NAMES, j => [gl("tg", 8, "done"), gl("dg", 2, "done")]);
+  plan = ST.feedPlan(touchedSlice, ITEMS, { at: AT, by: BY });
+  assert.ok(ITEMS[0].fields.DoneAt, "the floor has tapped this row");
+  assert.deepStrictEqual(Object.keys(plan.patches[0].fields).sort(),
+    ["Customer", "FedAt", "FedBy", "Total"],
+    "so the office's 'all done' does not go anywhere near its counters");
+  ST.SEED_FIELDS.forEach(k => assert.ok(!(k in plan.patches[0].fields), "not even " + k));
+  assert.strictEqual(ITEMS[0].fields.Cut, 6, "and what the floor recorded is exactly where it was");
+  pass("once the floor has tapped a row, the feeder never writes a counter on it again");
+
+  /* while a row nobody has tapped is still the office's to say */
+  const untouchedItems = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One Ltd",
+    GlassType: "GLASS", Total: 10, Seq: 0, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "250")];
+  plan = ST.feedPlan(touchedSlice, untouchedItems, { at: AT, by: BY });
+  assert.deepStrictEqual(plan.patches[0].fields,
+    { Cut: 10, Hotmelt: 10, Glazed: 10, FedAt: AT, FedBy: BY },
+    "the office ticked the job off, so the untouched row moves with it");
+  untouchedItems[0].fields.Cut = 10; untouchedItems[0].fields.Hotmelt = 10; untouchedItems[0].fields.Glazed = 10;
+  plan = ST.feedPlan(touchedSlice, untouchedItems, { at: AT, by: BY });
+  assert.strictEqual(plan.patches.length, 0, "and once it agrees, it is not written again");
+  untouchedItems[0].fields.DoneAt = "2026-09-08T10:00:00.000Z";
+  untouchedItems[0].fields.Cut = 2;
+  plan = ST.feedPlan(touchedSlice, untouchedItems, { at: AT, by: BY });
+  assert.strictEqual(plan.patches.length, 0,
+    "and the moment the floor taps it, the office's higher count is not pushed back over theirs");
+  pass("an untouched row is re-seeded when the office's own count moves, and only until the first tap");
+
   const allPlanFields = p => p.adds.concat(p.patches.map(x => x.fields));
-  const noFloor = p => allPlanFields(p).every(f => ST.FLOOR_FIELDS.every(k => !(k in f)));
-  assert.ok(noFloor(plan), "a patch never names one of the floor's columns");
-  assert.strictEqual(ITEMS[1].fields.Cut, 6, "and the counters that were there are still there");
-  assert.strictEqual(ITEMS[1].fields.CutBy, "Person A", "and so is who put them there");
-  pass("no plan the feeder can make contains a counter, a By, an At, or the last-touch pair");
+  const noFloor = p => allPlanFields(p).every(f =>
+    Object.keys(f).every(k => ST.FEEDER_WRITES.indexOf(k) >= 0));
+  const noSeed = p => allPlanFields(p).every(f => ST.FLOOR_FIELDS.every(k => !(k in f)));
+  assert.ok(noFloor(plan), "a patch never names a column outside the feeder's own vocabulary");
+  assert.strictEqual(ITEMS[0].fields.CutBy, "Person A", "and never says who did anything");
+  pass("no plan the feeder can make contains a By, an At, or the last-touch pair");
 
   const jobs3 = jobs2.filter(j => j.id !== "R5304");
   plan = ST.feedPlan(ST.glassSlice(jobs3, NAMES), ITEMS, { at: AT, by: BY });
-  assert.deepStrictEqual(plan.patches.find(p => p.id === "202").fields,
+  assert.deepStrictEqual(plan.patches.find(p => p.id === "201").fields,
     { Active: "No", FedAt: AT, FedBy: BY });
-  assert.ok(noFloor(plan), "and even then, not a counter in sight");
+  assert.ok(noSeed({ adds: [], patches: plan.patches.filter(p => p.id === "201") }),
+    "and even then, not a counter in sight");
   assert.ok(!("delete" in plan) && !("deletes" in plan) && !("removes" in plan),
     "there is no such thing as a delete in a feed plan");
   pass("a job that leaves production is marked Active = No, and its item is never removed");
 
-  ITEMS.find(x => x.id === "202").fields.Active = "No";
+  ITEMS.find(x => x.id === "201").fields.Active = "No";
   plan = ST.feedPlan(ST.glassSlice(jobs3, NAMES), ITEMS, { at: AT, by: BY });
-  assert.strictEqual(plan.patches.filter(p => p.id === "202").length, 0);
+  assert.strictEqual(plan.patches.filter(p => p.id === "201").length, 0);
   pass("an item already marked inactive is not written again on the next run");
 
-  const ragged = [{ id: "300", fields: { Title: "R9001|TG" } }, { id: "301" }, null,
+  const ragged = [{ id: "300", fields: { Title: "R9001" } }, { id: "301" }, null,
                   { id: "302", fields: { Title: "" } }];
-  plan = ST.feedPlan([{ title: "R9001|TG", job: "R9001", customer: "Customer Seven", type: "TG",
-                        total: 2, seq: 7, active: true }], ragged, { at: AT, by: BY });
+  plan = ST.feedPlan([{ title: "R9001", job: "R9001", customer: "Customer Seven",
+                        total: 2, seq: 7, active: true, seed: { cut: 0, hotmelt: 0, glazed: 0 } }],
+                     ragged, { at: AT, by: BY });
   assert.strictEqual(plan.adds.length, 0, "the ragged item is still the item for that Title");
   assert.deepStrictEqual(plan.patches[0].fields,
-    { Job: "R9001", Customer: "Customer Seven", GlassType: "TG", Total: 2, Seq: 7, Active: "Yes", FedAt: AT, FedBy: BY });
+    { Job: "R9001", Customer: "Customer Seven", GlassType: "GLASS", Total: 2, Seq: 7,
+      Active: "Yes", FedAt: AT, FedBy: BY },
+    "a blank counter and a seed of nothing agree, so no zeros are written into it");
   pass("an item missing every column but Title is filled in rather than crashing anything");
 
-  const twins = [{ id: "410", fields: { Title: "R7|TG", Job: "R7", Customer: "Old", GlassType: "TG",
+  const twins = [{ id: "410", fields: { Title: "R7", Job: "R7", Customer: "Old", GlassType: "GLASS",
                                         Total: 1, Seq: 1, Active: "Yes" } },
-                 { id: "409", fields: { Title: "R7|TG", Job: "R7", Customer: "Older", GlassType: "TG",
+                 { id: "409", fields: { Title: "R7", Job: "R7", Customer: "Older", GlassType: "GLASS",
                                         Total: 1, Seq: 1, Active: "Yes" } }];
-  plan = ST.feedPlan([{ title: "R7|TG", job: "R7", customer: "New", type: "TG",
-                        total: 1, seq: 1, active: true }], twins, { at: AT, by: BY });
+  plan = ST.feedPlan([{ title: "R7", job: "R7", customer: "New",
+                        total: 1, seq: 1, active: true, seed: { cut: 0, hotmelt: 0, glazed: 0 } }],
+                     twins, { at: AT, by: BY });
   assert.strictEqual(plan.patches.length, 1);
   assert.strictEqual(plan.patches[0].id, "409", "the oldest item wins, exactly as the phases list does");
   pass("two items carrying one Title: the older is maintained, the other left alone, neither deleted");
@@ -484,66 +614,100 @@ const person = (name, stages, pin, active, station) =>
   assert.notStrictEqual(h1, ST.sliceHash(ST.glassSlice(jobs.map(j => Object.assign({}, j, { seq: j.seq + 10 })), NAMES)),
     "and so does a changed order");
   assert.strictEqual(ST.sliceHash([]), "0-811c9dc5");
+  assert.notStrictEqual(ST.sliceHash(ST.glassSlice(jobs, NAMES)),
+    ST.sliceHash(ST.glassSlice(jobs, NAMES, j => [gl("tg", 6, "done"), gl("dg", 2, "done")])),
+    "and so does the office ticking a job off: the seed is part of what the floor sees");
   pass("the slice hash is stable, order-independent, and moves when anything the floor sees moves");
 
   /* ================= 5. the board ================= */
   const bItems = [
-    item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG", Total: 6, Seq: 2,
-           Active: "Yes", Cut: 6, Hotmelt: 2, Glazed: 0, FedAt: "2026-09-08T09:00:00.000Z",
-           CutBy: "Person A", CutAt: "2026-09-08T12:00:00.000Z",
-           HotmeltBy: "Person B", HotmeltAt: "2026-09-08T13:00:00.000Z" }, "500"),
-    item({ Title: "R5303|ARCH", Job: "R5303", Customer: "Customer One", GlassType: "ARCH", Total: 2, Seq: 2,
-           Active: "Yes", Cut: 1, Glazed: 0, FedAt: "2026-09-08T09:05:00.000Z",
-           CutBy: "Person C", CutAt: "2026-09-08T14:00:00.000Z" }, "501"),
-    item({ Title: "R5301|DG", Job: "R5301", Customer: "Customer Six", GlassType: "DG", Total: 4, Seq: 1,
+    item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS", Total: 8, Seq: 2,
+           Active: "Yes", Cut: 7, Hotmelt: 2, Glazed: 0, FedAt: "2026-09-08T09:05:00.000Z",
+           CutBy: "Person C", CutAt: "2026-09-08T14:00:00.000Z",
+           HotmeltBy: "Person B", HotmeltAt: "2026-09-08T13:00:00.000Z",
+           DoneBy: "Person C", DoneAt: "2026-09-08T14:00:00.000Z" }, "500"),
+    item({ Title: "R5304", Job: "R5304", Customer: "Customer Two", GlassType: "GLASS", Total: 2, Seq: 3,
+           Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0, FedAt: "2026-09-08T09:00:00.000Z" }, "501"),
+    item({ Title: "R5301", Job: "R5301", Customer: "Customer Six", GlassType: "GLASS", Total: 4, Seq: 1,
            Active: "Yes", Cut: 4, Hotmelt: 4, Glazed: 4 }, "502"),
-    item({ Title: "R5299|TG", Job: "R5299", Customer: "Customer Eight", GlassType: "TG", Total: 3, Seq: 0,
+    item({ Title: "R5299", Job: "R5299", Customer: "Customer Eight", GlassType: "GLASS", Total: 3, Seq: 0,
            Active: "No", Cut: 3 }, "503")
   ];
   let board = ST.jobBoard(bItems);
-  assert.deepStrictEqual(board.map(g => g.job), ["R5301", "R5303"], "Seq order, and inactive is off the board");
+  assert.deepStrictEqual(board.map(g => g.job), ["R5301", "R5303", "R5304"],
+    "Seq order, one card per job, and the inactive one is off the board");
   const r5303 = board[1];
+  assert.strictEqual(r5303.id, "500", "a card is one list row, so it knows which one to write to");
+  assert.strictEqual(r5303.total, 8, "eight glasses on the job, and one number for them");
+  assert.deepStrictEqual([r5303.cut, r5303.hotmelt, r5303.glazed], [7, 2, 0]);
   assert.deepStrictEqual(r5303.bars.cut.done + "/" + r5303.bars.cut.total, "7/8");
-  assert.deepStrictEqual(r5303.bars.hotmelt.done + "/" + r5303.bars.hotmelt.total, "2/8",
-    "hotmelt applies to every type, so ARCH is in that bar's total");
-  assert.deepStrictEqual(r5303.bars.glazed.done + "/" + r5303.bars.glazed.total, "0/8");
-  assert.deepStrictEqual(r5303.rows.map(r => r.type), ["ARCH", "TG"]);
-  assert.strictEqual(r5303.fedAt, "2026-09-08T09:05:00.000Z", "the newest feed stamp on the job");
-  pass("the board groups by job in Seq order, and every stage counts every glass type");
+  assert.strictEqual(r5303.fedAt, "2026-09-08T09:05:00.000Z");
+  assert.ok(!("rows" in r5303), "there are no per-type rows any more: the type is gone from the floor");
+  pass("the board is one card per job in Seq order, with one total and three counters");
 
-  assert.strictEqual(r5303.bars.cut.by, "Person C", "the latest cut on the job, whichever type it was");
+  assert.strictEqual(r5303.bars.cut.by, "Person C", "who last moved the cutting on this job");
   assert.strictEqual(r5303.bars.cut.at, "2026-09-08T14:00:00.000Z");
   assert.strictEqual(r5303.bars.hotmelt.by, "Person B");
   assert.strictEqual(r5303.bars.glazed.by, "", "nothing glazed yet, so nobody to name");
-  assert.strictEqual(r5303.rows[1].by.cut, "Person A", "and the row keeps its own");
-  pass("each bar carries who last moved it and when, taken from the newest At on the job");
+  assert.strictEqual(r5303.by.hotmelt, "Person B");
+  pass("each stage carries who last moved it and when, which is what the office reads out");
 
-  assert.strictEqual(board[0].finished, true, "everything full");
-  assert.strictEqual(r5303.finished, false);
-  const empty = ST.jobBoard([item({ Title: "R1|ARCH", Job: "R1", GlassType: "ARCH", Total: 0,
-                                    Seq: 1, Active: "Yes" }, "600")]);
-  assert.strictEqual(empty[0].finished, true, "an empty bar is not something anyone can finish");
-  pass("finished means every bar full, and a bar with no units in it never holds a job back");
+  /* OWNER DECISION 5: gold when all three have reached the total */
+  assert.strictEqual(board[0].finished, true, "all three counters at four of four");
+  assert.strictEqual(r5303.finished, false, "seven of eight cut is not finished");
+  const nearly = ST.jobBoard([item({ Title: "R1", Job: "R1", Total: 4, Seq: 1, Active: "Yes",
+                                     Cut: 4, Hotmelt: 4, Glazed: 3 }, "601")]);
+  assert.strictEqual(nearly[0].finished, false, "and neither is one glass short of glazed");
+  const empty = ST.jobBoard([item({ Title: "R1", Job: "R1", Total: 0, Seq: 1, Active: "Yes" }, "600")]);
+  assert.strictEqual(empty[0].finished, false,
+    "a row with no glasses on it is not something anybody finished");
+  pass("a job goes gold when all three counters equal the total, and only when there is a total");
 
-  const shrunk = ST.jobBoard([item({ Title: "R2|TG", Job: "R2", GlassType: "TG", Total: 4, Seq: 1,
+  const shrunk = ST.jobBoard([item({ Title: "R2", Job: "R2", GlassType: "GLASS", Total: 4, Seq: 1,
                                      Active: "Yes", Cut: 9, Hotmelt: 6, Glazed: -3 }, "700")]);
-  assert.strictEqual(shrunk[0].rows[0].cut, 4);
-  assert.strictEqual(shrunk[0].rows[0].hotmelt, 4);
-  assert.strictEqual(shrunk[0].rows[0].glazed, 0);
+  assert.strictEqual(shrunk[0].cut, 4);
+  assert.strictEqual(shrunk[0].hotmelt, 4);
+  assert.strictEqual(shrunk[0].glazed, 0);
   assert.deepStrictEqual(shrunk[0].bars.cut.done + "/" + shrunk[0].bars.cut.total, "4/4");
   pass("a count above the total, or below zero, is clamped for display and never written back");
 
-  const dupes = ST.jobBoard([item({ Title: "R3|TG", Job: "R3", GlassType: "TG", Total: 2, Seq: 1,
+  const dupes = ST.jobBoard([item({ Title: "R3", Job: "R3", GlassType: "GLASS", Total: 2, Seq: 1,
                                     Active: "Yes", Cut: 2 }, "811"),
-                             item({ Title: "R3|TG", Job: "R3", GlassType: "TG", Total: 2, Seq: 1,
+                             item({ Title: "R3", Job: "R3", GlassType: "GLASS", Total: 2, Seq: 1,
                                     Active: "Yes", Cut: 0 }, "810")]);
-  assert.strictEqual(dupes[0].rows.length, 1, "one row, not two");
-  assert.strictEqual(dupes[0].rows[0].id, "810", "the oldest item is the one that is shown");
-  pass("two items for one Title show as one row on the board, the oldest one");
+  assert.strictEqual(dupes.length, 1, "one card, not two");
+  assert.strictEqual(dupes[0].id, "810", "the oldest item is the one that is shown");
+  pass("two items carrying one job show as one card, the oldest one");
+
+  /* AMENDMENT 2: the live list still holds ~400 rows the v2 feeder wrote, one
+     per job AND glass type, Title `JOB|TYPE`. Until they are cleared by hand
+     they must not put a job on the board twice, and above all an old full
+     ARCH row must not make a job that has barely started read as finished. */
+  const legacy = [
+    item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG",
+           Total: 6, Seq: 2, Active: "Yes", Cut: 6, Hotmelt: 6, Glazed: 6 }, "400"),
+    item({ Title: "R5303|ARCH", Job: "R5303", Customer: "Customer One", GlassType: "ARCH",
+           Total: 2, Seq: 2, Active: "Yes", Cut: 2, Hotmelt: 2, Glazed: 2 }, "401"),
+    item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS",
+           Total: 8, Seq: 2, Active: "Yes", Cut: 1, Hotmelt: 0, Glazed: 0 }, "402")
+  ];
+  const lb = ST.jobBoard(legacy);
+  assert.strictEqual(lb.length, 1, "one card for the job, not three");
+  assert.strictEqual(lb[0].id, "402", "the row whose Title IS the job number wins, newest though it is");
+  assert.strictEqual(lb[0].total, 8);
+  assert.strictEqual(lb[0].cut, 1);
+  assert.strictEqual(lb[0].finished, false, "so an old full JOB|TYPE row cannot call the job finished");
+  assert.strictEqual(ST.jobRecord(legacy, "R5303").id, "402", "and the drawer reads the same row");
+  const onlyOld = legacy.slice(0, 2);
+  assert.strictEqual(ST.jobBoard(onlyOld).length, 1, "with only old rows it is still one card");
+  assert.strictEqual(ST.jobBoard(onlyOld)[0].id, "400", "and between two of those the oldest id wins");
+  assert.strictEqual(ST.jobRecord(onlyOld, "R5303").id, "400",
+    "so a job fed only by the old iteration still has a record to show");
+  pass("leftover JOB|TYPE rows from v2 cannot double a job on the board or call it finished");
 
   assert.deepStrictEqual(ST.jobBoard([{ id: "900" }, null, item({ Active: "Yes" }, "901"),
-                                      item({ Title: "R4|TG", Active: "yes", Job: "R4",
-                                             GlassType: "TG", Total: 1 }, "902")]).map(g => g.job), ["R4"]);
+                                      item({ Title: "R4", Active: "yes", Job: "R4",
+                                             GlassType: "GLASS", Total: 1 }, "902")]).map(g => g.job), ["R4"]);
   assert.deepStrictEqual(ST.jobBoard(null), []);
   pass("an item missing its fields does not crash the board, and a null list is an empty board");
 
@@ -554,8 +718,18 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ST.jobRecord(bItems, "R0000"), null);
   pass("jobRecord finds a job whatever its Active is, so a finished job keeps its record");
 
+  /* OWNER DECISION 3's search box: it narrows the board, it never becomes it */
+  assert.deepStrictEqual(ST.boardFilter(board, "5303").map(g => g.job), ["R5303"], "by job number");
+  assert.deepStrictEqual(ST.boardFilter(board, "customer six").map(g => g.job), ["R5301"],
+    "by customer name, ignoring case");
+  assert.deepStrictEqual(ST.boardFilter(board, "  ").map(g => g.job), board.map(g => g.job),
+    "an empty box is every card");
+  assert.deepStrictEqual(ST.boardFilter(board, "nothing at all"), []);
+  assert.deepStrictEqual(ST.boardFilter(null, "x"), []);
+  pass("the search box matches a job number or a customer name, and nothing else about a job");
+
   /* ================= 6. the tap ================= */
-  const trow = { id: "1", type: "TG", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
+  const trow = { id: "1", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
   assert.strictEqual(ST.applyTap(trow, "cut", 1), 4);
   assert.strictEqual(ST.applyTap(trow, "cut", -1), 2);
   assert.strictEqual(ST.applyTap(trow, "cut", "all"), 6);
@@ -631,13 +805,15 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.floorOnly(null), {});
   pass("the floor's whitelist drops every job fact, however it got into the bag");
 
-  const lf = ST.logFields({ job: "r5303", type: "tg", stage: "Cut", from: 5, to: 8,
+  const lf = ST.logFields({ job: "r5303", type: ST.GLASS_TYPE, stage: "Cut", from: 5, to: 8,
                             who: "Person A", at: "2026-09-08T15:00:00.000Z" });
-  assert.deepStrictEqual(lf, { Title: "R5303", Station: "Glass", GlassType: "TG", Stage: "cut",
+  assert.deepStrictEqual(lf, { Title: "R5303", Station: "Glass", GlassType: "GLASS", Stage: "cut",
     From: 5, To: 8, Who: "Person A", At: "2026-09-08T15:00:00.000Z" });
   assert.strictEqual(ST.logFields({ job: "R1" }).Station, "Glass", "the station names itself");
+  assert.strictEqual(ST.logFields({ job: "R1" }).GlassType, "GLASS",
+    "and a line with no type in it is still the one literal, never a kind of glass");
   assert.strictEqual(ST.logFields({ job: "R1", from: "3", to: "4" }).From, 3, "numbers are numbers");
-  pass("a log line is job, station, type, stage, From, To, who and when - and nothing else");
+  pass("a log line is job, station, stage, From, To, who and when - and one literal in the type column");
 
   /* ================= 9. reading the log back ================= */
   const lItems = [
@@ -719,8 +895,8 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(d.order, false, "and it did not move on the screen");
   pass("one counter moving names exactly one card, so five other cards are never touched");
 
-  const plusOne = bump.concat([item({ Title: "R5400|TG", Job: "R5400", Customer: "New",
-    GlassType: "TG", Total: 2, Seq: 5, Active: "Yes" }, "504")]);
+  const plusOne = bump.concat([item({ Title: "R5400", Job: "R5400", Customer: "New",
+    GlassType: "GLASS", Total: 2, Seq: 5, Active: "Yes" }, "504")]);
   d = ST.boardDiff(ST.jobBoard(bump), ST.jobBoard(plusOne));
   assert.deepStrictEqual(d.added, ["R5400"]);
   assert.strictEqual(d.order, true, "a new card is a change of order too");
@@ -729,11 +905,9 @@ const person = (name, stages, pin, active, station) =>
   pass("a job arriving on the board, and one leaving it, are each named once");
 
   const done = bItems.map(x => item(Object.assign({}, x.fields), x.id));
-  done.find(x => x.id === "500").fields.Glazed = 6;
-  done.find(x => x.id === "500").fields.Hotmelt = 6;
-  done.find(x => x.id === "501").fields.Cut = 2;
-  done.find(x => x.id === "501").fields.Hotmelt = 2;
-  done.find(x => x.id === "501").fields.Glazed = 2;
+  done.find(x => x.id === "500").fields.Cut = 8;
+  done.find(x => x.id === "500").fields.Hotmelt = 8;
+  done.find(x => x.id === "500").fields.Glazed = 8;
   const bDone = ST.jobBoard(done);
   assert.strictEqual(bDone.find(g => g.job === "R5303").finished, true);
   d = ST.boardDiff(bA, bDone);
@@ -749,8 +923,8 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.boardDiff(bA, ST.jobBoard(custMoved)).changed, ["R5303"]);
   pass("only what a card actually draws counts as a change: a customer rename does, a feed stamp does not");
 
-  assert.deepStrictEqual(ST.boardDiff(null, bA).added, ["R5301", "R5303"], "the first paint is all adds");
-  assert.deepStrictEqual(ST.boardDiff(bA, []).removed, ["R5301", "R5303"]);
+  assert.deepStrictEqual(ST.boardDiff(null, bA).added, ["R5301", "R5303", "R5304"], "the first paint is all adds");
+  assert.deepStrictEqual(ST.boardDiff(bA, []).removed, ["R5301", "R5303", "R5304"]);
   pass("a first paint and an emptied board are both described rather than crashed on");
 
   /* ================= 11. merging a delta feed ================= */
@@ -874,7 +1048,7 @@ const person = (name, stages, pin, active, station) =>
   pass("listItems reads every page of another site's list, asking for the station columns");
 
   reset();
-  const made = await CW.listAdd("Glass station", { Title: "R8|TG", Job: "R8" }, opts);
+  const made = await CW.listAdd("Glass station", { Title: "R8", Job: "R8", FedBy: "office" }, opts);
   assert.strictEqual(writes().length, 1, "a plain POST: no read-before-write, no dedupe pass");
   reset();
   await CW.listPatch("Glass station", made.id, { Cut: 2 }, opts);
@@ -901,7 +1075,7 @@ const person = (name, stages, pin, active, station) =>
   DELTA_PAGE = 999;
   pass("listDelta follows @odata.nextLink to the end and takes the deltaLink off the last page");
 
-  DELTA_NEXT[GLASS_ID] = [[{ id: "500", fields: { Title: "R5303|TG", Cut: 6, Glazed: 4 } },
+  DELTA_NEXT[GLASS_ID] = [[{ id: "500", fields: { Title: "R5303", Cut: 6, Glazed: 4 } },
                            { id: "503", "@removed": { reason: "deleted" } }]];
   reset();
   const dr2 = await CW.listDelta("Glass station", { siteId: FSITE, fields: ST.STATION_FIELDS, token: dr.next });
@@ -997,7 +1171,134 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ITEMS.length, 2);
   assert.ok(writes().every(w => w.method === "POST"), "two new jobs: two POSTs and nothing else");
   assert.strictEqual(A("STATION_OK"), true);
+  assert.deepStrictEqual(ITEMS.map(x => x.fields.Title), ["R5303", "R5304"], "one row per job");
+  assert.ok(ITEMS.every(x => x.fields.GlassType === "GLASS"), "and no kind of glass on any of them");
   pass("the feeder pushes the sheet's glass into the list on a load");
+
+  /* OWNER DECISION 4, end to end: the office's own checkpoint colours reach
+     the floor's row through glassCounts -> ST.officeSeed -> ST.feedPlan */
+  ITEMS = []; forget();
+  useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } }),
+           mkJob({ id: "R4942", cust: "Customer Two", glass: { tg: 5 }, blk: 4, seq: 1,
+                   cp: { win: "", drs: "", glass: { tg: "cut" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  const seededRow = ITEMS.find(x => x.fields.Title === "R4941").fields;
+  assert.strictEqual(seededRow.Total, 12, "twelve glasses: the eight TG and the four DG");
+  assert.deepStrictEqual([seededRow.Cut, seededRow.Hotmelt, seededRow.Glazed], [12, 12, 12],
+    "the office had already ticked this job off, so it does not arrive on the floor showing nothing");
+  const greenRow = ITEMS.find(x => x.fields.Title === "R4942").fields;
+  assert.deepStrictEqual([greenRow.Cut, greenRow.Hotmelt, greenRow.Glazed], [5, 0, 0],
+    "and one the sheet only says is cut arrives cut");
+  assert.ok(!("DoneAt" in seededRow) && !("DoneBy" in seededRow) && !("CutBy" in seededRow),
+    "with nobody's name on any of it: the office did this, not the floor");
+  pass("a job the office had already ticked off reaches the floor carrying that, not nothing");
+
+  /* an untouched row moves with the office's record, on the wire this time */
+  useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } }),
+           mkJob({ id: "R4942", cust: "Customer Two", glass: { tg: 5 }, blk: 4, seq: 1,
+                   cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  const reseed = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(reseed.length, 1, "one row moved, and only one");
+  assert.deepStrictEqual(Object.keys(reseed[0].body).sort(),
+    ["FedAt", "FedBy", "Glazed", "Hotmelt"],
+    "only the counters that actually moved - Cut was already five - and never a By or an At");
+  assert.deepStrictEqual([reseed[0].body.Hotmelt, reseed[0].body.Glazed], [5, 5]);
+  assert.strictEqual(ITEMS.find(x => x.fields.Title === "R4942").fields.Cut, 5);
+  pass("a row the floor has not touched is re-seeded when the office's own count moves");
+
+  /* and once the floor taps it, the office cannot push its own number back */
+  ITEMS.find(x => x.fields.Title === "R4942").fields.Cut = 2;
+  ITEMS.find(x => x.fields.Title === "R4942").fields.DoneAt = "2026-09-08T12:00:00.000Z";
+  ITEMS.find(x => x.fields.Title === "R4942").fields.DoneBy = "Person A";
+  useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } }),
+           mkJob({ id: "R4942", cust: "Customer Two", glass: { tg: 5 }, blk: 4, seq: 1,
+                   cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  assert.strictEqual(ITEMS.find(x => x.fields.Title === "R4942").fields.Cut, 2,
+    "the floor said two, and two it stays");
+  assert.strictEqual(writes().length, 0, "the office's 'all done' is not a write to that row at all");
+  pass("a row the floor has tapped is never re-seeded, whatever the office ticks afterwards");
+
+  /* ---- AMENDMENT 1: the blocker ----
+     The plan is made from ONE read and then sent as up to sixty writes over
+     three lanes. A tap landing in that window would be overwritten by a seed
+     planned before it existed. Every write that carries a counter therefore
+     re-reads that one row first. */
+  ITEMS = [item({ Title: "R4950", Job: "R4950", Customer: "Old name", GlassType: "GLASS",
+                  Total: 6, Seq: 0, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0,
+                  FedAt: "2026-09-08T08:00:00.000Z", FedBy: "office" }, "990")];
+  forget();
+  useJobs([mkJob({ id: "R4950", cust: "New name", glass: { tg: 6 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }; lastStamp = '2026-09-08T09:00:00.000Z';");
+  const plainItems = CW.listItems;
+  CW.listItems = async (nm, o) => {
+    const r = await plainItems(nm, o);
+    /* the floor taps the moment the plan has been made from this answer */
+    ITEMS[0].fields.Cut = 2;
+    ITEMS[0].fields.DoneBy = "Person A";
+    ITEMS[0].fields.DoneAt = "2026-09-08T09:30:00.000Z";
+    return r;
+  };
+  reset();
+  await feedStation();
+  CW.listItems = plainItems;
+  const guard = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(guard.length, 1, "the job's facts still went");
+  assert.deepStrictEqual(Object.keys(guard[0].body).sort(), ["Customer", "FedAt", "FedBy"],
+    "with the seed dropped at the door");
+  assert.ok(ST.SEED_FIELDS.every(k => !(k in guard[0].body)), "not one counter in it");
+  assert.strictEqual(ITEMS[0].fields.Cut, 2, "and the tap that landed in the window stands");
+  assert.ok(REQ.some(r => r.method === "GET" && /\/items\/990(\?|$)/.test(r.path)),
+    "the row was read again by itself immediately before the write, not taken from the plan");
+  pass("a tap landing between the feed's read and its write is never overwritten by the seed");
+
+  /* AMENDMENT 5: and a dashboard whose workbook is older than the last feed
+     of a row does not park it on older numbers either */
+  ITEMS = [item({ Title: "R4952", Job: "R4952", Customer: "Old name", GlassType: "GLASS",
+                  Total: 6, Seq: 0, Active: "Yes", Cut: 6, Hotmelt: 6, Glazed: 6,
+                  FedAt: "2026-09-08T12:00:00.000Z", FedBy: "the other dashboard" }, "992")];
+  forget();
+  useJobs([mkJob({ id: "R4952", cust: "New name", glass: { tg: 6 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }; lastStamp = '2026-09-08T11:00:00.000Z';");
+  reset();
+  await feedStation();
+  const stale = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(stale.length, 1);
+  assert.ok(ST.SEED_FIELDS.every(k => !(k in stale[0].body)),
+    "this dashboard's file is older than the feed that wrote those counters, so it leaves them alone");
+  assert.strictEqual(ITEMS[0].fields.Cut, 6, "the newer dashboard's numbers stand");
+  /* the same row, put back as it was, read by a dashboard whose file is newer
+     than the feed that last wrote it */
+  ITEMS[0].fields.Customer = "Old name";
+  ITEMS[0].fields.FedAt = "2026-09-08T12:00:00.000Z";
+  A("STATION_FEED = { hash: '', at: 0 }; lastStamp = '2026-09-08T13:00:00.000Z';");
+  reset();
+  await feedStation();
+  const fresh = writes().filter(w => w.method === "PATCH");
+  assert.ok(fresh.length && ST.SEED_FIELDS.every(k => k in fresh[0].body),
+    "while a dashboard with the newer file does re-seed it");
+  assert.strictEqual(ITEMS[0].fields.Cut, 0, "back to what this workbook actually says");
+  A("lastStamp = null;");
+  pass("a seed from a dashboard holding an older workbook than the row's last feed is skipped");
+
+  /* back to the two plain jobs the rest of this section is about */
+  ITEMS = []; forget();
+  useJobs([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6 }, blk: 4, seq: 0 }),
+           mkJob({ id: "R5304", cust: "Customer Two", glass: { dg: 2 }, blk: 4, seq: 1 })]);
+  A("STATION_FEED = { hash: '', at: 0 }");
+  await feedStation();
 
   reset();
   assert.strictEqual(await feedStation(), null, "the same slice, a moment later: skipped");
@@ -1101,17 +1402,34 @@ const person = (name, stages, pin, active, station) =>
   pass("the busy flag goes up before the first await, so two loads cannot feed the list twice");
 
   UNIQUE_TITLE = true;
-  ITEMS = [item({ Title: "R7100|TG", Job: "R7100", Customer: "Old", GlassType: "TG",
+  ITEMS = [item({ Title: "R7100", Job: "R7100", Customer: "Old", GlassType: "GLASS",
                   Total: 1, Seq: 1, Active: "Yes", Cut: 1, CutBy: "Person A" }, "980")];
   reset();
-  await stationAdd({ Title: "R7100|TG", Job: "R7100", Customer: "New", GlassType: "TG",
+  await stationAdd({ Title: "R7100", Job: "R7100", Customer: "New", GlassType: "GLASS",
                      Total: 1, Seq: 1, Active: "Yes", FedAt: AT, FedBy: "x" },
                    { siteId: FSITE, fields: ST.STATION_FIELDS });
   assert.strictEqual(ITEMS.length, 1, "no second item for that Title");
   assert.strictEqual(ITEMS[0].fields.Customer, "New", "the refused POST became a patch of the row that won");
   assert.strictEqual(ITEMS[0].fields.Cut, 1, "and the floor's count on it is untouched");
+
+  /* the same race, on a row the floor has already tapped: the add carried a
+     seed, and a row with a DoneAt on it is not a new row any more */
+  ITEMS = [item({ Title: "R7101", Job: "R7101", Customer: "Old", GlassType: "GLASS",
+                  Total: 6, Seq: 1, Active: "Yes", Cut: 2, CutBy: "Person A",
+                  DoneBy: "Person A", DoneAt: "2026-09-08T12:00:00.000Z" }, "981")];
+  reset();
+  await stationAdd({ Title: "R7101", Job: "R7101", Customer: "New", GlassType: "GLASS",
+                     Total: 6, Seq: 1, Active: "Yes", Cut: 6, Hotmelt: 6, Glazed: 6,
+                     FedAt: AT, FedBy: "x" },
+                   { siteId: FSITE, fields: ST.STATION_FIELDS });
+  assert.strictEqual(ITEMS[0].fields.Cut, 2, "the floor's two stands");
+  assert.ok(!("Hotmelt" in ITEMS[0].fields) && !("Glazed" in ITEMS[0].fields),
+    "and the seed was dropped rather than written over it");
+  assert.strictEqual(ITEMS[0].fields.Customer, "New", "while the job's facts were brought up to date");
+  const raced = writes().find(w => w.method === "PATCH");
+  assert.ok(ST.SEED_FIELDS.every(k => !(k in raced.body)), "no counter left the dashboard at all");
   UNIQUE_TITLE = false;
-  pass("a POST refused because the row already exists is read back and patched, not lost");
+  pass("a POST refused because the row already exists is read back and patched, seed and all rules intact");
 
   const acctDesc = Object.getOwnPropertyDescriptor(CW, "account");
   Object.defineProperty(CW, "account", { configurable: true, get: () => ({ name: "Person G", username: "g@example.test" }) });
@@ -1314,15 +1632,27 @@ const person = (name, stages, pin, active, station) =>
   let html = EL["#rows"].innerHTML;
   assert.ok(html.indexOf("R5303") > 0 && html.indexOf("R5301") > 0, "every active job is on it");
   assert.ok(html.indexOf("R5299") < 0, "and the inactive one is not");
-  ["Glass cut", "Hotmelt", "Glazing"].forEach(w => assert.ok(html.indexOf(w) > 0, w + " has a bar"));
+  ["Cutting", "Hotmelting", "Glazing"].forEach(w => assert.ok(html.indexOf(w) > 0, w + " is on the card"));
+  assert.ok(html.indexOf("8 glasses") > 0, "with one number of glasses for the job");
+  assert.ok(html.indexOf("7 of 8") > 0, "and each counter against that number");
   ["Cork", "eircode", "Comment", "Export", "Delete"].forEach(w =>
     assert.ok(html.indexOf(w) < 0, "the board must not show " + w));
+  ["DG", "TG", "TUFF", "ARCH", "ASTRAGAL"].forEach(w =>
+    assert.ok(html.indexOf(">" + w) < 0 && html.indexOf(" " + w + " ") < 0,
+      "and no kind of glass anywhere on it: " + w));
   assert.ok(html.indexOf("<button") < 0, "the office's board is read-only: not one button on it");
-  pass("the Glass station board replaces the job list, read-only, with the three new bars per job");
+  pass("the Glass station board replaces the job list, read-only, one card and one number per job");
 
-  assert.ok(/last: Person A cut TG 5→8/.test(html),
+  /* OWNER DECISION 5, on the office's own screen */
+  assert.ok(/class="stcard done"/.test(html), "R5301 has all three at four of four, so its card is gold");
+  assert.ok(html.indexOf('class="stcard"') > 0, "and the unfinished ones are not");
+  assert.ok(html.indexOf("R5301") > html.indexOf("R5303"),
+    "the finished card has dropped below the ones still being worked on");
+  pass("a finished job goes gold on the office board too, and drops to the bottom");
+
+  assert.ok(/last: Person A Cutting 5→8/.test(html),
     "each card carries one line from the log: who moved what, and by how much");
-  assert.ok(html.indexOf("Person C") > 0, "and the bars name who last moved each of them");
+  assert.ok(html.indexOf("Person C") > 0, "and each stage names who last moved it");
   pass("a board card says who last touched the job and what they did, straight out of the log");
 
   A("STATION_OK = false; STATION_WHY = STATION_NEED_CONSENT;");
@@ -1336,7 +1666,8 @@ const person = (name, stages, pin, active, station) =>
 
   const drawerJob = mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6, arch: 2 } });
   html = stationSectionHtml(drawerJob);
-  assert.ok(html.indexOf("Glass station") > 0 && html.indexOf("Hotmelt") > 0);
+  assert.ok(html.indexOf("Glass station") > 0 && html.indexOf("Hotmelting") > 0);
+  assert.ok(html.indexOf("7 of 8") > 0, "the same three lines the board carries");
   assert.ok(/Person C/.test(html), "who last cut it");
   assert.ok(/Person A/.test(html), "and the log line under it");
   assert.ok(/5 → 8/.test(html), "with the numbers it moved between");
@@ -1354,8 +1685,8 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(/Nothing recorded on the floor for this job yet/.test(stationTimelineHtml("R9999")));
   A("STATION_LOG_OK = false; STATION_LOG_WHY = STATION_LOG_MISSING;");
   assert.ok(/Station log/.test(stationTimelineHtml("R5303")), "a missing log list says which list it is");
-  assert.ok(stationSectionHtml(drawerJob).indexOf("Hotmelt") > 0,
-    "and the bars are still there: the two lists fail separately");
+  assert.ok(stationSectionHtml(drawerJob).indexOf("Hotmelting") > 0,
+    "and the three stage lines are still there: the two lists fail separately");
   A("STATION_LOG_OK = true;");
   pass("a missing Station log list is its own state and never takes the bars away with it");
 
@@ -1389,10 +1720,15 @@ const person = (name, stages, pin, active, station) =>
 
   assert.ok(/Per person/.test(logCounts()) && /Per stage/.test(logCounts()));
   assert.ok(/Person A <strong class="tab">8<\/strong>/.test(logCounts()), "eight units for Person A");
-  assert.ok(/Glass cut <strong class="tab">8<\/strong>/.test(logCounts()), "and eight for the cutting stage");
+  assert.ok(/Cutting <strong class="tab">8<\/strong>/.test(logCounts()), "and eight for the cutting stage");
   const whole = lw + logCounts() + logBody();
   assert.ok(whole.indexOf("Delete") < 0 && whole.indexOf("Export") < 0 && whole.indexOf("Download") < 0,
     "there is no delete and no export on the floor's log");
+  /* the lines in this fixture were written when the list still carried a kind
+     of glass in every row; the window does not read that column out any more */
+  assert.ok(JSON.stringify(winLog).indexOf('"GlassType":"TG"') > 0, "the fixture really does carry a type");
+  assert.ok(logBody().indexOf(">TG<") < 0 && logBody().indexOf(">DG<") < 0,
+    "and the log window's line is job, stage, from to, who and when - no glass type column");
   pass("the log window counts units and lines per person and per stage, and offers no way to change them");
 
   /* AMENDMENT 3: a filter repaints the rows and the counts and leaves the bar
@@ -1663,15 +1999,15 @@ const person = (name, stages, pin, active, station) =>
   pass("the dropdown is driven by one STATIONS array, and SHEETNAMES is left exactly as it was");
 
   /* ================= 15. the tablet ================= */
-  ITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG", Total: 6,
+  ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS", Total: 6,
                   Seq: 1, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "900"),
-           item({ Title: "R5303|ARCH", Job: "R5303", Customer: "Customer One", GlassType: "ARCH", Total: 2,
-                  Seq: 1, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "901")];
+           item({ Title: "R5310", Job: "R5310", Customer: "Customer Ten", GlassType: "GLASS", Total: 2,
+                  Seq: 2, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "901")];
   PEOPLEITEMS = [person("Person A", "cut"), person("Person B", "hotmelt,glazed", "1234"),
                  person("Person C", "")];
   LOGITEMS = [];
   delete mem.cw_stationq; delete mem.cw_stationlogq; delete mem.cw_person;
-  S("QUEUE = {}; LOGQ = {}; SITEID = " + JSON.stringify(FSITE) + "; TOKEN = null; OPEN = { R5303: 1 };");
+  S("QUEUE = {}; LOGQ = {}; SITEID = " + JSON.stringify(FSITE) + "; TOKEN = null; QUERY = '';");
   assert.strictEqual(await S("readPeople()"), true);
   assert.deepStrictEqual(S("PEOPLE.map(p => p.name)"), ["Person A", "Person B", "Person C"]);
   assert.strictEqual(S("PERSON"), null, "nobody has picked a name yet");
@@ -1679,7 +2015,7 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(EL["#board"].innerHTML.indexOf("Person A") > 0);
   pass("the tablet reads the people list and asks who is there before it shows anything else");
 
-  assert.ok(EL["#board"].innerHTML.indexOf("Glass cut") > 0, "the picker says which stages each holds");
+  assert.ok(EL["#board"].innerHTML.indexOf("Cutting") > 0, "the picker says which stages each holds");
   assert.ok(/no stages yet/.test(EL["#board"].innerHTML), "including a person who holds none");
   pass("the picker is one big button per active person, saying which stages they hold");
 
@@ -1689,23 +2025,35 @@ const person = (name, stages, pin, active, station) =>
   S("pickPerson(PEOPLE.find(p => p.name === 'Person A'))");
   assert.strictEqual(S("PERSON.name"), "Person A");
   assert.ok(mem.cw_person.indexOf("Person A") > 0, "kept on this tablet, with the time of the tap");
-  assert.strictEqual(EL["#whois"].textContent, "Person A · Glass cut", "and the header says so");
+  assert.strictEqual(EL["#whois"].textContent, "Person A · Cutting", "and the header says so");
   pass("picking a name with no PIN goes straight in, and the header shows the name and the stages");
 
   let bh = boardHtml();
   assert.ok(bh.indexOf("R5303") > 0 && bh.indexOf("Customer One") > 0);
-  ["Glass cut", "Hotmelt", "Glazing"].forEach(w => assert.ok(bh.indexOf(w) > 0));
-  ["Cork", "eircode", "@", "Export", "Delete", "index.html"].forEach(w =>
+  assert.ok(bh.indexOf("6 glasses") > 0, "one number of glasses on the card, and no kinds of glass");
+  ["Cutting", "Hotmelting", "Glazing"].forEach(w => assert.ok(bh.indexOf(w) > 0));
+  ["Cork", "eircode", "@", "Export", "Delete", "index.html",
+   "DG", "TG", "TUFF", "ARCH", "ASTRAGAL", "FANCY"].forEach(w =>
     assert.ok(bh.indexOf(w) < 0, "the station page must not show " + w));
-  assert.ok(bh.indexOf('data-stage="hotmelt"') > 0, "hotmelt applies to every type, ARCH included");
-  pass("the board draws job number, customer, glass chips and the three bars - nothing else");
+  /* OWNER DECISION 3: the three steppers are on the card itself - there is
+     nothing to expand, no bar to read, and nothing to scroll inside */
+  ST.STAGE_KEYS.forEach(k => assert.ok(bh.indexOf('data-stage="' + k + '"') > 0,
+    "every stage has its buttons on the card: " + k));
+  const oneCard = S("NODES['R5303'].innerHTML");
+  assert.strictEqual((oneCard.match(/data-act="all"|data-act="none"/g) || []).length, 3,
+    "one All per stage on the card, and nothing else to tap to finish a stage");
+  assert.strictEqual((oneCard.match(/<div class="step[ "]/g) || []).length, 3,
+    "three stepper rows on the card, always drawn");
+  ["data-toggle", "chev", "class=\"bars\"", "class=\"track\"", "class=\"chip\""].forEach(w =>
+    assert.ok(bh.indexOf(w) < 0, "and no " + w + ": no expanding, no bars, no chips"));
+  pass("the card is job, customer, one number of glasses and three steppers - nothing else");
 
   assert.ok(/data-stage="cut" data-act="1">\+<\/button>/.test(bh), "Person A may move cutting");
   assert.ok(/data-stage="hotmelt"[^>]*disabled aria-disabled="true"/.test(bh),
     "and the stages they do not hold are drawn disabled rather than hidden");
   assert.ok(/data-stage="glazed"[^>]*disabled/.test(bh));
   assert.ok(bh.indexOf("not yours") > 0, "with a word saying why");
-  assert.ok(/Glazing/.test(bh) && /0 \/ 2/.test(bh), "the numbers are still there to read");
+  assert.ok(/Glazing/.test(bh) && /class="stepn tab">0</.test(bh), "the numbers are still there to read");
   pass("a stage this person does not hold is greyed and disabled, values still shown");
 
   reset();
@@ -1721,7 +2069,7 @@ const person = (name, stages, pin, active, station) =>
 
   reset();
   S("tap('900', 'cut', 1)");
-  assert.ok(boardHtml().indexOf("1 / 6") > 0, "the new number is on screen before anything is sent");
+  assert.ok(/class="stepn tab">1</.test(boardHtml()), "the new number is on screen before anything is sent");
   await settle(80);
   let patched = writes().filter(w => w.method === "PATCH");
   assert.strictEqual(patched.length, 1, "one PATCH, once");
@@ -1741,11 +2089,11 @@ const person = (name, stages, pin, active, station) =>
   const logPosts = writes().filter(w => w.method === "POST" && w.path.indexOf(LOG_ID) > 0);
   assert.strictEqual(logPosts.length, 1, "one log line for one sent write");
   assert.deepStrictEqual(logPosts[0].body.fields,
-    { Title: "R5303", Station: "Glass", GlassType: "TG", Stage: "cut", From: 0, To: 1,
+    { Title: "R5303", Station: "Glass", GlassType: "GLASS", Stage: "cut", From: 0, To: 1,
       Who: "Person A", At: logPosts[0].body.fields.At });
   assert.ok(/^\d{4}-\d\d-\d\dT/.test(logPosts[0].body.fields.At));
   assert.strictEqual(LOGITEMS.length, 1, "and it really is on the list");
-  pass("every counter write leaves one Station log line: job, type, stage, From, To, who and when");
+  pass("every counter write leaves one Station log line: job, stage, From, To, who and when");
 
   const orderOfWrites = writes().map(w => w.method + (w.path.indexOf(LOG_ID) > 0 ? " log" : " counter"));
   assert.strictEqual(orderOfWrites.indexOf("PATCH counter") < orderOfWrites.indexOf("POST log"), true,
@@ -1985,8 +2333,9 @@ const person = (name, stages, pin, active, station) =>
   S("if (retryT) { clearTimeout(retryT); retryT = null; }");
   pass("the chosen name locks itself after ten minutes without a tap, and every tap postpones it");
 
-  /* AMENDMENT 9: a stepper already at the total, and opening a card, are both
-     somebody working the screen - the lock must not fire under their hand */
+  /* AMENDMENT 9: a stepper already at the total, and a button that is somebody
+     else's, are both somebody working the screen - the lock must not fire
+     under their hand */
   ITEMS[0].fields.Cut = 6;
   S("QUEUE = {}; LOGQ = {}; PERSON = PEOPLE.find(p => p.name === 'Person A');");
   await S("readList()");
@@ -1996,12 +2345,28 @@ const person = (name, stages, pin, active, station) =>
   await settle(40);
   assert.strictEqual(writes().length, 0, "nothing to write: the counter was already at the total");
   assert.ok(S("Date.now() - LAST_TAP") < 5000, "but the lock was pushed back all the same");
-  S("LAST_TAP = Date.now() - 599000; OPEN = {}; render();");
-  EL["#board"].fire("click", { target: { dataset: { toggle: "R5303" } } });
-  assert.strictEqual(S("!!OPEN.R5303"), true, "the card opened");
-  assert.ok(S("Date.now() - LAST_TAP") < 5000, "and that counted as activity too");
-  S("OPEN = { R5303: 1 };");
-  pass("a tap at the clamp and opening a card both push the ten-minute lock back");
+  S("LAST_TAP = Date.now() - 599000; render();");
+  EL["#board"].fire("click", { stopPropagation() {},
+    target: { disabled: true, dataset: { id: "900", stage: "glazed", act: "1" } } });
+  await settle(20);
+  assert.strictEqual(writes().length, 0, "a disabled button still writes nothing");
+  assert.ok(S("Date.now() - LAST_TAP") < 5000, "and reaching for it counted as activity too");
+  pass("a tap at the clamp and a tap on somebody else's stage both push the ten-minute lock back");
+
+  /* OWNER DECISION 3's search box, on the tablet itself */
+  S("LAST_TAP = Date.now(); QUERY = ''; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310",
+    "two jobs on the board with an empty box");
+  S("QUERY = '5310'; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "typed a job number: one card");
+  S("QUERY = 'customer ten'; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "typed a customer name: the same one");
+  S("QUERY = 'zzz'; render();");
+  assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0,
+    "and a box nothing matches says so rather than looking broken");
+  S("QUERY = ''; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "clearing it brings them back");
+  pass("the search box narrows the cards as it is typed, by job number or customer name");
 
   /* AMENDMENT 11: a stored stamp from the future is not a licence */
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() + 86400000 });
@@ -2023,18 +2388,87 @@ const person = (name, stages, pin, active, station) =>
     "and the stages come from the LIST, never from storage anybody can edit");
   pass("the chosen name survives a reload only while it is fresh, and its stages always come from SharePoint");
 
+  /* ---- AMENDMENT 3: a waiting tap is re-based, never sent flat ----
+     A tap is owed as a number, and a number only means something against what
+     the list said when it was made. A tablet out of wifi all morning can be
+     holding a +1 made against nought while the office has seeded the row to
+     twelve; sending 1 would put the job back to one glass cut. */
+  ITEMS = [item({ Title: "R5320", Job: "R5320", Customer: "Customer Twelve", GlassType: "GLASS",
+                  Total: 20, Seq: 1, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "960")];
+  LOGITEMS = [];
+  S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = ''; DELTA_OFF = 0;");
+  S("SITEID = " + JSON.stringify(FSITE) + "; PEOPLE_READ = true; PROBLEM = ''; SOFT = '';");
+  S("PERSON = { name: 'Person A', stages: ['cut'], pin: '' }; LAST_TAP = Date.now();");
+  await S("readList()");
+  S("flushing = true; tap('960', 'cut', 1);");
+  assert.strictEqual(S("QUEUE['960|cut'].value"), 1, "one glass cut, against a list that says nought");
+  assert.strictEqual(S("QUEUE['960|cut'].from"), 0);
+  ITEMS[0].fields.Cut = 12;                       // the office seeds the row while the tap waits
+  await S("readList()");                          // flushing is still true: nothing leaves yet
+  assert.strictEqual(S("QUEUE['960|cut'].value"), 13,
+    "the tap is re-based onto the new number: the same one glass, twelve later");
+  assert.strictEqual(S("QUEUE['960|cut'].from"), 12, "and From moves with it, so the log stays true");
+  S("flushing = false;");
+  reset();
+  await S("flushQueue()");
+  await settle(80);
+  const reb = writes().find(w => w.method === "PATCH");
+  assert.strictEqual(reb.body.Cut, 13, "thirteen goes out, not one");
+  const rebLog = writes().find(w => w.method === "POST" && w.path.indexOf(LOG_ID) > 0);
+  assert.strictEqual(rebLog.body.fields.From + "->" + rebLog.body.fields.To, "12->13");
+  assert.strictEqual(ITEMS[0].fields.Cut, 13);
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("a tap waiting while the office seeds the row is re-based onto the new number, not sent flat");
+
+  /* a counter that has gone DOWN is somebody correcting it elsewhere, and this
+     tap is the newer statement of what is on the bench: it is not re-based */
+  S("QUEUE = {}; LOGQ = {};");
+  await S("readList()");
+  S("flushing = true; tap('960', 'cut', 1);");
+  assert.strictEqual(S("QUEUE['960|cut'].value"), 14);
+  ITEMS[0].fields.Cut = 4;
+  await S("readList()");
+  assert.strictEqual(S("QUEUE['960|cut'].value"), 14, "a counter that fell does not drag the tap down");
+  assert.strictEqual(S("QUEUE['960|cut'].from"), 13, "and From is still what the office could last see");
+  S("flushing = false; QUEUE = {}; LOGQ = {};");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("only a rise re-bases a waiting tap: a correction downwards leaves it saying what the floor said");
+
+  /* AMENDMENT 8: a row with no glasses on it has nothing to finish */
+  const zeroStep = S("stepHtml({ id: '1', total: 0, cut: 0, hotmelt: 0, glazed: 0, by: {}, at: {} }, " +
+                     "'cut', 'Cutting')");
+  assert.ok(/data-act="all"[^>]*disabled/.test(zeroStep), "All is disabled at a total of nought");
+  assert.ok(zeroStep.indexOf(">All<") > 0 && zeroStep.indexOf(">None<") < 0,
+    "and still reads All, rather than offering to un-finish nothing");
+  const fullStep = S("stepHtml({ id: '1', total: 2, cut: 2, hotmelt: 0, glazed: 0, by: {}, at: {} }, " +
+                     "'cut', 'Cutting')");
+  assert.ok(/data-act="none"[^>]*>None</.test(fullStep), "a full stage still offers None");
+  assert.ok(!/data-act="none"[^>]*disabled/.test(fullStep), "and it is tappable");
+  pass("a job with no glasses on its row cannot be finished by tapping All");
+
+  /* AMENDMENT 4: the box belongs to whoever was holding the tablet */
+  S("QUERY = '5320'; render();");
+  EL["#search"].value = "5320";
+  S("switchPerson()");
+  assert.strictEqual(S("QUERY"), "", "Switch person clears the search");
+  assert.strictEqual(EL["#search"].value, "", "in the box as well as in the page's own state");
+  assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0, "and the picker is back");
+  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); LAST_TAP = Date.now(); render();");
+  pass("Switch person hands the next person the whole board, not one narrowed by a search");
+
   /* ---- the ten-second poll on the tablet ---- */
-  ITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG", Total: 6,
+  ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS", Total: 6,
                   Seq: 1, Active: "Yes", Cut: 1 }, "900")];
   S("QUEUE = {}; LOGQ = {}; TOKEN = null; ITEMS = [];");
   await S("readList()");
   assert.ok(S("TOKEN") !== null);
-  DELTA_NEXT[GLASS_ID] = [[{ id: "900", fields: { Title: "R5303|TG", Job: "R5303", Customer: "Customer One",
-    GlassType: "TG", Total: 6, Seq: 1, Active: "Yes", Cut: 4 } }]];
+  DELTA_NEXT[GLASS_ID] = [[{ id: "900", fields: { Title: "R5303", Job: "R5303", Customer: "Customer One",
+    GlassType: "GLASS", Total: 6, Seq: 1, Active: "Yes", Cut: 4 } }]];
   reset();
   await S("pollList()");
   assert.strictEqual(REQ.filter(r => r.path.indexOf("/delta") > 0).length, 1, "one request per poll");
-  assert.ok(boardHtml().indexOf("4 / 6") > 0, "and the other tablet's tap is on this one's screen");
+  assert.ok(/class="stepn tab">4</.test(boardHtml()),
+    "and the other tablet's tap is on this one's screen");
   pass("the tablet polls by delta and merges what someone else changed into its own board");
 
   DELTA_FAIL = 410; DELTA_FAIL_LEFT = 1; reset();
@@ -2062,14 +2496,14 @@ const person = (name, stages, pin, active, station) =>
   pass("a list that will not serve a delta at all falls back to a plain read and keeps working");
 
   /* ---- drawing only what moved ---- */
-  S("OPEN = { R5303: 1 }; render();");
+  S("render();");
   const nodeBefore = S("NODES['R5303']");
   S("ITEMS[0].fields.Cut = 5; render();");
   assert.strictEqual(S("NODES['R5303']") === nodeBefore, true,
     "the card element itself is not thrown away and rebuilt");
-  assert.ok(boardHtml().indexOf("5 / 6") > 0, "only its contents were redrawn");
-  assert.ok(boardHtml().indexOf("stepl") > 0, "and the card that was open is still open");
-  pass("a refresh redraws the cards that moved and keeps the nodes - so an open card stays open");
+  assert.ok(/class="stepn tab">5</.test(boardHtml()), "only its contents were redrawn");
+  assert.ok(boardHtml().indexOf("stepl") > 0, "with its three steppers still on it");
+  pass("a refresh redraws the cards that moved and keeps the nodes rather than rebuilding the board");
 
   const seen = S("JSON.stringify(BOARD_PREV.map(g => g.job))");
   S("render()");
@@ -2077,16 +2511,22 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("NODES['R5303']") === nodeBefore, true, "a refresh that found nothing changes nothing");
   pass("a poll that found nothing new leaves every node exactly where it was");
 
+  /* OWNER DECISION 5, on the tablet: all three at the total and the whole card
+     goes gold and drops to the Finished group at the bottom */
   S("ITEMS[0].fields.Cut = 6; ITEMS[0].fields.Hotmelt = 6; ITEMS[0].fields.Glazed = 6; render();");
   assert.strictEqual(S("BOARD_PREV[0].finished"), true);
-  assert.strictEqual(S("FIN.kids.length"), 1, "the finished card moved into the Finished group");
+  assert.strictEqual(S("NODES['R5303'].className"), "card done", "the card itself carries the gold class");
+  assert.strictEqual(S("FIN.kids.length"), 1, "and it moved into the Finished group");
   assert.strictEqual(S("FINHEAD.hidden"), false);
-  assert.ok(/Finished/.test(S("FINHEAD.textContent")));
+  assert.ok(/Finished · 1/.test(S("FINHEAD.textContent")), "with a count on the heading");
   assert.strictEqual(S("FIN.hidden"), true, "which is collapsed until somebody taps it");
   S("FINOPEN = true; render();");
   assert.strictEqual(S("FIN.hidden"), false);
   S("FINOPEN = false;");
-  pass("a job whose bars are all full drops into a Finished group, collapsed, with a count on it");
+  S("ITEMS[0].fields.Glazed = 5; render();");
+  assert.strictEqual(S("NODES['R5303'].className"), "card", "one glass short and it is not gold");
+  S("ITEMS[0].fields.Glazed = 6; render();");
+  pass("a job with all three counters at the total goes gold and drops to a collapsed Finished group");
 
   /* ---- the tablet's theme ---- */
   delete mem.cw_stationtheme;
@@ -2106,14 +2546,22 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(/id="switchbtn"/.test(gs) && />Switch person</.test(gs), "the Switch person button is in the header");
   assert.ok(gs.indexOf("min-height:64px") > 0, "the picker's buttons are 64 px");
   assert.ok(gs.indexOf(".pk { min-height:56px") > 0, "and the PIN pad's are 56");
-  assert.ok(/\.sbtn \{ width:48px; height:48px/.test(gs), "the steppers stay at 48");
+  assert.ok(/\.sbtn \{ width:56px; height:56px/.test(gs), "the steppers are 56, as the owner asked");
+  assert.ok(/\.sall \{ min-height:56px/.test(gs), "and so is All");
   assert.ok(/@media \(min-width:700px\)\{[\s\S]*grid-template-columns:1fr 1fr/.test(gs),
-    "two columns of cards from 700 px");
-  assert.ok(/\.bar \{ display:grid; gap:4px \}/.test(gs), "and the bars are stacked at every width");
-  pass("the tablet's layout is the stacked one, two columns from 700 px, everything thumb-sized");
+    "one column of cards under 700 px, two above");
+  assert.ok(/\.card\.done \{ background:var\(--done-bg\)/.test(gs), "a finished card is gold, not faded");
+  assert.ok(/--done-bg:/.test(gs), "with a token for it in both themes");
+  assert.ok(gs.indexOf("id=\"search\"") > 0, "and the search box is in the header, not over the cards");
+  /* AMENDMENT 6: under 16px iOS zooms the page in on focus, and a tablet on a
+     wall is not something anybody can pinch back out */
+  assert.ok(/#search \{[^}]*font-size:16px/.test(gs), "the search box is 16px, so iOS does not zoom");
+  ["class=\"bar\"", ".track", ".chip {", ".chips {"].forEach(w =>
+    assert.ok(gs.indexOf(w) < 0, "with no " + w + " left on the page"));
+  pass("the tablet's layout is one card per job, two columns from 700 px, everything thumb-sized");
 
   /* ---- errors on the tablet ---- */
-  ITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG", Total: 6,
+  ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS", Total: 6,
                   Seq: 1, Active: "Yes", Cut: 1 }, "900")];
   S("QUEUE = {}; LOGQ = {}; SITEID = " + JSON.stringify(FSITE) + "; TOKEN = null; DELTA_OFF = 0;");
   await S("readList()");
@@ -2165,11 +2613,11 @@ const person = (name, stages, pin, active, station) =>
      whichever row happens to carry it - almost certainly another job - and the
      log then records that as work somebody did on it. The entry is stamped
      with its site and re-matched by Title, which is unique and does not move. */
-  ITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG",
+  ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS",
                   Total: 6, Seq: 1, Active: "Yes", Cut: 1 }, "9500"),
-           item({ Title: "R7777|DG", Job: "R7777", Customer: "Customer Two", GlassType: "DG",
+           item({ Title: "R7777", Job: "R7777", Customer: "Customer Two", GlassType: "GLASS",
                   Total: 4, Seq: 2, Active: "Yes", Cut: 0 }, "900")];
-  OWNITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG",
+  OWNITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS",
                      Total: 6, Seq: 1, Active: "Yes", Cut: 1 }, "900")];
   LOGITEMS = []; OWNLOG = [];
   S("QUEUE = {}; LOGQ = {}; TOKEN = null; DELTA_OFF = 0; OPEN = { R5303: 1 };");
@@ -2215,7 +2663,7 @@ const person = (name, stages, pin, active, station) =>
   pass("a queued tap whose row did not come across is dropped, not written onto whatever row has that id");
 
   /* ---- AMENDMENT 3: the tablet never writes without a resolved site ---- */
-  ITEMS = [item({ Title: "R5303|TG", Job: "R5303", Customer: "Customer One", GlassType: "TG",
+  ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS",
                   Total: 6, Seq: 1, Active: "Yes", Cut: 0 }, "900")];
   S("QUEUE = {}; LOGQ = {}; SITEID = " + JSON.stringify(FSITE) + "; TOKEN = null; DELTA_OFF = 0;");
   await S("readList()");
@@ -2363,16 +2811,30 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(ALLREQ.length > 150, "and that is over a real number of requests, not an empty log");
   pass("nothing personal was ever sent to the floor: no phone, eircode, county, price or comment");
 
-  const floorWrites = ALLREQ.filter(r => r.method === "PATCH" && r.path.indexOf(GLASS_ID) > 0 &&
-    r.body && ST.FLOOR_FIELDS.some(k => k in r.body));
-  assert.ok(floorWrites.length > 0);
-  floorWrites.forEach(w => Object.keys(w.body).forEach(k =>
+  /* Which side of the list a write came from is not a guess: the feeder stamps
+     FedAt/FedBy on every write it makes and the tablet has no way to send
+     either, so the two sets are told apart by that and then held to their own
+     vocabulary. The floor's is FLOOR_FIELDS. The feeder's is the job facts
+     plus - and only plus - the three counters, which is the one exception the
+     seeding rule buys and the reason this check is not simply "disjoint". */
+  const glassWrites = ALLREQ.filter(r => (r.method === "PATCH" || r.method === "POST") &&
+    r.path.indexOf(GLASS_ID) > 0 && r.body);
+  const bodyOf = r => r.body.fields || r.body;
+  const fromOffice = r => "FedBy" in bodyOf(r);
+  const floorWrites = glassWrites.filter(r => !fromOffice(r));
+  assert.ok(floorWrites.length > 0, "the floor really did write during this run");
+  floorWrites.forEach(w => Object.keys(bodyOf(w)).forEach(k =>
     assert.ok(ST.FLOOR_FIELDS.indexOf(k) >= 0, "the floor sent " + k + ", which is not its column")));
-  const feedPatches = ALLREQ.filter(r => (r.method === "PATCH" || r.method === "POST") &&
-    r.path.indexOf(GLASS_ID) > 0 && r.body && !ST.FLOOR_FIELDS.some(k => k in (r.body.fields || r.body)));
-  feedPatches.forEach(w => Object.keys(w.body.fields || w.body).forEach(k =>
-    assert.ok(ST.FLOOR_FIELDS.indexOf(k) < 0, "the feeder sent " + k + ", which is the floor's column")));
-  pass("every write of the whole run stayed on its own side of the list: floor columns or job facts, never both");
+  const officeWrites = glassWrites.filter(fromOffice);
+  assert.ok(officeWrites.length > 0, "and so did the feeder");
+  officeWrites.forEach(w => Object.keys(bodyOf(w)).forEach(k =>
+    assert.ok(ST.FEEDER_WRITES.indexOf(k) >= 0, "the feeder sent " + k + ", which is not the feeder's")));
+  assert.ok(officeWrites.some(w => ST.SEED_FIELDS.some(k => k in bodyOf(w))),
+    "the feeder really did seed counters somewhere in this run, so this proves something");
+  assert.ok(officeWrites.every(w => !["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy",
+    "GlazedAt", "DoneBy", "DoneAt"].some(k => k in bodyOf(w))),
+    "and never once said who did any of it");
+  pass("every write of the whole run stayed inside its own vocabulary: the floor's columns, or the job facts and the seed");
 
   console.log("\n" + n + " checks passed");
   process.exit(0);

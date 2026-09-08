@@ -207,17 +207,19 @@ network. Logo slot `assets/logo.png` (not yet supplied). Tests:
 ## 11. Glass station (floor dashboards)
 
 **What.** A separate page for the glass area on a shared tablet, showing only
-job number, customer name and the glass units per type, with three stages
-(**Glass cut, Hotmelt, Glazing**) recorded per person. The office sees it all
-from the master dashboard. The floor cannot see the master.
+job number, customer name and **one total number of glasses** (DG + TG), with
+three stages (**Cutting, Hotmelting, Glazing**) recorded per person. There are
+no glass types on the floor at all. The office sees it all from the master
+dashboard. The floor cannot see the master.
 
 **Where.** `station-core.js` (pure logic, loads in browser and Node),
 `station.js` (tablet UI), `glass.html` (shell + styles), plus the station
 blocks in `app.js` (search `STATIONS`, `feedStation`, `stationPoll`,
 `renderStationLog`, `stationSectionHtml`) and `listDelta`/`stationSite` in
 `graph.js`. Specs: `docs/specs/2026-09-08-glass-station.md` (v1) and
-`…-v2.md`, both with "Amendments after review" sections. Admin guide:
-`docs/STATIONS.md`.
+`…-v2.md` (both with "Amendments after review" sections) and `…-v3.md`, which
+made it one row per job, one number per job and cards you tap directly. Admin
+guide: `docs/STATIONS.md`.
 
 **How, in five parts.**
 1. **Separation by permission, not by screen.** The station account is a
@@ -227,18 +229,31 @@ blocks in `app.js` (search `STATIONS`, `feedStation`, `stationPoll`,
    polling.
 2. **The office dashboard is the feeder.** After every `load()`,
    `feedStation()` computes the glass slice of jobs in the "In production"
-   section (`glassSlice`), diffs it against the `Glass station` list
-   (`feedPlan`), and sends adds/patches (3 lanes, 60 writes per run, a 30 s
-   follow-up if cut short). It writes only job facts (Job, Customer,
-   GlassType, Total, Seq, Active, FedAt, FedBy); it never touches the
-   floor's columns and never deletes (a job that leaves production is
-   `Active = No`). Skipped quietly without list consent; throttled by a hash
-   of the slice.
+   section (`glassSlice`, one row per job, `Total = DG + TG`), diffs it
+   against the `Glass station` list (`feedPlan`), and sends adds/patches
+   (3 lanes, 60 writes per run, a 30 s follow-up if cut short). It writes job
+   facts (Job, Customer, GlassType = the literal `GLASS`, Total, Seq, Active,
+   FedAt, FedBy) and — the one exception to "never the floor's columns", added
+   in v3 — the three counters, **only on a row it is creating or a row whose
+   `DoneAt` is empty**, seeded from the office's own glass checkpoints
+   (`glassCounts` in app.js → `ST.officeSeed`). That guard is re-checked with a
+   one-item `listItem()` read immediately before every write that carries a
+   counter (`stationFeedPatch`), because the plan is made from one read and
+   sent as up to sixty writes; the same read drops the seed when the row's
+   `FedAt` is newer than this dashboard's `lastStamp`. It never writes a By, an
+   At or the last-touch pair, never touches a counter after the floor's first tap,
+   and never deletes (a job that leaves production is `Active = No`). Skipped
+   quietly without list consent; throttled by a hash of the slice, which
+   includes the seed.
 3. **The tablet.** Sign in once with the station account (asks for the list
    scopes at the door). "Who are you?" picker from `Station people`
    (Title=name, Station, Stages comma list, PIN, Active); PIN pad when the
    row has one; a person may hold one or more stages; steppers for other
-   stages are greyed and `tap()` refuses them too. Ten quiet minutes lock the
+   stages are greyed and `tap()` refuses them too. One card per job, with the
+   job number, the customer, "12 glasses" and the three steppers (−, +, All /
+   None) on the card itself — nothing to expand, no bars, nothing to scroll
+   inside — plus a search box in the header (`boardFilter`, job number or
+   customer). Ten quiet minutes lock the
    tablet back to the picker; Switch person does the same. Every tap shows at
    once, is queued in `cw_stationq`, PATCHes only that stage's counter plus
    `<Stage>By/<Stage>At/DoneBy/DoneAt`, then POSTs one `Station log` line
@@ -250,13 +265,17 @@ blocks in `app.js` (search `STATIONS`, `feedStation`, `stationPoll`,
    is open, 60 s otherwise). `mergeDelta` applies last-occurrence-wins and
    `@removed`; a 410 resync or a refused delta falls back to one full read
    (and a 5-minute "delta off" flag). The tablet repaints only the cards that
-   changed (`boardDiff`), keeps open cards open, and folds finished jobs into
-   a collapsed group.
+   changed (`boardDiff`), re-bases a queued tap whose row has risen under it
+   (`rebaseQueue`), and folds finished jobs — all three counters at the
+   total, with a total > 0 — into a collapsed "Finished · n" group, gold.
 5. **The office view.** Show ▸ Glass station replaces the job list with a
-   read-only board (per-stage who · when, "last: …" from the log); the drawer
-   shows the stage bars, a 12-line timeline and Full log; the Floor log
-   window filters by person, stage, job and day with counts, read-only,
-   90-day horizon. The office never writes `Station people` or `Station log`.
+   read-only board: one card per job with "12 glasses", the three counters
+   with who · when under each, "last: …" from the log, and the same gold rule
+   (finished cards go gold and sink to the bottom). The drawer shows the same
+   three lines, a 12-line timeline and Full log; the Floor log window filters
+   by person, stage, job and day with counts, read-only, 90-day horizon, and
+   no glass-type column. The office never writes `Station people` or
+   `Station log`.
 
 **Where the lists live (interim, 2026-09-08).** `stationSite()` prefers the
 separate `Floor stations` site; while it does not exist (the owner has no
@@ -272,10 +291,11 @@ deterrent on a shared device, not security; the real boundary is site
 membership. Graph has no push; 10 s delta polling is the real-time mechanism.
 Jobs reach the floor only while an office dashboard is open.
 
-**Tests.** `test_station.js` (158 checks) proves, over the whole run, that no
+**Tests.** `test_station.js` (195 checks) proves, over the whole run, that no
 request touched the workbook, no DELETE was sent, every floor PATCH is a
-subset of the floor columns, every feeder write is disjoint from them, and no
-body carried a phone, eircode, county, price or comment.
+subset of the floor columns, every feeder write is inside `ST.FEEDER_WRITES`
+(the job facts plus the three counters, never a By, an At or the last touch),
+and no body carried a phone, eircode, county, price or comment.
 
 ---
 

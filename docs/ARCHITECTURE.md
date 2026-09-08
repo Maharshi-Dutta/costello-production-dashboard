@@ -124,14 +124,19 @@ none of the three.
 
 - **Feeder → `Glass station`.** After every successful `load()` of the
   workbook, `feedStation()` (`app.js`) turns the freshly parsed jobs into a
-  slice (`ST.glassSlice`, one row per job-and-glass-type, jobs "in
+  slice (`ST.glassSlice`, **one row per job**, `Total = DG + TG`, jobs "in
   production" only) and a plan of adds/patches (`ST.feedPlan`), then sends
   it. It skips the run entirely when the signed-in account has not granted
   the SharePoint list permission, or when the slice's hash
   (`ST.sliceHash`) matches the last run and that run was under ten minutes
   ago. A job that leaves production is patched `Active = No`, never
-  deleted; the feeder never sends `Cut`, `Hotmelt`, `Glazed`, or any of the
-  By/At columns.
+  deleted; the feeder never sends a By, an At or the last-touch pair, and it
+  sends `Cut`/`Hotmelt`/`Glazed` **only** on a row it is creating or a row
+  whose `DoneAt` is still empty — the v3 seeding rule, which starts a row at
+  what the office has already ticked off (`ST.officeSeed`) and stops dead at
+  the floor's first tap. Every write carrying a counter re-reads that one row
+  (`CW.listItem`) immediately before sending, because the plan is made from a
+  single read and a tap can land before the write it was planned against.
 - **Tablet → counters + `Station log`.** The station page (`glass.html` +
   `station.js`) reads `Glass station` and `Station people`, asks who is at
   the tablet (a name and, optionally, a PIN — a deterrent, not a secret;
@@ -150,8 +155,8 @@ none of the three.
   (`stationTick()`/`stationWatching()`), once a minute otherwise.
 
 See `docs/STATIONS.md` for the full data model, admin setup and
-troubleshooting, and `docs/specs/2026-09-08-glass-station.md` plus its v2
-for the binding spec (the code wins over either where they disagree).
+troubleshooting, and `docs/specs/2026-09-08-glass-station.md` plus its v2 and
+v3 for the binding spec (the code wins over any of them where they disagree).
 
 ## Module map
 
@@ -162,7 +167,7 @@ for the binding spec (the code wins over either where they disagree).
 | `checkpoints.js` | pure logic only, no DOM: the Excel-colour-vs-stored-count merge rule (`itemState`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`), and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
 | `export.js` | pure logic only, no DOM, no network: filtering (`exportFilter`), row shaping, filename/summary text, building an ExcelJS workbook and a pdfmake document definition; the phone/eircode exclusion lives here as a hard rule with a standing test |
 | `app.js` | everything with a DOM: rendering the job list/drawer/windows, wiring every tap to a write, `PENDING`/`PENDV`/`PENDA` optimistic holds, sign-in/session boot, the phase-list read/write UI, the Export/Alerts/Versions windows, the radial selection menu, build-freshness polling |
-| `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
+| `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassTotal`, `officeSeed`, `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `boardFilter`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
 | `station.js` | the glass station page UI (shipped 2026-09-08), using `CW` from `graph.js` and the pure functions from `station-core.js` |
 | `build.py` | stamps a timestamp build id onto every script tag's `?v=` and into the footer, writes `version.json` for the freshness poll |
 

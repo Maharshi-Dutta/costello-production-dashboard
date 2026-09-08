@@ -11,9 +11,9 @@ Two pages ship from this repo:
 - `index.html` + `app.js` — the master dashboard, used by the office.
 - `glass.html` + `station.js` + `station-core.js` — the glass floor station,
   used on a shared tablet, shipped 2026-09-08 — see
-  `docs/specs/2026-09-08-glass-station.md` and its v2, and `docs/STATIONS.md`
-  for the built data model and setup. Check `docs/specs/README.md` for the
-  status of every spec.
+  `docs/specs/2026-09-08-glass-station.md` and its v2 and v3, and
+  `docs/STATIONS.md` for the built data model and setup. Check
+  `docs/specs/README.md` for the status of every spec.
 
 Read `docs/REFERENCE.md` (what has been built and how, feature by feature),
 `docs/ARCHITECTURE.md`, `docs/SUPPORT.md`, `docs/STATIONS.md` and
@@ -48,8 +48,16 @@ the one that first wrote them down.
    (`app.js`) never writes `Station people` or `Station log`, and never
    writes the floor's own columns of `Glass station`** (`Cut`, `Hotmelt`,
    `Glazed` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds that
-   list's job-fact columns and reads all three. Only the tablet
-   (`station.js`) writes a counter or a log line.
+   list's job-fact columns and reads all three. **One exception, agreed by the
+   owner on 2026-09-08 in the v3 spec's "Seeding" section and nowhere else:**
+   the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is *creating*, or on
+   a row whose `DoneAt` is empty, seeding them from the office's own glass
+   checkpoints so a job already ticked off in the office does not arrive on
+   the floor reading nothing done. It never writes a By, an At or the
+   last-touch pair, and once the floor's first tap has set `DoneAt` it never
+   writes a counter on that row again — a guard checked again with a one-item
+   read immediately before each such write, not only when the plan was made. Only the tablet (`station.js`) writes a
+   By, an At, a last touch or a log line.
 4. **No phone number and no eircode leave the app in any export, ever.**
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or

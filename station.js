@@ -37,7 +37,7 @@ let PEOPLE_READ = false;        // ... and the first read of the people list
 let PROBLEM = "";               // "site" | "list" | "people" | "consent" | "reauth" - each takes the board away
 let SOFT = "";                  // a passing failure: the last board stays, with this line above it
 let LASTREAD = 0;
-let OPEN = {};                  // job -> the card is expanded
+let QUERY = "";                 // what is in the search box, if anything
 let FINOPEN = false;            // the Finished group is expanded
 let PERSON = null;              // the person who picked their name
 let LAST_TAP = 0;               // when they last touched anything, for the lock
@@ -98,6 +98,11 @@ function touch() { LAST_TAP = Date.now(); savePerson(); }
 function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; touch(); render(); }
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; LAST_TAP = 0;
+  /* the box belongs to whoever was just holding the tablet: the next person
+     must not be handed a board narrowed to somebody else's search */
+  QUERY = "";
+  const sb = $("#search");
+  if (sb) sb.value = "";
   savePerson(); render();
 }
 /** The lock. Checked on a timer as well as on every draw, because a tablet
@@ -177,7 +182,7 @@ function queueTap(row, job, stage, value) {
      between the tap and the write, this is what stops the write landing on
      whatever row happens to carry that number in the new list. */
   QUEUE[k] = { id: String(row.id), stage: stage, value: value, who: who(),
-               at: new Date().toISOString(), job: job, type: row.type, site: SITEID || "",
+               at: new Date().toISOString(), job: job, type: ST.GLASS_TYPE, site: SITEID || "",
                from: had ? had.from : listValue(row.id, stage), err: 0 };
   saveQueue();
 }
@@ -203,7 +208,7 @@ const badFor = id => Object.keys(QUEUE).some(k => String(QUEUE[k].id) === String
     than written somewhere at random. */
 function currentId(e) {
   if (!e.site || e.site === SITEID) return e.id;
-  const want = (String(e.job) + "|" + String(e.type)).trim().toUpperCase();
+  const want = String(e.job).trim().toUpperCase();
   let best = null;
   ITEMS.forEach(it => {
     const t = String((it.fields || {}).Title == null ? "" : it.fields.Title).trim().toUpperCase();
@@ -211,6 +216,37 @@ function currentId(e) {
     if (!best || Number(it.id) < Number(best.id)) best = it;     // the oldest, as everywhere else
   });
   return best ? String(best.id) : null;
+}
+
+/** A tap is owed as a NUMBER, and a number means something only against what
+    the list said when the tap was made. The office can raise a counter under
+    a waiting tap - the feeder seeds a row from the office's own record, and a
+    tablet that was out of wifi all morning can be holding a `+1` made against
+    nought while the list has moved to twelve. Sending 1 would put the job
+    back. So a queued entry whose row has risen past its `from` is re-based to
+    the same movement against the new number: +1 on twelve becomes thirteen,
+    clamped to the total, and its `from` moves with it so the log line still
+    says what actually changed.
+
+    Only a rise re-bases. A counter that has gone DOWN in the list is somebody
+    correcting it on another tablet, and this tap is the newer statement of
+    what is on the bench. */
+function rebaseQueue() {
+  let moved = false;
+  Object.keys(QUEUE).forEach(k => {
+    const e = QUEUE[k];
+    const it = ITEMS.find(x => String(x.id) === String(e.id));
+    if (!it) return;
+    const f = it.fields || {};
+    const now = Number(f[ST.STAGE_FIELD[e.stage]]);
+    const was = Number(e.from);
+    if (!isFinite(now) || !isFinite(was) || now <= was) return;
+    const total = Math.max(0, Math.round(Number(f.Total) || 0));
+    e.value = Math.max(0, Math.min(total, Math.round(now + (Number(e.value) - was))));
+    e.from = Math.round(now);
+    moved = true;
+  });
+  if (moved) saveQueue();
 }
 
 /** Come back to the queue in a moment. Armed whenever anything is still owed,
@@ -422,6 +458,7 @@ async function readList() {
       }
     }
     ITEMS = items; READY = true; PROBLEM = ""; SOFT = ""; LASTREAD = Date.now();
+    rebaseQueue();                      // the list may have moved under a waiting tap
     render();
     flushQueue();                       // anything still owed goes now, not in five seconds
     return true;
@@ -456,6 +493,7 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
+    rebaseQueue();
     render();
     flushQueue();
     return true;
@@ -477,10 +515,9 @@ function tap(id, stage, delta) {
      does not hold, and tap() refuses it anyway - a disabled button is a
      drawing, and this is the rule */
   if (!PERSON || !ST.canStage(PERSON, stage)) return;
-  const board = boardNow();
-  let row = null, job = "";
-  board.forEach(g => g.rows.forEach(r => { if (r.id === id) { row = r; job = g.job; } }));
+  const row = boardNow().find(g => g.id === id);
   if (!row) return;
+  const job = row.job;
   /* somebody is working the screen, whether or not the number could move:
      a stepper already at the total is still a hand on the tablet */
   touch();
@@ -513,56 +550,44 @@ const agoWords = at => {
   return Math.round(s / 3600) + " h ago";
 };
 
-/* The stacked bar the owner picked out of the dark phone screenshot: a label
-   row with the count on the right, and a full-width track under it. The same
-   shape at every width - a tablet in a workshop is read from further away than
-   a desk monitor, and two columns of cards beat two columns inside one. */
-function barHtml(label, b) {
-  const pct = b.total ? Math.round(b.done / b.total * 100) : 0;
-  const full = b.total > 0 && b.done >= b.total;
-  return '<div class="bar">' +
-    '<div class="barhead"><span class="barl">' + esc(label) + '</span>' +
-    '<span class="barn tab">' + (b.total ? b.done + " of " + b.total : "—") + '</span></div>' +
-    '<span class="track"><i style="width:' + pct + '%;background:var(' + (full ? "--done" : "--fab") + ')"></i></span>' +
-    '</div>';
-}
+/* One stage of one job: the name, the count, and the three buttons that move
+   it - on the card itself, where a hand can reach them. There is nothing to
+   open and nothing to scroll: the owner watched somebody hunt for a stepper
+   inside an expanded card with a sheet of glass in their other hand.
 
-function stepperHtml(r, stage, label) {
-  const v = r[ST.STAGE_ROW[stage]];
+   A stage this person does not hold is drawn with its number and its buttons
+   disabled, not hidden: the floor can see how far the job has got without
+   being able to move somebody else's part of it. */
+function stepHtml(g, stage, label) {
+  const v = g[ST.STAGE_ROW[stage]];
   const mine = ST.canStage(PERSON, stage);
   const off = mine ? "" : ' disabled aria-disabled="true"';
-  const b = (t, act, cls) => '<button class="' + cls + '" data-id="' + esc(r.id) + '" data-stage="' + stage +
-    '" data-act="' + act + '"' + off + '>' + t + '</button>';
+  const b = (t, act, cls, dead) => '<button class="' + cls + '" data-id="' + esc(g.id) + '" data-stage="' + stage +
+    '" data-act="' + act + '"' + (dead ? ' disabled aria-disabled="true"' : off) + '>' + t + '</button>';
+  const full = g.total > 0 && v >= g.total;
+  /* a row with no glasses on it has nothing to finish: All would set it to
+     nought and read None a moment later, which says the opposite of the truth */
+  const none = !(g.total > 0);
   return '<div class="step' + (mine ? "" : " locked") + '">' +
     '<span class="stepl">' + esc(label) + (mine ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
-    '<span class="stepn tab">' + v + ' / ' + r.total + '</span>' +
-    '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
-      b(v >= r.total ? "None" : "All", v >= r.total ? "none" : "all", "sall") + '</span>' +
+    '<span class="stepc">' + b("&minus;", "-1", "sbtn") +
+      '<span class="stepn tab' + (full ? " full" : "") + '">' + v + '</span>' + b("+", "1", "sbtn") +
+      b(none || !full ? "All" : "None", full ? "none" : "all", "sall", none) + '</span>' +
     '</div>';
 }
 
 /** Everything inside one card. The card element itself is kept between draws
     (see paintBoard), so only this string is ever rebuilt. */
 function cardInner(g) {
-  const open = !!OPEN[g.job];
-  const owed = g.rows.some(r => owedFor(r.id));
-  const bad = g.rows.some(r => badFor(r.id));
-  return '<div class="chead" data-toggle="' + esc(g.job) + '">' +
+  const owed = owedFor(g.id), bad = badFor(g.id);
+  return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
-      '<span class="chev">' + (open ? "▾" : "▸") + '</span>' +
+      '<span class="cnum tab">' + esc(ST.glassWords(g.total)) + '</span>' +
     '</div>' +
-    '<div class="chips">' + g.rows.map(r =>
-      '<span class="chip">' + esc(r.type) + ' <strong class="tab">' + r.cut + "/" + r.total + '</strong></span>').join("") +
-    '</div>' +
-    '<div class="bars">' + ST.STAGES.map(s => barHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+    '<div class="steps">' + ST.STAGES.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
-         : owed ? '<div class="saving">saving…</div>' : "") +
-    (open ? '<div class="rows">' + g.rows.map(r =>
-      '<div class="grow">' +
-        '<div class="gtype">' + esc(r.type) + ' <span class="gtot tab">' + r.total + ' units</span></div>' +
-        ST.STAGES.map(s => stepperHtml(r, s[0], s[1])).join("") +
-      '</div>').join("") + '</div>' : "");
+         : owed ? '<div class="saving">saving…</div>' : "");
 }
 
 /* ---- the picker -------------------------------------------------------------
@@ -626,8 +651,8 @@ function submitPin() {
 }
 
 /* ---- the board, drawn once and then patched ---------------------------------
-   Six redraws a minute would throw away an open card, the scroll position and
-   the tap a finger is already on its way to, so the cards are kept as nodes
+   Six redraws a minute would throw away the scroll position and the tap a
+   finger is already on its way to, so the cards are kept as nodes
    keyed by job and only the ones boardDiff names are touched. The first paint
    builds the two groups; nothing after it ever sets the whole board's
    innerHTML again.                                                          */
@@ -642,19 +667,19 @@ let WIRED = false;
    just failed to save therefore has to be named here, or the red line never
    appears on a board whose numbers did not move. */
 function qState(g) {
-  return g.rows.map(r => (owedFor(r.id) ? "o" : "") + (badFor(r.id) ? "b" : "")).join(",");
+  return (owedFor(g.id) ? "o" : "") + (badFor(g.id) ? "b" : "");
 }
 
 function makeCard(g) {
   const el = document.createElement("div");
-  el.className = "card" + (g.finished ? " done" : "") + (OPEN[g.job] ? " open" : "");
+  el.className = "card" + (g.finished ? " done" : "");
   if (el.dataset) el.dataset.job = g.job;
   el.setAttribute("data-job", g.job);
   el.innerHTML = cardInner(g);
   return el;
 }
 function dressCard(el, g) {
-  el.className = "card" + (g.finished ? " done" : "") + (OPEN[g.job] ? " open" : "");
+  el.className = "card" + (g.finished ? " done" : "");
   el.innerHTML = cardInner(g);
 }
 function paintBoard(host, board) {
@@ -678,7 +703,6 @@ function paintBoard(host, board) {
     const el = NODES[j];
     if (el && el.remove) el.remove();
     delete NODES[j];
-    delete OPEN[j];
     delete QSIG[j];
   });
   const changed = diff.changed.slice();
@@ -717,6 +741,11 @@ function render() {
     : "";
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
+  /* the search box belongs to the board: there is nothing to search on the
+     picker, and a box over an error message only looks broken */
+  const sb = $("#search");
+  const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
+  if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + agoWords(LASTREAD) : "";
   /* the passing-failure line is part of the page, not of the board, so it is
@@ -737,10 +766,14 @@ function render() {
     return;
   }
 
-  const board = boardNow();
+  /* the search box narrows the board and never becomes it: an empty box is
+     every card, and a box nothing matches says so rather than looking broken */
+  const board = ST.boardFilter(boardNow(), QUERY);
   if (!board.length) {
     DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {};
-    host.innerHTML = '<div class="msg">Nothing on the board yet.</div>';
+    host.innerHTML = '<div class="msg">' +
+      (QUERY ? "No job on the board matches “" + esc(QUERY) + "”." : "Nothing on the board yet.") +
+      '</div>';
     return;
   }
   paintBoard(host, board);
@@ -789,6 +822,10 @@ function wireBoard(host) {
   if (WIRED || !host.addEventListener) return;
   WIRED = true;
   host.addEventListener("click", ev => {
+    /* anything at all on the board is a hand on the tablet, including a button
+       that will not move because it is somebody else's stage or already at the
+       total: the ten-minute lock must not fire under a working hand */
+    touch();
     let el = ev.target;
     for (let i = 0; el && i < 5; i++) {
       const d = el.dataset || {};
@@ -796,13 +833,6 @@ function wireBoard(host) {
         ev.stopPropagation();
         if (el.disabled) return;
         tap(d.id, d.stage, d.act === "all" || d.act === "none" ? d.act : Number(d.act));
-        return;
-      }
-      if (d.toggle) {
-        touch();                       // opening a card is somebody at the tablet too
-        if (OPEN[d.toggle]) delete OPEN[d.toggle]; else OPEN[d.toggle] = 1;
-        const g = (BOARD_PREV || []).find(x => x.job === d.toggle);
-        if (g && NODES[d.toggle]) dressCard(NODES[d.toggle], g);
         return;
       }
       el = el.parentElement;
@@ -861,6 +891,10 @@ async function start() {
   $("#outbtn").onclick = () => { if (confirm("Sign out of the Glass station?")) CW.signOut(); };
   const sw = $("#switchbtn");
   if (sw) sw.onclick = () => switchPerson();
+  /* the box is in the header, outside #board, so typing in it never rebuilds
+     the node the caret is in - only the cards under it are redrawn */
+  const sb = $("#search");
+  if (sb) sb.oninput = () => { QUERY = sb.value || ""; touch(); render(); };
   render();
   await readPeople();
   await readList();

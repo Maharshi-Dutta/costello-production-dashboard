@@ -12,9 +12,9 @@ Two pages, two audiences:
 - **`glass.html`** — the glass floor station, shipped 2026-09-08. Used on a
   shared tablet by whoever is on the glass line, signed in with a shared
   station account that cannot see the workbook at all — only job number,
-  customer, glass units and progress on Glass cut / Hotmelt / Glazing. See
-  `docs/specs/2026-09-08-glass-station.md` (and its v2) and `docs/STATIONS.md`
-  for the full data model and setup.
+  customer, one number of glasses and progress on Cutting / Hotmelting /
+  Glazing. See `docs/specs/2026-09-08-glass-station.md` (and its v2 and v3)
+  and `docs/STATIONS.md` for the full data model and setup.
 
 The dashboard reads the workbook by downloading it whole (so cell fill
 colours come through) and writes back surgically, cell by cell, through the
@@ -56,7 +56,7 @@ person or a log line — only the tablet does that.
   phone numbers or eircodes are ever included, and every export is logged.
 - **Glass station** — a separate tablet page for the glass floor (shipped
   2026-09-08), fed by the master dashboard on every load; a person picks
-  their name (and PIN) and taps to record Glass cut / Hotmelt / Glazing,
+  their name (and PIN) and taps to record Cutting / Hotmelting / Glazing,
   only for the stages they hold. The master shows the floor's progress and
   its log — who changed what, when — read-only, in the "Sheet" dropdown, the
   job drawer, and a log window.

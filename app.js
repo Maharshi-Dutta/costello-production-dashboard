@@ -450,11 +450,14 @@ async function setPhaseByHand(j, n) {
    thing that puts job facts in there.
 
    HARD RULE, and the reason all of this lives in one block: the feeder writes
-   Title, Job, Customer, GlassType, Total, Seq, Active, FedAt and FedBy, and
-   nothing else. It never sends any of ST.FLOOR_FIELDS - the counters, the
-   per-stage By/At pairs and the last-touch pair, all of which belong to the
-   floor - and it never deletes an item. A job that leaves production is marked
-   Active = No and keeps everything the floor recorded. This dashboard also
+   Title, Job, Customer, GlassType, Total, Seq, Active, FedAt and FedBy, and -
+   only on a row it is creating or a row the floor has never tapped (DoneAt
+   empty) - the three counters, seeded from the office's own checkpoints so a
+   job already ticked off in here does not arrive on the floor reading nothing
+   done. It never sends a By, an At or the last-touch pair, it never touches a
+   counter once the floor has tapped the row, and it never deletes an item. A
+   job that leaves production is marked Active = No and keeps everything the
+   floor recorded. This dashboard also
    reads two more of the floor's lists, Station log and Station people, and
    writes to neither. Not one line of this touches the workbook.             */
 const STATION_SITE_MISSING = "The floor’s SharePoint site is not there yet, so their progress " +
@@ -662,7 +665,7 @@ function stationWatching() {
   if (state.board) return true;
   if ($("#lhost")) return true;
   const j = state.sel ? byId(state.sel) : null;
-  return !!(j && Object.keys(j.glass || {}).length);
+  return !!(j && typeof ST !== "undefined" && ST.glassTotal(j) > 0);
 }
 /** The plain read, for a list that will not serve a delta and for a token
     that has gone stale. true = the list was replaced. */
@@ -856,8 +859,53 @@ async function stationAdd(fields, opts) {
   catch (e) {
     const mine = await CW.listItemsFor(ST.STATION_LIST, fields.Title, opts);
     if (!mine.length) throw e;                 // a real failure: nothing was created
-    return CW.listPatch(ST.STATION_LIST, mine[0].id, fields, opts);
+    /* it exists after all - another dashboard made it between our read and
+       this write - so it is not a new row and the seeding rule applies to it
+       like any other: if the floor has tapped it, its counters are not ours. */
+    const have = mine[0].fields || {};
+    const touched = String(have.DoneAt == null ? "" : have.DoneAt).trim() !== "";
+    const body = {};
+    Object.keys(fields).forEach(k => {
+      if (touched && ST.SEED_FIELDS.indexOf(k) >= 0) return;
+      body[k] = fields[k];
+    });
+    return CW.listPatch(ST.STATION_LIST, mine[0].id, body, opts);
   }
+}
+
+/** One patch of the feed's plan.
+
+    A plan is made from ONE read of the list and then sent as up to sixty
+    writes over three lanes, so a tap from the floor can land between the read
+    and the write that was planned from it. Every patch that carries a seeded
+    counter therefore re-checks that one row immediately before sending: if
+    `DoneAt` has appeared in the meantime the floor has taken the row over and
+    the counters are dropped, exactly as the refused-POST path in stationAdd
+    already does. The job facts still go - what the job IS is still ours.
+
+    The same GET answers the other question worth asking: whether this
+    dashboard's copy of the workbook is older than the feed that last wrote
+    this row. If it is, our seed is a reading of a stale file and would park
+    the row on older numbers, so it is dropped too. */
+async function stationFeedPatch(p, opts) {
+  const fields = p.fields || {};
+  if (!ST.SEED_FIELDS.some(k => k in fields))
+    return CW.listPatch(ST.STATION_LIST, p.id, fields, opts);
+  let now = null;
+  try { now = await CW.listItem(ST.STATION_LIST, p.id, opts); }
+  catch (e) { now = null; }                 // could not look: assume the worst and keep off the counters
+  const have = (now && now.fields) || {};
+  const touched = !now || String(have.DoneAt == null ? "" : have.DoneAt).trim() !== "";
+  const fedAt = Date.parse(String(have.FedAt == null ? "" : have.FedAt));
+  const mine = Date.parse(String(lastStamp || ""));
+  const older = isFinite(fedAt) && isFinite(mine) && fedAt > mine;
+  if (!touched && !older) return CW.listPatch(ST.STATION_LIST, p.id, fields, opts);
+  const body = {};
+  Object.keys(fields).forEach(k => { if (ST.SEED_FIELDS.indexOf(k) < 0) body[k] = fields[k]; });
+  /* FedAt/FedBy alone are not worth a write: they only ride along with a
+     change, and the change is exactly what was just dropped */
+  if (!Object.keys(body).some(k => k !== "FedAt" && k !== "FedBy")) return null;
+  return CW.listPatch(ST.STATION_LIST, p.id, body, opts);
 }
 
 /* A run that could not finish - the 60-write cap, or a write that was refused
@@ -868,6 +916,29 @@ let stationAgainT = null;
 function stationFeedAgain() {
   if (stationAgainT) return;
   stationAgainT = setTimeout(() => { stationAgainT = null; feedStation().catch(() => {}); }, STATION_AGAIN_MS);
+}
+
+/** What the office has already ticked off on a job's glass, as plain data for
+    ST.officeSeed - one entry per glass item with the sheet's own word for it
+    and the office's count where there is one. The reading of the colour and
+    the stored count is checkpoints.js' job (`cpStatus`, `itemState`, which is
+    the merge of `cpStatus` with `cpStored`); station-core.js is handed the
+    answer rather than any of the dashboard's globals.
+
+    Nothing here writes anything: this is the workbook's own record, read. */
+function glassCounts(j) {
+  if (typeof cpStatus !== "function" || !j) return [];
+  const glass = j.glass || {};
+  const out = [];
+  Object.keys(glass).forEach(k => {
+    const total = Math.round(Number(glass[k]) || 0);
+    if (!(total > 0)) return;
+    const key = "glass:" + k;
+    const s = typeof itemState === "function" ? itemState(j, key) : null;
+    out.push({ type: k, total: total, status: cpStatus(j, key),
+               done: s && s.done != null ? s.done : 0 });
+  });
+  return out;
 }
 
 async function feedStation() {
@@ -882,7 +953,10 @@ async function feedStation() {
   stationBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { STATION_FEED_ERR = ""; return null; }
-    const slice = ST.glassSlice(ALL, BLOCKNAMES);
+    /* the slice carries the office's own record with it, so a job the office
+       has already ticked off arrives on the floor showing it (see
+       ST.officeSeed) rather than reading nothing done */
+    const slice = ST.glassSlice(ALL, BLOCKNAMES, glassCounts);
     const hash = ST.sliceHash(slice);
     if (hash === STATION_FEED.hash && Date.now() - (STATION_FEED.at || 0) < STATION_FEED_MS) {
       STATION_FEED_ERR = "";                             // nothing to do is not a failure
@@ -902,7 +976,7 @@ async function feedStation() {
     stationResetFeed("items");             // a full read: the next poll starts a fresh delta
     const plan = ST.feedPlan(slice, items, { at: new Date().toISOString(), by: feedWho() });
     const all = plan.adds.map(f => () => stationAdd(f, opts))
-      .concat(plan.patches.map(p => () => CW.listPatch(ST.STATION_LIST, p.id, p.fields, opts)));
+      .concat(plan.patches.map(p => () => stationFeedPatch(p, opts)));
     const work = all.slice(0, STATION_FEED_MAX);
     const r = await stationSend(work);
     STATION_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
@@ -2338,10 +2412,13 @@ function stWhen(iso) {
     link that opens the same log in full. */
 const STATION_TIMELINE_MAX = 12;
 function stationSectionHtml(j) {
-  if (!j || !Object.keys(j.glass || {}).length) return "";   // no glass, no station row
+  if (typeof ST === "undefined") return "";
+  /* the floor's own reckoning of "has glass": DG plus TG. A job whose only
+     glass is a kind the floor never works on is not on their board, and a
+     section here saying "not fed to the floor yet" would be a lie about it. */
+  if (!j || !ST.glassTotal(j)) return "";
   const head = '<div class="sect"><span class="kick">Glass station</span>';
   const note = t => head + '<div class="cphint">' + esc(t) + '</div></div>';
-  if (typeof ST === "undefined") return "";
   if (STATION_OK === null) return note(STATION_CHECKING);
   if (STATION_OK !== true) return note(STATION_WHY || STATION_LIST_MISSING);
   const g = stationForJob(j.id);
@@ -2353,7 +2430,7 @@ function stationSectionHtml(j) {
     : "Finished on the floor \u2014 this job is no longer on their board.";
   return head +
     (STATION_ERR ? '<div class="cphint" style="color:var(--urgent)">' + esc(STATION_ERR) + '</div>' : "") +
-    '<div class="stbars">' + ST.STAGES.map(s => stBarHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+    '<div class="stbars">' + ST.STAGES.map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
     stationTimelineHtml(j.id) +
     '<div class="cphint">' + esc(why) + ' Nothing in the Excel file is involved.</div></div>';
 }
@@ -2384,25 +2461,24 @@ function stationTimelineHtml(job) {
     '<button class="ghost stfull" data-stfull="' + esc(job) + '">Full log' +
     (rows.length > STATION_TIMELINE_MAX ? " (" + rows.length + " lines)" : "") + '</button>';
 }
-/** One line of the floor's log, in the drawer and in the log window. */
+/** One line of the floor's log, in the drawer and in the log window. There is
+    no glass type in it: the floor counts glasses, not kinds of glass. */
 function stLogRowHtml(r) {
   return '<div class="stlrow">' +
     '<span class="stlwho">' + esc(r.who || "\u2014") + '</span>' +
-    '<span class="stlwhat">' + esc(ST.stageLabel(r.stage)) + ' \u00b7 ' + esc(r.type) + ' ' +
+    '<span class="stlwhat">' + esc(ST.stageLabel(r.stage)) + ' \u00b7 ' +
       r.from + ' \u2192 ' + r.to + '</span>' +
     '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>';
 }
 
-/** One progress bar, stacked: the label row with the count on the right, the
-    track under it, and who last moved it under that. The same shape the floor
-    reads on the tablet, so the two screens say the same thing the same way. */
-function stBarHtml(label, b) {
-  const pct = b.total ? Math.round(b.done / b.total * 100) : 0;
+/** One stage of one job: "Cutting 12 of 12" and, under it, who last moved it
+    and when. No bar - the floor has none either, and a card that has gone gold
+    has already said the only thing a bar was saying. */
+function stStageHtml(label, b) {
   const full = b.total > 0 && b.done >= b.total;
-  return '<div class="stbar">' +
+  return '<div class="stbar' + (full ? " full" : "") + '">' +
     '<div class="stbhead"><span class="stbl">' + esc(label) + '</span>' +
     '<span class="cpnum tab">' + (b.total ? b.done + " of " + b.total : "\u2014") + '</span></div>' +
-    '<span class="cpbar"><i style="width:' + pct + '%;background:var(' + (full ? "--done" : "--fab") + ')"></i></span>' +
     (b.by || b.at ? '<div class="stwho">' + esc(b.by || "\u2014") +
       (b.at ? ' \u00b7 ' + esc(stWhen(b.at)) : "") + '</div>' : "") +
     '</div>';
@@ -2422,20 +2498,21 @@ function stationBoardHtml() {
   if (!board.length)
     return trouble + '<div class="empty" style="line-height:1.6">No glass jobs on the floor\u2019s board yet. ' +
            'Jobs appear here once this dashboard has fed them across.</div>';
-  return trouble + board.map(g => {
+  /* the finished ones go to the bottom, gold, exactly as they do on the floor's
+     own screen: the two boards are read side by side over the phone */
+  const order = board.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
+  return trouble + order.map(g => {
     const last = ST.logLast(log, g.job);
     return '<div class="stcard' + (g.finished ? " done" : "") + '">' +
       '<div class="sthead">' +
         '<span class="cond tab stjob">' + esc(g.job) + '</span>' +
         '<span class="stcust">' + esc(g.customer || "\u2014") + '</span>' +
+        '<span class="stcount tab">' + esc(ST.glassWords(g.total)) + '</span>' +
         '<span class="stfed">' + esc(g.fedAt ? "fed " + agoWords(g.fedAt) : "not fed yet") + '</span>' +
       '</div>' +
-      '<div class="stchips">' + g.rows.map(r =>
-        '<span class="stchip">' + esc(r.type) + ' <strong class="tab">' + r.cut + "/" + r.total + '</strong></span>').join("") +
-      '</div>' +
-      '<div class="stbars">' + ST.STAGES.map(s => stBarHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
-      (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(last.stage) + ' ' +
-        esc(last.type) + ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
+      '<div class="stbars">' + ST.STAGES.map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+      (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(ST.stageLabel(last.stage)) +
+        ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
     '</div>';
   }).join("");
 }
@@ -2541,7 +2618,6 @@ function paintStationLog() {
     : !rows.length ? '<div class="empty">No line on the floor\u2019s log matches that.</div>'
     : '<div class="lglist">' + rows.slice(0, LOGF.show).map(r =>
         '<div class="lgrow">' + jobCell(r.job) +
-          '<span class="ell">' + esc(r.type) + '</span>' +
           '<span class="ell">' + esc(ST.stageLabel(r.stage)) + '</span>' +
           '<span class="tab">' + r.from + ' \u2192 ' + r.to + '</span>' +
           '<span class="ell">' + esc(r.who || "\u2014") + '</span>' +

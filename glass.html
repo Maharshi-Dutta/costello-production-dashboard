@@ -18,14 +18,14 @@
     --ink:#f2f1ee; --ink-2:#c9c6bf; --ink-3:#9a968d; --ink-4:#7a776f;
     --brand:#0e0e11; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#6aa9ec;
-    --fab:#e8e04a; --done:#e0c98a; --urgent:#f07a72;
+    --fab:#e8e04a; --done:#e0c98a; --done-bg:#3a3116; --urgent:#f07a72;
   }
   :root[data-theme="light"] {
     --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
     --ink:#17171a; --ink-2:#4d4a44; --ink-3:#6d6a62; --ink-4:#8e8b84;
     --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#184f95;
-    --fab:#8a6d00; --done:#8a6a1e; --urgent:#b3261e;
+    --fab:#8a6d00; --done:#8a6a1e; --done-bg:#fff6dd; --urgent:#b3261e;
   }
   * { box-sizing:border-box }
   [hidden] { display:none !important }
@@ -61,6 +61,14 @@
   #whois:empty { display:none }
   #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600 }
+  /* the search box: a job number or a customer name, narrowing the cards as it
+     is typed. In the header, so redrawing the board never takes the caret. */
+  /* 16px exactly: anything smaller and iOS zooms the whole page in when the
+     box is focused, which on a wall-mounted tablet nobody can zoom back out */
+  #search { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+            border-radius:24px; min-height:44px; padding:0 16px; font-size:16px; width:min(230px,40vw);
+            font-family:inherit }
+  #search::placeholder { color:#8a867e }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
                        border-radius:5px; min-height:44px; padding:0 14px; font-size:13px }
@@ -78,47 +86,35 @@
 
   .card { border:1px solid var(--line); border-radius:7px; background:var(--surface);
           padding:13px 14px; animation:rise .22s both }
-  .card.done { opacity:.6 }
-  .chead { display:flex; align-items:baseline; gap:10px; min-height:48px; cursor:pointer }
+  /* a finished job goes gold - the whole card, on this screen and on the
+     office's, so it is read across a workshop rather than looked for */
+  .card.done { background:var(--done-bg); border-color:var(--done) }
+  .card.done .stepn { color:var(--done) }
+  .chead { display:flex; align-items:baseline; gap:10px; margin-bottom:12px }
   .job { font-size:30px; font-weight:700; line-height:1 }
   .cust { font-size:14px; color:var(--ink-2); flex:1; min-width:0;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-  .chev { color:var(--ink-4); font-size:15px }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 11px }
-  .chip { font-size:12.5px; padding:4px 9px; border:1px solid var(--line-soft); border-radius:4px;
-          background:var(--surface-2); color:var(--ink-2) }
-
-  /* The stacked bar: the label row with the count on the right, and a
-     full-width track under it. The same shape at every width - it is the
-     layout the owner picked, and it reads from further away than a grid. */
-  .bars { display:grid; gap:11px }
-  .bar { display:grid; gap:4px }
-  .barhead { display:flex; align-items:baseline; justify-content:space-between; gap:10px }
-  .barl { font-size:13px; color:var(--ink-2) }
-  .barn { font-size:12.5px; color:var(--ink-3); white-space:nowrap }
-  .track { height:12px; border-radius:3px; background:var(--line-soft); overflow:hidden; display:block }
-  .track i { display:block; height:100%; transition:width .18s ease }
+  .cnum { font-size:14px; font-weight:600; color:var(--ink-2); white-space:nowrap }
 
   .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
   .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
 
-  /* the steppers. Everything tapped here is at least 48 px, because it is
-     tapped with a work glove on. A stage this person does not hold is greyed
-     and disabled - still readable, never movable. */
-  .rows { margin-top:13px; border-top:1px solid var(--line-soft); padding-top:11px; display:grid; gap:14px }
-  .grow { display:grid; gap:8px }
-  .gtype { font-size:13.5px; font-weight:600 }
-  .gtot { font-size:12px; color:var(--ink-4); font-weight:400 }
-  .step { display:grid; grid-template-columns:minmax(84px,1fr) 74px auto; gap:9px; align-items:center }
+  /* The three stages, with their buttons, on the card itself: nothing to open,
+     nothing to scroll inside, no bars. Everything tapped here is at least
+     56 px, because it is tapped with a work glove on. A stage this person does
+     not hold is greyed and disabled - still readable, never movable. */
+  .steps { display:grid; gap:10px }
+  .step { display:grid; grid-template-columns:minmax(72px,1fr) auto; gap:10px; align-items:center }
   .step.locked { opacity:.5 }
-  .stepl { font-size:13px; color:var(--ink-2) }
-  .nomine { font-size:11px; color:var(--ink-4) }
-  .stepn { font-size:15px; font-weight:600; white-space:nowrap }
-  .stepc { display:flex; gap:7px; justify-content:flex-end }
-  .sbtn { width:48px; height:48px; border:1px solid var(--line); border-radius:6px;
-          background:var(--surface-2); color:var(--ink); font-size:21px; line-height:1 }
-  .sall { min-height:48px; padding:0 15px; border:1px solid var(--line); border-radius:6px;
-          background:var(--surface-2); color:var(--ink-2); font-size:13.5px; white-space:nowrap }
+  .stepl { font-size:14px; color:var(--ink-2) }
+  .nomine { font-size:11px; color:var(--ink-4); display:block }
+  .stepn { font-size:20px; font-weight:700; min-width:44px; text-align:center }
+  .stepn.full { color:var(--done) }
+  .stepc { display:flex; gap:8px; align-items:center; justify-content:flex-end }
+  .sbtn { width:56px; height:56px; border:1px solid var(--line); border-radius:7px;
+          background:var(--surface-2); color:var(--ink); font-size:23px; line-height:1 }
+  .sall { min-height:56px; padding:0 17px; border:1px solid var(--line); border-radius:7px;
+          background:var(--surface-2); color:var(--ink-2); font-size:14px; white-space:nowrap }
   .sbtn:active, .sall:active { background:var(--line-soft) }
   .sbtn:disabled, .sall:disabled { opacity:.4; cursor:default }
 
@@ -171,6 +167,7 @@
   <span class="brand">Glass station</span>
   <span id="whois"></span>
   <button id="switchbtn" hidden>Switch person</button>
+  <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
   <span id="upd"></span>
   <button id="themebtn">Light</button>
   <button id="outbtn">Sign out</button>
@@ -182,8 +179,8 @@
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
-<script src="graph.js?v=20260908-1608"></script>
-<script src="station-core.js?v=20260908-1608"></script>
-<script src="station.js?v=20260908-1608"></script>
+<script src="graph.js?v=20260908-1849"></script>
+<script src="station-core.js?v=20260908-1849"></script>
+<script src="station.js?v=20260908-1849"></script>
 </body>
 </html>

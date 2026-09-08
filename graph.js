@@ -1172,6 +1172,27 @@ async function listAdd(displayName, fields, opts) {
   const made = await call("POST", "/sites/" + siteId + "/lists/" + id + "/items", { fields: fields || {} });
   return { id: made && made.id != null ? String(made.id) : null };
 }
+/** One item of a list, by its id, with the columns opts asks for. null = there
+    is no such item (or no such list) any more.
+
+    This exists for decisions that must be made on what the list says NOW
+    rather than on what a read a moment ago said: the station feeder plans its
+    writes from one read and then sends up to sixty of them, and a tap from the
+    floor can land in between. One item is one small GET. */
+async function listItem(displayName, itemId, opts) {
+  const id = await listId(displayName, opts);
+  if (!id) return null;
+  const siteId = await listSiteId(opts);
+  const select = opts && opts.fields && opts.fields.length ? opts.fields.join(",") : PHASE_SELECT;
+  try {
+    const r = await call("GET", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId +
+                                "?expand=fields(select=" + select + ")");
+    return { id: String(r.id), fields: r.fields || {} };
+  } catch (e) {
+    if (isMissing(e)) return null;      // deleted between the plan and the write
+    throw e;
+  }
+}
 async function listPatch(displayName, itemId, fields, opts) {
   const id = await listId(displayName, opts);
   if (!id) throw new Error("The “" + displayName + "” list is not in SharePoint.");
@@ -1344,7 +1365,7 @@ window.CW = {
   ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,
   ensureAlertsSheet, addAlert, removeAlert, ALERTS_SHEET,
   listVersions, downloadVersion, restoreVersion,
-  listId, listItems, listItemsFor, listUpsert, listDelete, listAdd, listPatch,
+  listId, listItems, listItem, listItemsFor, listUpsert, listDelete, listAdd, listPatch,
   listDelta, isDeltaRestart, isDeltaResync,
   listConsent, hasListConsent, LIST_SCOPES, SCOPES,
   stationSite, forgetStationSite, isMissing, isRefused, stationSiteMoves, STATION_SITE_NAME,

@@ -256,28 +256,29 @@
     .cpbar, .cpctl { grid-column:1/-1 }
     .cpctl { justify-content:flex-start }
   }
-  /* the Glass station board, in the job list's place. Read-only here: the bars
-     are the checkpoint bars (.cpbar), the numbers the checkpoint numbers. */
+  /* the Glass station board, in the job list's place. Read-only here: one card
+     per job, the three counters the floor taps, and who last moved each. */
   .stboard { display:grid; grid-template-columns:repeat(auto-fill,minmax(285px,1fr)); gap:12px; padding:14px }
   .stcard { border:1px solid var(--line); border-radius:6px; background:var(--surface);
             padding:12px 13px; animation:rise .22s both }
-  .stcard.done { opacity:.62 }
-  .sthead { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-bottom:9px }
+  /* a finished job goes gold, the same rule and the same colour as the floor's
+     own screen: all three counters at the total, and a total to reach */
+  .stcard.done { background:var(--done-bg); border-color:var(--done) }
+  .stcard.done .cpnum { color:var(--done) }
+  .sthead { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-bottom:10px }
   .stjob { font-size:24px; font-weight:700; line-height:1 }
   .stcust { font-size:13px; color:var(--ink-2); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-  .stfed { font-size:11px; color:var(--ink-4); white-space:nowrap }
-  .stchips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px }
-  .stchip { font-size:11.5px; padding:3px 8px; border:1px solid var(--line-soft); border-radius:4px;
-            background:var(--surface-2); color:var(--ink-2) }
+  .stcount { font-size:12.5px; font-weight:600; color:var(--ink-2); white-space:nowrap }
+  .stfed { font-size:11px; color:var(--ink-4); white-space:nowrap; width:100% }
   /* a passing failure, above whatever was last read - never in its place */
   .sttrouble { grid-column:1/-1; font-size:12px; color:var(--urgent); padding:2px 2px 4px }
-  /* the stacked bar the floor reads on the tablet, drawn the same way here so
-     the two screens say the same thing the same way: label row with the count
-     on the right, full-width track under it, and who last moved it under that */
-  .stbars { display:grid; gap:10px }
-  .stbar { display:grid; gap:3px }
+  /* one line per stage: the name, the count, and who last moved it under it.
+     No bar - the floor has none either, and the gold card says the rest. */
+  .stbars { display:grid; gap:9px }
+  .stbar { display:grid; gap:2px }
   .stbhead { display:flex; align-items:baseline; justify-content:space-between; gap:9px }
   .stbl { font-size:12.5px; color:var(--ink-2) }
+  .stbar.full .cpnum { color:var(--done); font-weight:600 }
   .stwho { font-size:11px; color:var(--ink-4) }
   .stlast { margin-top:9px; font-size:11.5px; color:var(--ink-3); overflow:hidden;
             text-overflow:ellipsis; white-space:nowrap }
@@ -303,7 +304,7 @@
              background:var(--surface); color:var(--ink-2) }
   .lgc2 { color:var(--ink-4) }
   .lglist { display:grid }
-  .lgrow { display:grid; grid-template-columns:78px 62px minmax(74px,auto) 84px 1fr auto;
+  .lgrow { display:grid; grid-template-columns:78px minmax(84px,auto) 84px 1fr auto;
            gap:10px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line-soft);
            font-size:12.5px }
   .lgwhen { color:var(--ink-4); white-space:nowrap }
@@ -592,7 +593,7 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260908-1608</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260908-1849</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -604,11 +605,11 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260908-1608"></script>
-<script src="graph.js?v=20260908-1608"></script>
-<script src="checkpoints.js?v=20260908-1608"></script>
-<script src="station-core.js?v=20260908-1608"></script>
-<script src="export.js?v=20260908-1608"></script>
-<script src="app.js?v=20260908-1608"></script>
+<script src="parser.js?v=20260908-1849"></script>
+<script src="graph.js?v=20260908-1849"></script>
+<script src="checkpoints.js?v=20260908-1849"></script>
+<script src="station-core.js?v=20260908-1849"></script>
+<script src="export.js?v=20260908-1849"></script>
+<script src="app.js?v=20260908-1849"></script>
 </body>
 </html>
