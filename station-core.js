@@ -455,6 +455,18 @@ function jobRecord(items, job) {
   return mine[0] || null;
 }
 
+/** The same records, all of them at once, as a map from job number to record.
+    jobRecord() walks the whole list to answer about one job, which is right
+    for a drawer asking once and wrong for the office's job list, which asks
+    about every row it draws. One pass, the same de-duplication, the same
+    records - the caller keeps the map for as long as the list it was built
+    from is the same array. Reads only; it writes nothing anywhere. */
+function jobRecords(items) {
+  const out = {};
+  buildJobs(items, () => true).forEach(g => { out[g.job] = g; });
+  return out;
+}
+
 /** The new value of one counter after a tap. delta is a number, "all" or
     "none". The only rule is the clamp: the floor may record glazing before it
     records hotmelt, and nothing here stops them - the counters are a record of
@@ -705,7 +717,7 @@ const ST = {
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
   inProduction, glassTotal, officeSeed, glassSlice, feederFields, seedFields, feedPlan, sliceHash,
-  jobBoard, jobRecord, boardFilter, glassWords, applyTap, boardDiff, mergeDelta,
+  jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };

@@ -700,6 +700,44 @@ const STATION_FAST_MS = 10000, STATION_SLOW_MS = 60000;
 let stationPollT = null, stationPolling = false;
 let STATION_SITE_GEN = 0;               // which site the tokens in hand belong to
 
+/* What the job list on screen is showing of the floor's work, worked out when
+   the rows are drawn and remembered until they are drawn again. Three things
+   are asked of it afterwards, all of them often enough to matter:
+
+     · is anything on screen worth polling six times a minute for (ROWS_GLASS);
+     · has anything the rows are showing actually changed (ROWS_CHIPS - a poll
+       that moved a job nobody is looking at, or wrote a log line, must not
+       rebuild seven hundred rows to draw exactly what is already there);
+     · is a repaint owed, because the list was in use when one came round.
+
+   ROWS_DRAWN is the rows the list last drew, so the second question can be
+   asked without filtering and sorting the whole sheet again. */
+let ROWS_GLASS = false, ROWS_CHIPS = "", ROWS_DRAWN = [], ROWS_STALE = false, ROWS_QUIET = false;
+
+/** What the chips of the rows on screen say, as one string to compare against.
+    A record with no glasses on it is in here too, as nothing: it draws no chip
+    today, but a total arriving is a change the list has to show. */
+function chipsNow() {
+  let s = "";
+  for (let i = 0; i < ROWS_DRAWN.length; i++) {
+    const j = ROWS_DRAWN[i], g = stationForJob(j.id);
+    if (g) s += j.id + ":" + g.cut + "," + g.hotmelt + "," + g.glazed + "/" + g.total + "|";
+  }
+  return s;
+}
+/** A repaint the list was too busy for is owed, not lost: the poll's own clock
+    takes it as soon as whoever was typing or dragging has finished, so the rows
+    can never sit on a number the floor has moved on from with nothing to say
+    so. Cheap when nothing is owed, which is nearly always. */
+function stationCatchUp() { if (ROWS_STALE) redrawStation(); }
+
+/** A repaint nobody asked for: no entry animation, so the rows change their
+    numbers where they stand instead of the whole list flashing. */
+function quietRows() {
+  ROWS_QUIET = true;
+  try { renderRows(); } finally { ROWS_QUIET = false; }
+}
+
 /** Is anyone actually looking at the floor's data right now? */
 function stationWatching() {
   /* the John print sheet is a board in the same slot, but it is the office's
@@ -708,7 +746,12 @@ function stationWatching() {
   if (state.board && state.board !== "john") return true;
   if ($("#lhost")) return true;
   const j = state.sel ? byId(state.sel) : null;
-  return !!(j && typeof ST !== "undefined" && ST.glassTotal(j) > 0);
+  if (j && typeof ST !== "undefined" && ST.glassTotal(j) > 0) return true;
+  /* the ordinary job list counts too, now that its rows carry the floor's
+     chip: a tap on the tablet changes what is on this screen. Only when the
+     rows being shown are jobs the floor has a record of - a list filtered
+     down to jobs with no glass has nothing to wait for. */
+  return ROWS_GLASS;
 }
 /** The plain read, for a list that will not serve a delta and for a token
     that has gone stale. true = the list was replaced. */
@@ -802,9 +845,49 @@ function stationSiteMoved(gen) {
   console.log("[station] the floor's lists have moved: feeding and re-reading the new site");
 }
 
+/** Is somebody in the middle of something the list must not be rebuilt under?
+    Two things, and they are the same rule the filter bar has always had: a poll
+    may not take something out from under somebody's hands. One is text being
+    typed inside the list itself - the grouped view keeps a search box in every
+    section heading. The other is a row being dragged, which a rebuild drops.
+
+    A tick box is NOT one of them, and this is the whole reason the question is
+    a function rather than "is anything in the list focused". Every row has a
+    checkbox; ticking one leaves it focused and does not redraw anything, so
+    treating focus as busy would stop the chips ever moving again for as long
+    as the tick stood - and a stale number with nothing to say it is stale is
+    exactly what this feature exists to stop. A repaint keeps what is ticked. */
+function rowsInUse() {
+  const rows = $("#rows");
+  if (!rows) return false;
+  if (rows.querySelector && rows.querySelector(".row.dragging")) return true;
+  const a = document.activeElement;
+  if (!a || !rows.contains || !rows.contains(a)) return false;
+  if (a.isContentEditable) return true;
+  const tag = String(a.tagName || "").toUpperCase();
+  if (tag === "TEXTAREA") return true;
+  if (tag !== "INPUT") return false;
+  /* an input is text unless it says otherwise, which is what the DOM does too */
+  return ["checkbox", "radio", "button", "submit", "reset", "range", "file", "image", "color"]
+    .indexOf(String(a.type || "text").toLowerCase()) < 0;
+}
+
 /** Redraw only the parts of the dashboard that show the floor's data. */
 function redrawStation() {
-  if (state.board) renderRows();
+  /* the rows whatever is on screen, not only the board: an ordinary job row
+     carries the floor's chip too, and a counter moved on the tablet has to
+     reach it. Held off while the list is in use - and then owed, so the next
+     tick takes the repaint that was skipped rather than losing it. */
+  const onBoard = typeof STATIONS !== "undefined" && STATIONS.some(b => b[0] === state.board);
+  if (rowsInUse()) ROWS_STALE = true;
+  else if (onBoard) { ROWS_STALE = false; quietRows(); }
+  /* on the plain list, only when what the rows are SAYING has changed. A poll
+     that moved a job nobody is looking at, or that only wrote a log line, must
+     not rebuild seven hundred rows to draw exactly what is already there - and
+     a board that is not a floor station (the office's own print sheet) shows
+     nothing of the floor's at all. */
+  else if (!state.board && chipsNow() !== ROWS_CHIPS) { ROWS_STALE = false; quietRows(); }
+  else ROWS_STALE = false;
   if (state.sel && $("#dhost")) renderDrawer();
   /* the rows and the counts, never the filter bar: a poll landing while
      somebody is half way through typing a job number must not take the box
@@ -819,7 +902,13 @@ function stationTick() {
   STATION_TICK_MS = stationWatching() ? STATION_FAST_MS : STATION_SLOW_MS;
   stationPollT = setTimeout(async () => {
     stationPollT = null;
-    try { await stationPoll(); } catch (e) { /* stationPoll never throws; belt and braces */ }
+    /* both of them inside the one guard. stationCatchUp() reaches renderRows(),
+       renderDrawer() and paintStationLog(), and it runs in exactly the unusual
+       states - a search box in hand, a drag in flight. A throw out here would
+       leave stationPollT null with stationTick() never reached: no timer would
+       ever be armed again, and the whole dashboard would quietly stop updating
+       until somebody reloaded the page. */
+    try { await stationPoll(); stationCatchUp(); } catch (e) { /* neither throws; belt and braces */ }
     stationTick();
   }, STATION_TICK_MS);
 }
@@ -1051,11 +1140,48 @@ async function feedStation() {
   }
 }
 
+/* Every job the floor has a row for, in one map, built once per version of the
+   list. The job list asks about every row it draws - hundreds of questions,
+   several times a minute once the floor is working - and answering each one by
+   walking the whole list is the same list walked hundreds of times. The array
+   itself is the cache key, exactly as the log's parsed rows are: every path
+   that changes STATION_ITEMS replaces the array (a read assigns a new one,
+   mergeDelta returns a new one), so an identity that has not moved is a list
+   that has not moved. */
+let STRECS = null, STRECS_OF = false;
+function stationRecords() {
+  if (STRECS_OF === STATION_ITEMS) return STRECS;
+  STRECS_OF = STATION_ITEMS;
+  STRECS = (STATION_ITEMS && typeof ST !== "undefined" && ST.jobRecords)
+    ? ST.jobRecords(STATION_ITEMS) : {};
+  return STRECS;
+}
+
+/** What the dashboard does once the feeder has had its go, whatever screen is
+    open. Two things, and the second one is easy to think unnecessary:
+
+    The rows are drawn again, because the plain job list carries the floor's
+    chips now - not only the board and the drawer.
+
+    And the list is READ if nothing has read it. The feeder normally leaves it
+    read as a side effect of feeding, but it skips a slice it already fed less
+    than ten minutes ago, and a skip reads nothing at all: sign in, look at the
+    chips, press F5 six minutes later, and without this the rows would carry no
+    chips for the rest of that session - which is the very complaint the chip
+    was built to answer. The read is the shared one the board and the drawer
+    ask for: once per session, whoever asks, and it answers at once thereafter. */
+function stationAfterFeed() {
+  if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); }
+  else renderRows();
+  stationReadIfNeeded(() => { if (!state.board) renderRows(); });
+}
+
 /** What the floor has on one job, whether it is still on their board or not.
     null = the job has never been fed. */
 function stationForJob(id) {
   if (!STATION_ITEMS || typeof ST === "undefined") return null;
-  return ST.jobRecord(STATION_ITEMS, id);
+  if (!ST.jobRecords || !ST.jobKey) return ST.jobRecord(STATION_ITEMS, id);
+  return stationRecords()[ST.jobKey(id)] || null;
 }
 
 /* ---------- load ---------- */
@@ -1189,8 +1315,7 @@ async function load(reason, force) {
     /* the floor's list, brought up to date from the sheet we have just read.
        Deliberately last, deliberately not awaited for the render above, and
        deliberately unable to fail loudly: the dashboard is finished by here. */
-    feedStation().then(() => { if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); } },
-                       () => {});
+    feedStation().then(stationAfterFeed, () => {});
   } catch (e) {
     /* A station account signing in here has no access to the workbook at all.
        That is not a fault to retry: it is the wrong page for them, and saying
@@ -2873,13 +2998,57 @@ const statusWord = j => {
   return (c === "floor" || effectivePhase(j) >= 1) ? phaseName(j) : label(j).l;
 };
 
+/* A row fades in, staggered, when somebody has asked for a list. A repaint the
+   floor's poll asked for is not that: nobody chose it, it can land as often as
+   every ten seconds, and seven hundred rows fading in and out under the cursor
+   would be the feature making itself hated. Those draws come in silently. */
+const rowDraw = i => ROWS_QUIET ? "animation:none" : "animation-delay:" + Math.min(i * 3, 200) + "ms";
+
+/** What the floor has recorded on a job, as one badge in its own column on the
+    row - measured at 1440px, the badge cell it used to share clipped it on
+    every glass row, and a clipped "Glass 48/48" reads as "Glass 48/4". Everything
+    it says is already in memory (STATION_ITEMS, kept current by the poll):
+    this reads, it never asks for anything, and it never writes - the counters
+    are the tablet's to move and the Excel file is not involved in any of it.
+
+    One number for all three stages, because a row has room for one number:
+    eight glasses to cut, hotmelt and glaze is twenty-four steps, and "8/24"
+    says how far through the job the floor has got. The breakdown, and the fact
+    that none of it is in the workbook, go in the title where there is room.
+
+    Nothing at all for a job the floor has never been fed, or one with no glass
+    on it: a row that has nothing to do with the floor must look exactly as it
+    did before this chip existed. */
+function glassChip(j) {
+  if (!j || typeof ST === "undefined") return "";
+  /* the floor's own reckoning of "has glass" first, because it is a few keys
+     of the job in hand rather than a look at the floor's list - and because a
+     job the floor never works on is the answer "nothing" either way, which is
+     what the drawer's section already says about the same job */
+  if (!ST.glassTotal(j)) return "";
+  const g = stationForJob(j.id);
+  if (!g || !g.total) return "";
+  const done = ST.STAGE_KEYS.reduce((n, k) => n + g[ST.STAGE_ROW[k]], 0);
+  const steps = g.total * ST.STAGE_KEYS.length;
+  const each = ST.STAGES.map(s => s[1].toLowerCase() + " " + g[ST.STAGE_ROW[s[0]]]).join(", ");
+  const why = "The floor has recorded " + done + " of " + steps + " stage steps on " +
+    ST.glassWords(g.total) + ": " + each +
+    ". Recorded on the Glass station page — the Excel file is not involved.";
+  /* gold on the same rule and in the same colour the board and the tablet use,
+     so a job that reads finished on one screen reads finished on all three */
+  return '<span class="badge" title="' + esc(why) + '" style="' +
+    (g.finished ? "background:var(--done-bg);color:var(--done)"
+                : "background:var(--surface-2);color:var(--ink-3)") +
+    '">Glass ' + done + '/' + steps + '</span>';
+}
+
 function rowHtml(j, i, max) {
   const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
   const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
   const cpn = cpInProgress(j);
   const picked = !!state.picked[j.id];
   return '<div class="row' + (state.sel === j.id ? " on" : "") + (green ? " ready" : "") + (picked ? " picked" : "") +
-    '" data-id="' + j.id + '" draggable="true" style="animation-delay:' + Math.min(i * 3, 200) + 'ms">' +
+    '" data-id="' + j.id + '" draggable="true" style="' + rowDraw(i) + '">' +
     '<span class="pickcell"><input type="checkbox" class="pick"' + (picked ? " checked" : "") + '></span>' +
     '<span class="tab jid" style="font-weight:600;color:' + (j.urg ? "var(--urgent)" : "var(--ink)") + '">' + esc(j.id) + '</span>' +
     '<span class="ell">' + esc(j.cust || "—") + '</span>' +
@@ -2891,6 +3060,13 @@ function rowHtml(j, i, max) {
       '<i style="width:' + (T ? c.s / T * w : 0) + 'px;background:var(--s)"></i>' +
       '<i style="width:' + (T ? c.t / T * w : 0) + 'px;background:var(--t)"></i></span>' +
       '<span class="tab" style="font-size:12px;color:var(--ink-3)">' + T + '</span></span>' +
+    /* the floor's own column, straight from their list - nothing here reads or
+       writes anything, on the sheet or off it. It has a cell of its own because
+       the badge cell hides what overflows it, and a clipped "Glass 48/48" reads
+       as "Glass 48/4": a real-looking number that is wrong. A job the floor has
+       never been fed leaves this cell empty - never a nought, never a
+       placeholder. */
+    '<span>' + glassChip(j) + '</span>' +
     '<span style="display:flex;gap:4px;overflow:hidden">' +
       j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
       /* the colour-code chip lives here, with the other badges, because this is
@@ -3185,6 +3361,7 @@ function renderRows() {
   /* John's own sheet takes the list's place: tickable, but with no drawer, no
      drag and nothing that writes anything anywhere */
   if (state.board === "john") {
+    ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // no job rows on screen
     host.innerHTML = '<div class="jboard">' + johnViewHtml() + "</div>";
     wireJohnView(host);
     const shown = johnShown().length, total = (JOHNROWS || []).length;
@@ -3196,6 +3373,7 @@ function renderRows() {
   /* a floor station's board takes the whole list's place: read-only, no
      selection, no drag targets, nothing that writes anything anywhere */
   if (state.board) {
+    ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // the board is its own reason to poll fast
     /* the card's "last: ..." line comes from the log list, which the feeder
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
@@ -3207,6 +3385,17 @@ function renderRows() {
   }
   const list = filtered();
   const max = Math.max(1, ...list.map(j => tot(comp(j))));
+  /* what the rows about to be drawn are worth to the poll, and what they will
+     be saying once drawn - one pass over the list, one map lookup a row. These
+     rows are current from here on, so nothing is owed. A rate that has just
+     become worth having is armed now rather than up to a minute from now,
+     which is the same thing choosing the board does. */
+  const wasGlass = ROWS_GLASS;
+  ROWS_DRAWN = list;
+  ROWS_CHIPS = chipsNow();
+  ROWS_GLASS = ROWS_CHIPS !== "";
+  ROWS_STALE = false;
+  if (ROWS_GLASS !== wasGlass) stationTick();
 
   if (state.view === "flat") {
     host.innerHTML = list.length ? list.map((j, i) => rowHtml(j, i, max)).join("")

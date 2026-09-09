@@ -40,7 +40,8 @@ const REG = {};
 function stubEl(tag, id) {
   let html = "";
   const e = {
-    tag: tag || "div", id: id || "", style: { setProperty() {} }, dataset: {}, attrs: {}, kids: [],
+    tag: tag || "div", tagName: String(tag || "div").toUpperCase(),
+    id: id || "", style: { setProperty() {} }, dataset: {}, attrs: {}, kids: [],
     textContent: "", value: "", disabled: false, hidden: false, className: "", title: "",
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild(c) { e.kids.push(c); if (c.id) REG[c.id] = c; return c; },
@@ -1805,7 +1806,10 @@ const person = (name, stages, pin, active, station) =>
   await stationPoll();
   pass("a 410 resync on the poll costs one full read and a new token, and nobody sees anything");
 
-  A("state.board = null; state.sel = null;");
+  /* the job list itself is a fourth reason to watch now that its rows carry the
+     floor's chip (section 14b tests that one on its own), so each of the other
+     three is set out here with the last draw's answer to it deliberately off */
+  A("state.board = null; state.sel = null; ROWS_GLASS = false;");
   assert.strictEqual(stationWatching(), false, "nobody looking at the floor: the slow rate");
   A("state.board = 'glass'");
   assert.strictEqual(stationWatching(), true);
@@ -1997,6 +2001,397 @@ const person = (name, stages, pin, active, station) =>
     "one array next to SHEETNAMES is where the next station goes");
   assert.strictEqual(SHEETNAMES[0], "Production", "SHEETNAMES is untouched, for the export and the row chips");
   pass("the dropdown is driven by one STATIONS array, and SHEETNAMES is left exactly as it was");
+
+  /* ================= 14b. the floor's chip on the ordinary job row =================
+     The job list is the screen the office actually watches, and until now a tap
+     on the tablet changed nothing on it. One badge per row, built out of the
+     list this dashboard already holds: it asks SharePoint for nothing of its
+     own, it writes nowhere, and the Excel file is not involved in any of it. */
+  A("state.board = null; state.sel = null; state.q = ''; state.cat = null; state.scope = '';");
+  A("state.sheet = null; state.view = 'flat'; state.hidden = {}; state.picked = {}; state.sort = 'id';");
+  A("STATION_OK = true; STATION_ERR = '';");
+  const chipItems = [
+    item({ Title: "R6001", Job: "R6001", Customer: "Customer One", GlassType: "GLASS", Total: 8, Seq: 1,
+           Active: "Yes", Cut: 4, Hotmelt: 3, Glazed: 1 }, "600"),
+    item({ Title: "R6002", Job: "R6002", Customer: "Customer Two", GlassType: "GLASS", Total: 8, Seq: 2,
+           Active: "Yes", Cut: 8, Hotmelt: 8, Glazed: 8 }, "601"),
+    item({ Title: "R6003", Job: "R6003", Customer: "Customer Six", GlassType: "GLASS", Total: 8, Seq: 3,
+           Active: "Yes", Cut: 8, Hotmelt: 8, Glazed: 7 }, "602"),
+    item({ Title: "R6004", Job: "R6004", Customer: "Customer Eight", GlassType: "GLASS", Total: 0, Seq: 4,
+           Active: "Yes" }, "603"),
+    item({ Title: "R6005", Job: "R6005", Customer: "Customer Nine", GlassType: "GLASS", Total: 6, Seq: 5,
+           Active: "No", Cut: 6, Hotmelt: 6, Glazed: 0 }, "604")
+  ];
+  /* six jobs on the sheet: five the floor has been fed, and one it has not */
+  const chipJobs = ["R6001", "R6002", "R6003", "R6004", "R6005", "R6009"].map((id, i) =>
+    mkJob({ id: id, cust: "Customer One", glass: { dg: 4, tg: 4 }, blk: 4, seq: i }));
+  const chipOf = id => chipJobs.filter(j => j.id === id)[0];
+  /* the chip's own title, not the colour chip's or any other badge's */
+  const tipOf = html => ((html.match(/title="([^"]*)"[^>]*>Glass \d/) || [])[1] || "");
+  /* one row out of a drawn list, up to the next row's opening tag */
+  const rowFor = (html, id) => {
+    const at = html.indexOf('data-id="' + id + '"');
+    if (at < 0) return "";
+    const from = html.lastIndexOf("<div class=\"row", at);
+    const next = html.indexOf("<div class=\"row", at);
+    return html.slice(from, next < 0 ? html.length : next);
+  };
+  useJobs(chipJobs);
+  A("STATION_ITEMS = " + JSON.stringify(chipItems) + ";");
+
+  /* a job the floor has never been fed is a row that has never heard of the
+     floor: not an empty chip, not a nought, the row exactly as it was */
+  const neverRow = rowHtml(chipOf("R6009"), 0, 1);
+  A("STATION_ITEMS = null;");
+  assert.strictEqual(rowHtml(chipOf("R6009"), 0, 1), neverRow,
+    "with the list read and without it, that row is the same string to the byte");
+  assert.ok(rowHtml(chipOf("R6001"), 0, 1).indexOf("Glass ") < 0,
+    "and before the first read nothing is claimed about any job");
+  A("STATION_ITEMS = " + JSON.stringify(chipItems) + ";");
+  assert.ok(neverRow.indexOf("Glass ") < 0 && neverRow.indexOf("0/0") < 0);
+  assert.ok(rowHtml(chipOf("R6004"), 0, 1).indexOf("Glass ") < 0,
+    "and neither is a fed row whose total is nought: there is nothing to have done");
+  pass("a job the floor has never seen, and one with no glasses on it, carry no chip at all");
+
+  const r6001 = rowHtml(chipOf("R6001"), 0, 1);
+  assert.ok(/>Glass 8\/24</.test(r6001),
+    "eight of the twenty-four steps eight glasses take through the three stages");
+  const tip = tipOf(r6001);
+  assert.ok(tip.indexOf("8 glasses") > 0, "the title says how many glasses that is about");
+  ["cutting 4", "hotmelting 3", "glazing 1"].forEach(w =>
+    assert.ok(tip.indexOf(w) > 0, "and how far each stage has got: " + w));
+  assert.ok(/Excel file is not involved/.test(tip), "and where the numbers come from, and where they do not");
+  pass("the chip is the floor's progress across all three stages, with the breakdown in the title");
+
+  const r6002 = rowHtml(chipOf("R6002"), 0, 1), r6003 = rowHtml(chipOf("R6003"), 0, 1);
+  assert.ok(/>Glass 24\/24</.test(r6002) && /var\(--done-bg\)/.test(r6002),
+    "all three counters at the total: gold, on the same rule as the board and the tablet");
+  assert.ok(/>Glass 23\/24</.test(r6003) && r6003.indexOf("var(--done-bg)") < 0,
+    "one glass short of it: not gold");
+  const goldChip = (r6002.match(/<span class="badge" title="[^"]*" style="[^"]*">Glass [^<]*<\/span>/) || [""])[0];
+  assert.ok(/var\(--done-bg\)/.test(goldChip) && !/#[0-9a-f]{3,6}/i.test(goldChip),
+    "and the gold is the property the board already uses, never a hex literal of this chip's own");
+  pass("a job the floor has finished goes gold on its row, in the same gold as the other two screens");
+
+  assert.ok(/>Glass 12\/18</.test(rowHtml(chipOf("R6005"), 0, 1)),
+    "off the floor's board, but what they recorded on it is still true");
+  pass("a job that has left the floor keeps its chip");
+
+  /* The chip has a COLUMN OF ITS OWN. It used to be the last badge in the cell
+     the sheet chips, Urgent, In fab and the comment count share - a cell with
+     overflow:hidden on it. Measured in a browser at 1440px that cell was 224px
+     wide and wanted 236-292px on every glass row, so "Glass 48/48" drew as
+     "Glass 48/4": a real-looking number that is wrong, which is worse than
+     showing nothing. A column of its own cannot clip it, and the badge cell
+     keeps the room it had for the comment count. */
+  const cellsOf = row => {              // the row's top-level cells, in order
+    const inner = row.slice(row.indexOf(">") + 1, row.lastIndexOf("</div>"));
+    const out = []; let depth = 0, from = 0;
+    for (let k = 0; k < inner.length; k++) {
+      if (inner[k] !== "<") continue;
+      if (inner.lastIndexOf("<span", k) === k) { if (depth++ === 0) from = k; }
+      else if (inner.lastIndexOf("</span>", k) === k) { if (--depth === 0) out.push(inner.slice(from, k + 7)); }
+    }
+    return out;
+  };
+  global.__changes = A("CHANGES");
+  A("CHANGES = [{ job: 'R6001', what: 'Comment', to: 'A note', at: '', who: '' }];");
+  const withNote = rowHtml(chipOf("R6001"), 0, 1);
+  const noteCells = cellsOf(withNote);
+  assert.ok(withNote.indexOf("1 comment") > 0 && withNote.indexOf("Glass 8/24") > 0,
+    "the comment count and the chip are both on the row");
+  const chipCells = noteCells.filter(c => c.indexOf("Glass 8/24") > 0);
+  assert.strictEqual(chipCells.length, 1, "the chip is in exactly one cell of the row");
+  assert.ok(/^<span><span class="badge" title="[^"]*" style="[^"]*">Glass 8\/24<\/span><\/span>$/.test(chipCells[0]),
+    "and that cell holds the chip and nothing else: it is the chip's own column");
+  assert.ok(chipCells[0].indexOf("overflow:hidden") < 0,
+    "the chip's own cell does not hide what it was put there to show");
+  const badgeCell = noteCells.filter(c => c.indexOf("1 comment") > 0)[0];
+  assert.ok(badgeCell.indexOf("overflow:hidden") > 0 && badgeCell.indexOf("Glass") < 0,
+    "and the cell that clips - the badge cell - no longer carries the chip at all");
+  A("CHANGES = __changes;");
+  pass("the chip has a column of its own, so a wide number cannot be clipped into a wrong one");
+
+  /* a column is a column on every row: a job the floor has never been fed still
+     has the cell, and it is empty - no nought, no placeholder, nothing to read */
+  const chipAt = noteCells.indexOf(chipCells[0]);
+  const neverCells = cellsOf(neverRow);
+  assert.strictEqual(neverCells.length, noteCells.length,
+    "every row has the same cells, whether the floor has heard of the job or not");
+  assert.strictEqual(neverCells[chipAt], "<span></span>",
+    "and on a job the floor has never seen the glass cell is empty");
+  assert.strictEqual(cellsOf(rowHtml(chipOf("R6004"), 0, 1))[chipAt], "<span></span>",
+    "as it is on a fed job with no glasses on it");
+  pass("a job with no floor record renders an empty glass cell, never a placeholder");
+
+  /* the head, the row and the grid must carry the same columns in the same
+     order, or every column below the head is drawn under the wrong title */
+  const page = fs.readFileSync(__dirname + "/index.html", "utf8");
+  const headFrom = page.indexOf('<div class="thead">');
+  const headBlock = page.slice(headFrom, page.indexOf("</div>", headFrom));
+  const headCells = headBlock.match(/<span[\s>]/g) || [];
+  const gridLine = (page.match(/grid-template-columns:28px 92px[^;]*/) || [""])[0];
+  const tracks = gridLine.slice(gridLine.indexOf(":") + 1).trim().split(/\s+/);
+  assert.strictEqual(headCells.length, noteCells.length, "the head has one cell per row cell");
+  assert.strictEqual(tracks.length, noteCells.length, "and the grid one column per cell");
+  assert.ok(headBlock.indexOf(">Glass<") > headBlock.indexOf("Components") &&
+            headBlock.indexOf(">Glass<") < headBlock.indexOf("On sheets"),
+    "and Glass is titled where the row draws it: after the components bar, before the sheet chips");
+  /* and the narrow-screen rule hides everything from the fifth cell on, which
+     is still the category badge: the glass column is the eighth, so it goes
+     with the rest and the four that stay line up with the four-column grid */
+  assert.ok(chipAt + 1 >= 5 && /nth-child\(n\+5\)/.test(page),
+    "on a narrow screen the glass cell is hidden by the rule that already hides the other extras");
+  pass("head, row and grid carry the same columns in the same order, narrow screen included");
+
+  /* one pass over the floor's list instead of one per row: the office draws
+     hundreds of rows several times a minute, and the list only grows - rows
+     are flipped to Active = No, never taken out */
+  const recsA = A("stationRecords()");
+  assert.strictEqual(A("stationRecords()") === recsA, true, "asked twice, built once");
+  assert.strictEqual(Object.keys(recsA).sort().join(","), "R6001,R6002,R6003,R6004,R6005",
+    "every job the floor has a row for is in it, whether it is still on their board or not");
+  A("STATION_ITEMS = STATION_ITEMS.slice();");
+  assert.strictEqual(A("stationRecords()") === recsA, false,
+    "and built again the moment the list is replaced, which is what every path that changes it does");
+  assert.deepStrictEqual(stationForJob("  r6001 "), A("ST.jobRecord(STATION_ITEMS, 'R6001')"),
+    "and one job out of the map is the same record asking job by job answers, however the number is typed");
+  assert.strictEqual(stationForJob("R6404"), null, "a job the floor has no row for is still nothing");
+  pass("the floor's records are built once per version of the list, not once per row drawn");
+
+  /* ---- the list has to have been read at all ---- */
+  /* FINDING 2: the first load of a session draws the rows before the feeder has
+     read anything, and nothing drew them again afterwards unless a board or a
+     drawer was open - so the default screen had no chips on it for up to a
+     minute, and polled slowly while it waited. */
+  A("STATION_ITEMS = null; STATION_OK = null; stationReading = null; STATION_TICK_MS = 0;");
+  A("state.board = null; state.sel = null; state.q = ''; state.picked = {};");
+  renderRows();
+  assert.ok(EL["#rows"].innerHTML.indexOf("Glass ") < 0, "nothing is read yet, so nothing is claimed");
+  assert.strictEqual(A("ROWS_GLASS"), false, "and the rows are worth nothing to the poll");
+  A("STATION_ITEMS = " + JSON.stringify(chipItems) + "; STATION_OK = true;");   // the feeder read it, feeding
+  stationAfterFeed();
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 8/24") > 0,
+    "once the feeder has been, the rows are drawn again with the chips on them");
+  assert.strictEqual(A("STATION_TICK_MS"), 10000, "and the poll is put on the fast clock at once");
+  pass("the first load of a session ends with the chips on screen, on the plain list, without a board or a drawer");
+
+  /* FINDING 1: the feeder skips a slice it fed less than ten minutes ago, and a
+     skip reads nothing at all. Sign in, look at the chips, press F5 six minutes
+     later: nothing has read the list, and without a read of its own the rows
+     would carry no chips for the rest of that session - which is the owner's
+     original complaint, put back by the fix for it. */
+  consent(true);
+  ITEMS = chipItems.slice();
+  A("STATION_ITEMS = null; STATION_OK = null; STATION_WHY = ''; stationReading = null;");
+  A("STATION_FEEDS.items.token = null; STATION_TICK_MS = 0;");
+  const fedHash = A("ST.sliceHash(ST.glassSlice(ALL, BLOCKNAMES, glassCounts))");
+  A("STATION_FEED = { hash: " + JSON.stringify(fedHash) + ", at: Date.now() - 360000 };");
+  reset();
+  assert.strictEqual(await feedStation(), null, "the feeder skips: the same slice went out six minutes ago");
+  assert.strictEqual(REQ.length, 0, "it did not even look at the list");
+  assert.strictEqual(A("STATION_ITEMS"), null, "so nothing has read it");
+  assert.strictEqual(A("STATION_OK"), null, "and nothing knows whether it can be read");
+  renderRows();
+  assert.ok(EL["#rows"].innerHTML.indexOf("Glass ") < 0, "drawing the rows cannot invent what was never read");
+  stationAfterFeed();
+  await settle();
+  assert.strictEqual(A("STATION_OK"), true, "so the load asks for the read itself, once");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 8/24") > 0,
+    "and the rows are drawn again with the floor's numbers on them");
+  assert.ok(REQ.filter(r => r.path.indexOf("/items") > 0 && r.method === "GET").length <= 2,
+    "and that is one read of the list, not one a row");
+  A("STATION_FEED = { hash: '', at: 0 };");
+  pass("a refresh while the feeder is inside its ten-minute skip still gets its chips: the list is read once, on its own");
+
+  /* and asking for it twice does not read it twice */
+  reset();
+  stationAfterFeed();
+  await settle();
+  assert.strictEqual(REQ.filter(r => r.method === "GET" && r.path.indexOf("/items") > 0).length, 0,
+    "the read is the shared one: once it has answered, nobody asks again");
+  pass("the read this adds is the one the board and the drawer already share, not a read of its own");
+
+  /* ---- the repaint: a tap arrives with the board closed ---- */
+  consent(true);
+  ITEMS = chipItems.slice(); LOGITEMS = [];
+  A("STATION_FEEDS.items.token = null; STATION_FEEDS.log.token = null; STATION_LOG_OK = true;");
+  reset();
+  assert.strictEqual(await stationPoll(), true, "the first pass takes a token for each list");
+  A("state.board = null; state.picked = { R6001: 1 };");
+  renderRows();
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 8/24") > 0,
+    "the list is drawn with the floor's numbers on it");
+  DELTA_NEXT[GLASS_ID] = [[{ id: "600", fields: Object.assign({}, chipItems[0].fields, { Glazed: 2 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  assert.strictEqual(A("state.board"), null, "the board is not open: this is the plain job list");
+  assert.strictEqual(await stationPoll(), true, "a glazing counter moved on the tablet");
+  const painted = rowFor(EL["#rows"].innerHTML, "R6001");
+  assert.ok(painted.indexOf("Glass 9/24") > 0,
+    "and the row was repainted with it, without anyone opening the board");
+  assert.ok(painted.indexOf("Glass 8/24") < 0);
+  pass("a counter moved on the floor reaches the ordinary job row through the poll, board or no board");
+
+  assert.ok(/class="row picked"/.test(painted) && /class="pick" checked/.test(painted),
+    "a job ticked before the poll landed is still ticked after it");
+  assert.strictEqual(A("Object.keys(state.picked).join(',')"), "R6001",
+    "and the selection itself was never touched");
+  pass("a poll repainting the rows leaves the tick boxes exactly as they were");
+
+  /* ---- what may and may not hold a repaint off ----
+     The rule is the filter bar's: a poll may not take something out from under
+     somebody's hands. A tick box is not that, and getting this wrong is worse
+     than not having the guard at all - every row has a checkbox, ticking one
+     leaves it focused and redraws nothing, so a guard that counted focus would
+     stop the chips moving again for as long as the tick stood. */
+  const ticked = stubEl("input"); ticked.type = "checkbox";
+  EL["#rows"].appendChild(ticked);
+  document.activeElement = ticked;
+  DELTA_NEXT[GLASS_ID] = [[{ id: "600", fields: Object.assign({}, chipItems[0].fields, { Glazed: 2 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  assert.strictEqual(await stationPoll(), true, "the floor moved a counter");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 9/24") > 0,
+    "a focused tick box holds nothing off: the row was repainted with the new number");
+  assert.strictEqual(A("ROWS_STALE"), false, "and nothing is owed, because nothing was skipped");
+  pass("ticking a job does not stop the floor's numbers moving on the rows around it");
+
+  const typedIn = stubEl("input"); typedIn.type = "text";
+  EL["#rows"].appendChild(typedIn);
+  document.activeElement = typedIn;
+  DELTA_NEXT[GLASS_ID] = [[{ id: "600", fields: Object.assign({}, chipItems[0].fields, { Glazed: 5 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  assert.strictEqual(await stationPoll(), true, "the counter moved again");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 9/24") > 0,
+    "the rows were left exactly as they were: a search box in the list is being typed in");
+  assert.strictEqual(A("ROWS_STALE"), true, "and the repaint that was skipped is owed, not lost");
+  A("stationCatchUp();");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 9/24") > 0,
+    "the poll's clock comes round and it is still being typed in, so it still waits");
+  document.activeElement = null;
+  EL["#rows"].querySelector = sel => (sel === ".row.dragging" ? stubEl("div") : null);
+  A("stationCatchUp();");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 9/24") > 0,
+    "nor is a row in the middle of being dragged a moment to rebuild the list under");
+  EL["#rows"].querySelector = () => null;
+  A("stationCatchUp();");
+  assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 12/24") > 0,
+    "and the first tick after their hands are off takes the repaint that was owed");
+  assert.strictEqual(A("ROWS_STALE"), false, "which settles it");
+  pass("a repaint held off while the list is in use is owed and taken, never quietly dropped");
+
+  /* The catch-up is the poll clock's own doing, and it reaches every render on
+     the page in exactly the unusual states this feature made possible. If a
+     render throws there the tick must still re-arm: a callback that escapes
+     leaves stationPollT null with nothing left to arm it again, and the board,
+     the drawer, the log window and every chip stop for the rest of the session
+     with nothing on screen to say so. The tick's own body is taken here rather
+     than waited for - ten seconds is a long time to sit in a test. */
+  const realTimeout = global.setTimeout;
+  let tickBody = null;
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+  global.setTimeout = (fn, ms) => { tickBody = fn; return realTimeout(() => {}, 0); };
+  stationTick();
+  global.setTimeout = realTimeout;
+  assert.ok(typeof tickBody === "function", "the poll armed a clock");
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+  const drawWas = renderRows;
+  global.renderRows = () => { throw new Error("a render blew up"); };
+  DELTA_NEXT[GLASS_ID] = [[]]; DELTA_NEXT[LOG_ID] = [[]];
+  A("ROWS_STALE = true; ROWS_CHIPS = 'nothing the rows can be saying';");
+  await tickBody();
+  global.renderRows = drawWas;
+  assert.ok(A("stationPollT") !== null, "the clock was armed again even though the repaint threw");
+  assert.ok(A("STATION_TICK_MS") === 10000 || A("STATION_TICK_MS") === 60000, "at one of its two rates");
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; } ROWS_STALE = false;");
+  renderRows();
+  assert.strictEqual(await stationPoll(), false, "and the next pass runs as if nothing had happened");
+  pass("a render that throws inside the owed repaint cannot stop the poll: the clock is armed again regardless");
+
+  /* ---- a poll does not rebuild the list to draw what is already on it ----
+     A rebuilt list is a rebuilt list even when it comes out the same string:
+     the rows animate, the selection in them is gone and the hover is lost. So
+     this counts draws rather than comparing markup. */
+  const drawReal = renderRows;
+  let draws = 0;
+  global.renderRows = function () { draws++; return drawReal.apply(null, arguments); };
+  A("state.q = 'R6001';");
+  renderRows();
+  assert.ok(EL["#rows"].innerHTML.indexOf("R6002") < 0, "the list is showing one job");
+  DELTA_NEXT[GLASS_ID] = [[{ id: "601", fields: Object.assign({}, chipItems[1].fields, { Cut: 5 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  draws = 0;
+  assert.strictEqual(await stationPoll(), true, "the floor moved a counter on another job");
+  assert.strictEqual(draws, 0, "and the list was not rebuilt at all: nothing it is showing changed");
+  DELTA_NEXT[GLASS_ID] = [[]];
+  DELTA_NEXT[LOG_ID] = [[item({ Title: "R6002", Station: "Glass", GlassType: "GLASS", Stage: "cut",
+    From: 4, To: 5, Who: "Person A", At: "2026-09-09T09:00:00.000Z" }, "650")]];
+  assert.strictEqual(await stationPoll(), true, "a log line landed too");
+  assert.strictEqual(draws, 0, "and that is not a reason to rebuild them either");
+  A("state.q = '';");
+  renderRows();
+  DELTA_NEXT[GLASS_ID] = [[{ id: "601", fields: Object.assign({}, chipItems[1].fields, { Cut: 4 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  draws = 0;
+  assert.strictEqual(await stationPoll(), true, "the same job again, with the list now showing it");
+  assert.strictEqual(draws, 1, "and this time the rows were rebuilt, once");
+  global.renderRows = drawReal;
+  pass("a poll rebuilds the rows only when what they are showing has actually changed");
+
+  /* ---- and when it does, it does it quietly ---- */
+  A("state.q = '';");
+  renderRows();
+  assert.ok(/animation-delay:/.test(EL["#rows"].innerHTML),
+    "a list somebody asked for fades in, staggered, as it always has");
+  DELTA_NEXT[GLASS_ID] = [[{ id: "600", fields: Object.assign({}, chipItems[0].fields, { Glazed: 6 }) }]];
+  DELTA_NEXT[LOG_ID] = [[]];
+  assert.strictEqual(await stationPoll(), true);
+  const quiet = EL["#rows"].innerHTML;
+  assert.ok(rowFor(quiet, "R6001").indexOf("Glass 13/24") > 0, "the poll's repaint landed");
+  assert.ok(/animation:none/.test(quiet) && quiet.indexOf("animation-delay:") < 0,
+    "and every row came in without the entry animation: nobody asked for this draw");
+  assert.strictEqual(A("ROWS_QUIET"), false, "the quiet only lasts the draw itself");
+  renderRows();
+  assert.ok(/animation-delay:/.test(EL["#rows"].innerHTML), "the next list somebody asks for fades in again");
+  pass("a repaint the poll asked for arrives without the animation the whole list would otherwise replay");
+
+  /* ---- the rate follows what the rows are showing ---- */
+  A("state.board = null; state.sel = null; state.q = '';");
+  renderRows();
+  assert.strictEqual(stationWatching(), true,
+    "the list is showing jobs the floor is working on: somebody is looking at the floor");
+  assert.strictEqual(A("STATION_TICK_MS"), 10000, "so the poll is armed at ten seconds");
+  A("state.q = 'R6009';");
+  renderRows();
+  assert.strictEqual(stationWatching(), false,
+    "filtered down to a job the floor has never seen, there is nothing to wait for");
+  assert.strictEqual(A("STATION_TICK_MS"), 60000, "and the rate drops as the list is drawn, not a minute later");
+  A("state.board = 'glass'");
+  assert.strictEqual(stationWatching(), true, "the board is still a reason of its own");
+  A("state.board = null;");
+  openStationLog("");
+  assert.strictEqual(stationWatching(), true, "and so is the log window");
+  if (REG["lhost"]) REG["lhost"].remove();
+  A("state.sel = 'R6001';");
+  assert.strictEqual(stationWatching(), true, "and so is a drawer open on a job with glass");
+  A("state.sel = null; state.q = '';");
+  pass("the poll runs fast while the rows on screen carry the floor's work, and slowly when they do not");
+
+  /* the whole point: everything above came out of memory. Section 17 proves it
+     over the entire run; this proves it of the drawing itself. */
+  reset();
+  renderRows();
+  rowHtml(chipOf("R6001"), 0, 1);
+  redrawStation();
+  assert.deepStrictEqual(paths(), [],
+    "drawing the chip asks SharePoint for nothing: not the list, not the log, and above all not the workbook");
+  A("state.picked = {}; state.q = '';");
+  pass("the chip and its repaint are read-and-render: no request goes out to draw them");
+
+  /* this section drew the list a good many times, and a draw can re-arm the
+     poll's clock: leave no timer of it running into the next one */
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+  A("state.board = null; state.sel = null; ROWS_STALE = false;");
+  document.activeElement = null;
 
   /* ================= 15. the tablet ================= */
   ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS", Total: 6,
