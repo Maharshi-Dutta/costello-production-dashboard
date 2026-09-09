@@ -402,6 +402,62 @@
     .xq { min-width:100% }
     .xpick { max-height:none }
   }
+  /* ---- the row colour code ----
+     The chip after a job number. The word is always there; the sheet's colour
+     is only ever the ink it is written in. */
+  .flagchip { background:var(--surface-2); border:1px solid var(--line-soft);
+              vertical-align:1px; font-weight:700 }
+  /* ---- select a whole section / everything shown ---- */
+  .selall { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-2);
+            padding:4px 9px; border:1px solid var(--line); border-radius:14px;
+            background:var(--surface); white-space:nowrap; cursor:pointer }
+  .selall:hover { background:var(--surface-2) }
+  .selall input { cursor:pointer }
+  .ghead .gsel { margin-left:2px }
+  /* ---- the John print sheet view ----
+     "Production (2)" drawn on its own terms in the job list's place: its eight
+     printed columns, its section dividers, and each row wearing its own fill.
+     The fills are the sheet's, and every one of them is pale, so a filled row
+     also pins its text dark - otherwise the dark theme's near-white ink would
+     vanish into gold. */
+  .jboard { display:flex; flex-direction:column }
+  .jhead,.jrow { display:grid;
+    grid-template-columns:28px 84px 92px minmax(120px,1.5fr) 118px minmax(80px,1fr) 46px 46px minmax(150px,2fr);
+    gap:10px; align-items:center; padding:0 14px }
+  .jhead { height:35px; background:var(--surface-2); border-bottom:1.5px solid var(--ink) }
+  .jrow { min-height:40px; padding-top:5px; padding-bottom:5px; font-size:12.5px;
+          border-bottom:1px solid var(--line-soft) }
+  .jrow:hover { box-shadow:inset 3px 0 0 var(--accent) }
+  .jrow.picked { box-shadow:inset 3px 0 0 var(--accent); outline:1px solid var(--accent); outline-offset:-1px }
+  .jgrp .ghead { padding-left:14px }
+  @media (max-width:900px){
+    /* the whole sheet cannot fit a phone: it scrolls sideways as one piece
+       rather than crushing the notes column into nothing */
+    .jboard { overflow-x:auto }
+    .jhead,.jrow { min-width:900px }
+  }
+  /* ---- Print notes window (John print sheet) ----
+     The same shell as the Export window: one row per job, scrolling, with the
+     sheet's own notes shown but not editable beside a box that is. */
+  .nwin { width:min(1040px,96vw); height:min(800px,92vh) }
+  .nbody { padding:0 }
+  .nnote { font-size:12.5px; padding:9px 16px; background:var(--surface-2);
+           border-bottom:1px solid var(--line); color:var(--ink-2) }
+  .nnote.err { background:var(--urgent-bg); color:var(--urgent) }
+  .nrow { display:grid; grid-template-columns:150px minmax(160px,1fr) minmax(220px,1.1fr);
+          gap:14px; padding:11px 16px; border-bottom:1px solid var(--line-soft); align-items:start }
+  .nrow:hover { background:var(--surface-2) }
+  .nwho { display:flex; flex-direction:column; gap:3px; min-width:0 }
+  .nsheet { font-size:12px; color:var(--ink-3); line-height:1.45 }
+  .nfail { font-size:11px; font-weight:700; color:var(--urgent) }
+  .nbox { width:100%; min-height:44px; border:1px solid var(--line); border-radius:5px;
+          padding:7px 9px; font:inherit; font-size:12.5px; background:var(--surface);
+          color:var(--ink); resize:vertical }
+  .nbox:focus { outline:2px solid var(--accent); outline-offset:-1px }
+  @media (max-width:640px){
+    .nwin { width:100vw; height:100dvh; max-height:100dvh; border-radius:0; border:0; inset:0 }
+    .nrow { grid-template-columns:1fr; gap:6px }
+  }
   .note { border-left:3px solid var(--done-dot); background:var(--surface-2); padding:9px 12px; border-radius:0 4px 4px 0 }
   .btn { background:var(--ink); color:var(--bg); border:0; padding:9px 15px; border-radius:5px; font-size:13px; font-weight:600 }
   .btn.sec { background:transparent; color:var(--ink-2); border:1px solid var(--line) }
@@ -593,23 +649,28 @@
       <span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260908-1849</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260909-1117</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
       <span><i class="sw" style="background:#ffe699"></i>Ready to deliver &middot; <code>#FFE699</code></span>
-      <span style="color:var(--urgent)">Urgent = the word in the Comment column</span>
+      <span style="color:var(--urgent)">Urgent = the word in the Comment column, or red row text</span>
+      <strong style="color:var(--ink-2)">Row text:</strong>
+      <span style="color:#FF0000">Urgent</span>
+      <span style="color:#00B050">Booked</span>
+      <span style="color:#FF3399">Trade order</span>
+      <span style="color:#00B0F0">On hold</span>
     </div>
   </div>
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260908-1849"></script>
-<script src="graph.js?v=20260908-1849"></script>
-<script src="checkpoints.js?v=20260908-1849"></script>
-<script src="station-core.js?v=20260908-1849"></script>
-<script src="export.js?v=20260908-1849"></script>
-<script src="app.js?v=20260908-1849"></script>
+<script src="parser.js?v=20260909-1117"></script>
+<script src="graph.js?v=20260909-1117"></script>
+<script src="checkpoints.js?v=20260909-1117"></script>
+<script src="station-core.js?v=20260909-1117"></script>
+<script src="export.js?v=20260909-1117"></script>
+<script src="app.js?v=20260909-1117"></script>
 </body>
 </html>

@@ -7,12 +7,19 @@
    whole export in Node. The window that drives it lives in app.js.
 
    Two rules run through the whole file and are worth stating once:
-   - PHONE NO. and EIRCODE never leave this file. `j.ph3` and `j.eir` are never
-     read, no column or PDF text is ever built from them, and the free-text
-     search below deliberately leaves `eir` out of the haystack even though the
-     dashboard's own search includes it. There is no field, no option and no
-     preset that can turn them back on. (What somebody typed into a Comment is
-     their text and is exported as written; the rule is about the two columns.)
+   - EIRCODE never leaves this file, and PHONE NO. leaves it in exactly one
+     place. `j.eir` is never read by anything here, in any format, under any
+     filter or preset, and the free-text search below deliberately leaves `eir`
+     out of the haystack even though the dashboard's own search includes it.
+     `j.ph3` is never read either. The one exception, sanctioned by the owner on
+     2026-09-09 (docs/specs/2026-09-09-john-template.md, §3) and written down
+     nowhere else, is the John print template: `exportJohnRows` reads `j.ph`
+     into its Phone no column, because that is the sheet John prints and works
+     from. The Default template - `exportRows`, `exportColumns`, `exportCell`,
+     the workbook and the PDF built from them - carries neither, and there is no
+     field, no option and no preset that can turn either back on. (What somebody
+     typed into a Comment is their text and is exported as written; the rule is
+     about the two columns.)
    - No network. The export works entirely on the jobs already in memory; the
      only write the feature makes at all is the single Dashboard Log line that
      app.js appends afterwards.
@@ -52,6 +59,13 @@ const XP_SUBLABEL = { f: "F", s: "S", t: "T" };
 const XP_DATE_STEPS = [["sold", "Sold"], ["stamp", "Stamp"], ["ivana", "Ivana"],
                        ["ready", "Ready to print"], ["floor", "Sent to floor"]];
 const XP_NOTE_SOURCE = { comment: "Sheet comment", brendan: "Brendan's notes", specials: "Specials" };
+/* The Production sheet's row colour code, read by parser.js off the colour of
+   the row's own text. The word is always printed; the colour only ever goes
+   with it, never instead of it. */
+const XP_FLAG_WORD = { urgent: "Urgent", booked: "Booked", trade: "Trade order", hold: "On hold" };
+/* what to print it in when the sheet's own hex is not to hand - close to the
+   colours the office uses, dark enough to read on white paper */
+const XP_FLAG_INK = { urgent: "#C62828", booked: "#1B7F3B", trade: "#B5179E", hold: "#1565C0" };
 const XP_STATUS_WORD = { "": "not started", none: "not started", process: "in fabrication", done: "done" };
 /* the dashboard's own sort keys, so "Sort by" means the same in both places */
 const XP_SORTS = [["id", "Job no (A-Z)"], ["num", "Job number (ignore letter)"], ["cat", "Category"],
@@ -61,7 +75,7 @@ const XP_SORTS = [["id", "Job no (A-Z)"], ["num", "Job number (ignore letter)"],
 /** The picker, in the order it is shown and in the order the columns come out. */
 const EXPORT_FIELDS = [
   ["job", "Job no"], ["cust", "Customer"], ["county", "County"], ["section", "Section"],
-  ["ready", "Ready to deliver"], ["urgent", "Urgent"], ["dates", "Dates (five)"],
+  ["ready", "Ready to deliver"], ["urgent", "Urgent"], ["flag", "Flag"], ["dates", "Dates (five)"],
   ["wnd", "Windows"], ["drs", "Doors"], ["colour", "Windows colour"], ["off", "Office no"],
   ["prods", "Products F/S/T"], ["glass", "Glass units"], ["cp", "Checkpoints"],
   ["comments", "Comments"], ["alerts", "Alerts"], ["notes", "Notes from the sheet"]
@@ -169,6 +183,9 @@ function xpContext(ctx) {
     view: ctx.view || null,
     picked: ctx.picked || {},
     sections: ctx.sections || [],
+    /* "Production (2)" as parseJohnSheet read it - the rows the John print
+       sheet is drawn and printed from. Empty when that sheet is not there. */
+    john: ctx.john || [],
     comments: typeof ctx.comments === "function" ? ctx.comments : () => [],
     alerts: typeof ctx.alerts === "function" ? ctx.alerts : () => []
   };
@@ -329,6 +346,9 @@ function exportRows(jobs, fields, ctx) {
     if (F.section) r.section = xpStr(c.sections[j.blk] || "");
     if (F.ready) r.ready = !!j.done;
     if (F.urgent) r.urg = !!j.urg;
+    /* the colour code, as the word it stands for plus the hex that said so -
+       the hex is what lets the file print it in the sheet's own colour */
+    if (F.flag) { r.flag = xpStr(j.flag); r.flagHex = xpStr(j.flagHex); }
     if (F.dates) {
       const d = j.dates || {};
       r.dates = { sold: xpDateVal(d.sold), stamp: xpDateVal(d.stamp), ivana: xpDateVal(d.ivana),
@@ -451,9 +471,14 @@ function exportFilename(format, f, when, names) {
   const label = xpSafeName(exportScopeLabel(f, names));
   return xpSafeName("Production export" + (label ? " - " + label : "")) + " - " + xpIsoDate(when) + ext;
 }
-/** The "from" half of the Dashboard Log line. */
-function exportLogFrom(format, n) {
-  return (xpLow(format) === "pdf" ? "PDF" : "Excel") + " · " + n + " job" + (n === 1 ? "" : "s");
+/** The "from" half of the Dashboard Log line. `template` names anything other
+    than the Default layout; the John print sheet says out loud that the file
+    it made carries phone numbers, because that is the one export that does and
+    the log is where anybody looking later would go to find out. */
+function exportLogFrom(format, n, template) {
+  const base = (xpLow(format) === "pdf" ? "PDF" : "Excel") + " · " + n + " job" + (n === 1 ? "" : "s");
+  if (xpLow(template) !== "john") return base;
+  return base + " · John print sheet · with phone numbers";
 }
 
 /* ---------------------------------------------------------------------------
@@ -539,6 +564,11 @@ function exportColumns(rows, fields) {
     add("glass:" + t, xpUpper(t), 9, "glass", { glass: t }));
   if (F.alerts) add("alerts", "Alerts", 8, "num");
   if (F.comments) add("comments", "Comments", 10, "num");
+  /* Flag comes last, with the other columns the sheet does not itself have: it
+     is not one of the Production sheet's columns at all but the colour of the
+     row's own text, and dropping it into the middle would break the run of
+     columns above, which is the sheet's order on purpose. */
+  if (F.flag) add("flag", "Flag", 13, "flag");
   /* an Excel table refuses two columns with the same header */
   const used = {};
   cols.forEach(c => {
@@ -628,6 +658,12 @@ function exportCell(row, col) {
     if (k === "urg" && on) { out.colour = XP_RED; out.bold = true; }
     return out;
   }
+  if (col.kind === "flag") {
+    const w = XP_FLAG_WORD[row.flag] || "";
+    out.v = w || null; out.text = w;
+    if (w) { out.colour = xpFlagInk(row); out.bold = row.flag === "urgent"; }
+    return out;
+  }
   if (col.kind === "job") {
     out.v = xpStr(row.id); out.text = out.v;
     if (row.ready) out.fill = XP_GREEN_BG;
@@ -655,6 +691,14 @@ function exportCell(row, col) {
   const v = xpStr(row[k]);
   out.v = v || null; out.text = v;
   return out;
+}
+
+/** The ink a flag is printed in: the sheet's own hex when it is known, and the
+    nearest readable stand-in when it is not. Never used without the word. */
+function xpFlagInk(row) {
+  const hex = xpStr(row && row.flagHex).replace("#", "");
+  if (/^[0-9A-Fa-f]{6}$/.test(hex)) return "#" + hex.toUpperCase();
+  return XP_FLAG_INK[row && row.flag] || XP_INK;
 }
 
 /** Every comment line for the Comments sheet / the PDF card, sheet notes and
@@ -909,6 +953,9 @@ function xpCardNodes(row, F, first) {
   const flags = [];
   if (F.ready) flags.push(row.ready ? badge("  READY TO DELIVER  ", XP_GREEN) : badge("  IN PRODUCTION  ", XP_GREY));
   if (F.urgent && row.urg) flags.push(badge("  URGENT  ", XP_RED));
+  /* the sheet's own colour code, as the word it stands for in that colour */
+  if (F.flag && row.flag) flags.push({ text: xpUpper(XP_FLAG_WORD[row.flag] || row.flag),
+                                       fontSize: 7.5, bold: true, color: xpFlagInk(row) });
   if (flags.length) top.push({ width: "auto", stack: flags, alignment: "right" });
   if (top.length) head.push({ columns: top, columnGap: 6 });
 
@@ -1162,6 +1209,341 @@ function buildDocDefinition(rows, opts) {
 }
 
 /* ---------------------------------------------------------------------------
+   7b. the John print sheet
+
+   A second, fixed layout, printed from **"Production (2)"** and from nothing
+   else. That sheet is not a copy of Production that lags behind: it is a
+   separate sheet the office keeps for the paper John works from, with its own
+   rows, its own order, its own sections and its own colouring. So the rows
+   here come from `parseJohnSheet` (in `parser.js`) - the ready date, the
+   customer, the phone, the area, the counts, the Brendan's-office note, the
+   row's fill and the row's text colour, all as that sheet has them. Nothing
+   here is configurable, because the whole point is that the paper comes out
+   looking like the paper he already has.
+
+   A selected job that is not on Production (2) is still printed, from the
+   Production job model, with no colour at all and a grey "not on John's sheet"
+   line in its Notes - it is better for a job to be on the paper saying it is
+   not on John's sheet than to disappear off it silently.
+
+   It is also the one export in the whole app that carries a phone number. The
+   owner sanctioned that on 2026-09-09 and only for this template; the eircode
+   is not carried here or anywhere else, and `j.eir` is not read by one line of
+   this block. Every John print writes a log line that says so in words.
+
+   The dashboard's own print notes are appended to the sheet's note, never
+   written back into the workbook - not into Production (2) either: they live
+   in the SharePoint list "Dashboard print notes" and arrive here as a plain
+   { JOB: text } map.
+   --------------------------------------------------------------------------- */
+
+/* the eight columns, in the sheet's order. `width` is Excel's (characters),
+   `w` the PDF's own proportion of a landscape page. */
+const XP_JOHN_COLS = [
+  { key: "id",    name: "Job no",         width: 11, w: 46 },
+  { key: "ready", name: "Ready to print", width: 10, w: 46 },
+  { key: "cust",  name: "Customer",       width: 20, w: 84 },
+  { key: "phone", name: "Phone no",       width: 14, w: 58 },
+  { key: "area",  name: "Area",           width: 12, w: 50 },
+  { key: "wnd",   name: "Wnd",            width: 6,  w: 26, group: "QUANTITY" },
+  { key: "drs",   name: "Drs",            width: 5,  w: 24, group: "QUANTITY" },
+  { key: "notes", name: "Notes",          width: 60, w: 250 }
+];
+const XP_JOHN_DIVIDER = "#EFECE7";       // the light grey a section divider is filled with
+const XP_JOHN_LINE = "#B9B5AD";          // the thin rule between cells
+
+/** dd-MMM, the short form the sheet's Ready to print column prints in. What the
+    office wrote in words there ("Before 12 Nov") is kept exactly as written. */
+function xpJohnDate(v) {
+  const raw = xpDateVal(v);
+  if (!raw) return "";
+  if (!xpIsIso(raw)) return xpStr(raw);
+  const s = xpDay(raw);
+  return s.slice(8, 10) + "-" + XP_MON[parseInt(s.slice(5, 7), 10) - 1];
+}
+/** Join the lines that make up one Notes cell, dropping a repeat and any
+    blank: the same sentence can sit on Production and on Production (2), and
+    John reads one line, not two. */
+function xpJohnJoin(parts) {
+  const seen = {}, out = [];
+  (parts || []).forEach(t => {
+    const s = xpStr(t).trim();
+    if (!s) return;
+    const k = s.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(s);
+  });
+  return out.join(" · ");
+}
+/** The Production model's own note lines for a job - the Comment column first
+    and Brendan's office after it, whatever order the parser found them in.
+    Used for a job that is not on Production (2), and shown (labelled) beside
+    Production (2)'s note in the notes window. */
+function xpJohnNotes(j, note) {
+  const notes = (j && j.notes) || [];
+  const parts = [];
+  notes.forEach(n => { if (n.k === "comment") parts.push(n.t); });
+  notes.forEach(n => { if (n.k === "brendan") parts.push(n.t); });
+  parts.push(note);
+  return xpJohnJoin(parts);
+}
+/** Production (2)'s row for a job, or null. */
+function johnRowFor(ctx, id) {
+  const c = xpContext(ctx), k = xpUpper(xpStr(id)).trim();
+  return (c.john || []).find(r => xpUpper(r.id) === k) || null;
+}
+/** What is printed against a job that Production (2) does not have. */
+const XP_JOHN_MISSING = "not on John's sheet";
+
+/** The rows of a John print: the chosen jobs as **Production (2)** has them,
+    in that sheet's own order, with a divider row in front of each of its
+    sections. Each row is plain data - the builders below see rows, never jobs.
+
+    `ids` is the job numbers to print (job objects are accepted too, for a
+    caller that has them to hand). `notes` is { JOB: "the print note" }.
+    `ctx.john` is `parseJohnSheet`'s output; `ctx.all` and `ctx.sections` are
+    only ever read for a job that sheet does not have. */
+function exportJohnRows(ids, notes, ctx) {
+  const c = xpContext(ctx), N = notes || {};
+  const printNote = id => {
+    const k = xpUpper(id);
+    return N[k] == null ? N[xpStr(id)] : N[k];
+  };
+  const want = {}, order = [];
+  (ids || []).forEach(x => {
+    const k = xpUpper(xpStr(x && x.id != null ? x.id : x)).trim();
+    if (k && !want[k]) { want[k] = 1; order.push(k); }
+  });
+
+  /* Production (2)'s own rows, in its own order */
+  const mine = (c.john || []).filter(r => want[xpUpper(r.id)])
+    .slice().sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0));
+  const have = {};
+  mine.forEach(r => { have[xpUpper(r.id)] = 1; });
+
+  /* and the ones it does not have, from the Production model */
+  const missing = order.filter(k => !have[k]).map(k => {
+    const j = (c.all || []).find(x => xpUpper(x.id) === k) || { id: k };
+    const blk = Number(j.blk);
+    return {
+      kind: "job", missing: true,
+      id: xpStr(j.id) || k,
+      ready: xpJohnDate((j.dates || {}).ready),
+      cust: xpStr(j.cust),
+      /* the sanctioned exception, and the only two lines in this file that
+         read a phone number at all */
+      phone: xpStr(j.ph),
+      area: xpStr(j.area),
+      wnd: j.wnd || 0, drs: j.drs || 0,
+      notes: xpJohnJoin([xpJohnNotes(j, printNote(j.id || k)), XP_JOHN_MISSING]),
+      /* no colour of any kind: this row was not on the sheet the colours
+         belong to, and inventing one would say something the sheet did not */
+      fill: "", flag: "", colour: "",
+      section: (isFinite(blk) && xpStr(c.sections[blk])) || ""
+    };
+  });
+
+  /* sections in Production (2)'s order, then any a missing job brings with it */
+  const secs = [];
+  const addSec = s => { const v = xpStr(s) || "No section"; if (secs.indexOf(v) < 0) secs.push(v); };
+  mine.forEach(r => addSec(r.section));
+  missing.forEach(r => addSec(r.section));
+
+  const out = [];
+  secs.forEach(name => {
+    const rows = mine.filter(r => (xpStr(r.section) || "No section") === name).map(r => ({
+      kind: "job", missing: false,
+      id: xpStr(r.id),
+      ready: xpJohnDate(r.ready),
+      cust: xpStr(r.cust),
+      phone: xpStr(r.phone),
+      area: xpStr(r.area),
+      wnd: r.wnd || 0, drs: r.drs || 0,
+      notes: xpJohnJoin([r.notes, printNote(r.id)]),
+      fill: xpStr(r.fillHex) ? "#" + xpUpper(xpStr(r.fillHex).replace("#", "")) : "",
+      flag: xpStr(r.flag) || johnFlag(r),
+      colour: johnFlag(r) ? "#" + xpUpper(xpStr(r.inkHex).replace("#", "")) : ""
+    })).concat(missing.filter(r => (xpStr(r.section) || "No section") === name));
+    if (!rows.length) return;
+    out.push({ kind: "section", section: name });
+    rows.forEach(r => out.push(r));
+  });
+  return out;
+}
+/** The word a Production (2) row's ink stands for, or "". `flagOf` lives in
+    parser.js and is on `window` in the browser; without it the colour is still
+    printed, it just gets no word of its own. */
+function johnFlag(r) {
+  const hex = xpStr(r && r.inkHex).replace("#", "");
+  if (!hex) return "";
+  const fn = (typeof flagOf === "function") ? flagOf
+    : (typeof window !== "undefined" && window.flagOf) ? window.flagOf : null;
+  return fn ? (fn(hex.toUpperCase()) || "") : "";
+}
+
+/** `John print sheet 2026-09-09.xlsx`. One name, one shape, every time. */
+function exportJohnFilename(format, when) {
+  return "John print sheet " + xpIsoDate(when) + (xpLow(format) === "pdf" ? ".pdf" : ".xlsx");
+}
+
+/* ---- the John workbook ---- */
+const xpJohnThin = () => ({ top: { style: "thin", color: { argb: xpArgb(XP_JOHN_LINE) } },
+                            left: { style: "thin", color: { argb: xpArgb(XP_JOHN_LINE) } },
+                            bottom: { style: "thin", color: { argb: xpArgb(XP_JOHN_LINE) } },
+                            right: { style: "thin", color: { argb: xpArgb(XP_JOHN_LINE) } } });
+
+/** One sheet, "John print sheet". opts: { who, when, company }. */
+function buildJohnWorkbook(rows, opts) {
+  opts = opts || {};
+  const Lib = xpExcelLib();
+  const wb = new Lib.Workbook();
+  wb.creator = "Costello production dashboard";
+  wb.created = (opts.when && typeof opts.when !== "string") ? opts.when : new Date();
+  const C = XP_JOHN_COLS, n = C.length;
+  const ws = wb.addWorksheet("John print sheet", {
+    views: [{ state: "frozen", ySplit: 2 }],
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+                 printTitlesRow: "1:2", horizontalCentered: false,
+                 margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } }
+  });
+  C.forEach((c, i) => { ws.getColumn(i + 1).width = c.width; });
+
+  /* the sheet's own two-row header: QUANTITY sits over Wnd and Drs, everything
+     else is one heading spanning both rows */
+  C.forEach((c, i) => {
+    if (c.group) return;
+    ws.mergeCells(1, i + 1, 2, i + 1);
+    ws.getCell(1, i + 1).value = c.name;
+  });
+  const qi = C.findIndex(c => c.group);
+  if (qi >= 0) {
+    ws.mergeCells(1, qi + 1, 1, qi + 2);
+    ws.getCell(1, qi + 1).value = C[qi].group;
+    ws.getCell(2, qi + 1).value = C[qi].name;
+    ws.getCell(2, qi + 2).value = C[qi + 1].name;
+  }
+  for (let r = 1; r <= 2; r++) for (let i = 0; i < n; i++) {
+    const cell = ws.getCell(r, i + 1);
+    cell.font = { bold: true, size: 10, color: { argb: xpArgb(XP_INK) } };
+    cell.fill = xpSolid(xpArgb(XP_JOHN_DIVIDER));
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = xpJohnThin();
+  }
+
+  let at = 3;
+  (rows || []).forEach(r => {
+    const row = ws.getRow(at);
+    if (r.kind === "section") {
+      ws.mergeCells(at, 1, at, n);
+      const cell = ws.getCell(at, 1);
+      cell.value = xpStr(r.section);
+      cell.font = { bold: true, size: 11, color: { argb: xpArgb(XP_INK) } };
+      cell.fill = xpSolid(xpArgb(XP_JOHN_DIVIDER));
+      cell.alignment = { horizontal: "left", vertical: "middle" };
+      for (let i = 0; i < n; i++) ws.getCell(at, i + 1).border = xpJohnThin();
+      at++;
+      return;
+    }
+    C.forEach((c, i) => {
+      const cell = row.getCell(i + 1);
+      const v = c.key === "wnd" ? (r.wnd || null) : c.key === "drs" ? (r.drs || null) : xpStr(r[c.key]);
+      cell.value = (v === "" ? null : v);
+      cell.border = xpJohnThin();
+      cell.alignment = { vertical: "top", wrapText: c.key === "notes",
+                         horizontal: (c.key === "wnd" || c.key === "drs") ? "center" : "left" };
+      if (r.fill) cell.fill = xpSolid(xpArgb(r.fill));
+      /* a job Production (2) does not have prints in grey italic, so the eye
+         can see at a glance that its line came from somewhere else */
+      cell.font = { size: 10, bold: r.flag === "urgent", italic: !!r.missing,
+                    color: { argb: xpArgb(r.missing ? XP_GREY : (r.colour || XP_INK)) } };
+    });
+    at++;
+  });
+  return wb;
+}
+
+/* ---- the John PDF ---- */
+/** The eight column widths, scaled so they always fit a landscape page. */
+function exportJohnWidths() {
+  const pad = 8, usable = XP_LAND_W - XP_JOHN_COLS.length * pad;
+  const sum = XP_JOHN_COLS.reduce((a, c) => a + c.w, 0);
+  const scale = usable / sum;
+  return XP_JOHN_COLS.map(c => Math.floor(c.w * scale * 10) / 10);
+}
+
+/** A pdfmake document definition for the John print sheet. opts: { who, when,
+    company }. Everything is plain data except the footer, which pdfmake
+    requires to be a function and which returns plain content. */
+function buildJohnDoc(rows, opts) {
+  opts = opts || {};
+  const C = XP_JOHN_COLS, n = C.length;
+  const when = opts.when || new Date();
+  const dateText = xpNiceDate(xpIsoDate(when));
+  const who = xpShortWho(opts.who) || "unknown";
+  const company = xpStr(opts.company) || "Production";
+  const hd = { bold: true, fontSize: 8, fillColor: XP_JOHN_DIVIDER, color: XP_INK, alignment: "center" };
+
+  const head1 = [], head2 = [];
+  C.forEach((c, i) => {
+    if (!c.group) { head1.push(Object.assign({ text: c.name, rowSpan: 2 }, hd)); head2.push({}); return; }
+    const first = !(C[i - 1] && C[i - 1].group === c.group);
+    head1.push(first ? Object.assign({ text: c.group, colSpan: 2 }, hd) : {});
+    head2.push(Object.assign({ text: c.name }, hd));
+  });
+  const body = [head1, head2];
+  (rows || []).forEach(r => {
+    if (r.kind === "section") {
+      const cell = { text: xpStr(r.section), bold: true, fontSize: 9, fillColor: XP_JOHN_DIVIDER,
+                     colSpan: n, margin: [2, 3, 2, 3] };
+      body.push([cell].concat(C.slice(1).map(() => ({}))));
+      return;
+    }
+    body.push(C.map(c => {
+      const text = c.key === "wnd" ? (r.wnd ? String(r.wnd) : "")
+        : c.key === "drs" ? (r.drs ? String(r.drs) : "")
+        : xpStr(r[c.key]);
+      const cell = { text: text, fontSize: 8 };
+      if (c.key === "wnd" || c.key === "drs") cell.alignment = "center";
+      if (r.fill) cell.fillColor = r.fill;
+      /* grey and italic for a job Production (2) does not have; otherwise the
+         sheet's own ink, whatever it is */
+      if (r.missing) { cell.color = XP_GREY; cell.italics = true; }
+      else if (r.colour) cell.color = r.colour;
+      if (r.flag === "urgent") cell.bold = true;
+      return cell;
+    }));
+  });
+
+  const def = {
+    pageSize: "A4",
+    pageOrientation: "landscape",
+    pageMargins: [28, 34, 28, 32],
+    info: { title: "John print sheet " + xpIsoDate(when), author: company },
+    defaultStyle: { font: "Roboto", fontSize: 8, color: XP_INK },
+    content: [
+      { text: company + "  ·  John print sheet", fontSize: 9, color: XP_GREY,
+        margin: [0, 0, 0, 6] },
+      { table: { headerRows: 2, dontBreakRows: true, widths: exportJohnWidths(), body: body },
+        /* no layout named: pdfmake's default draws the thin grid the sheet has */
+        fontSize: 8 }
+    ],
+    footer: function (currentPage, pageCount) {
+      return {
+        margin: [28, 8, 28, 0],
+        columns: [
+          { width: "*", text: "Printed " + dateText + " by " + who, fontSize: 7.5, color: XP_GREY },
+          { width: "auto", text: "Page " + currentPage + " of " + pageCount, fontSize: 7.5,
+            color: XP_GREY, alignment: "right" }
+        ]
+      };
+    }
+  };
+  if (opts.compress === false) def.compress = false;      // tests read the text streams
+  return def;
+}
+
+/* ---------------------------------------------------------------------------
    8. handing the file over (browser only)
    --------------------------------------------------------------------------- */
 
@@ -1209,6 +1591,9 @@ const XP_API = {
   exportRows, exportCheckpoints, exportColumns, exportTableColumns, exportTableWidths,
   exportCell, exportCommentLines, exportGroups, exportBuildable,
   exportFilename, exportScopeLabel, exportLogFrom, filtersSummary, filtersSummaryLines,
+  XP_JOHN_COLS, XP_FLAG_WORD, XP_JOHN_MISSING, exportJohnRows, exportJohnFilename,
+  exportJohnWidths, buildJohnWorkbook, buildJohnDoc, xpJohnDate, xpJohnNotes,
+  xpJohnJoin, johnRowFor, johnFlag, xpFlagInk,
   buildWorkbook, buildDocDefinition, downloadBlob, xpBarSegments, xpPdfReady, xpCardNodes,
   presetsLoad, presetSave, presetDelete, xpFieldSet, xpFilter, xpIsoDate, xpNiceDate, xpStamp,
   xpShortWho, xpIsIso, xpSectionNames,

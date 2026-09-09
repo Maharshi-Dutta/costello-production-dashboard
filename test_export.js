@@ -44,7 +44,11 @@ function stubEl(tag) {
   return e;
 }
 const EL = {};
-const el = sel => EL[sel] || (EL[sel] = stubEl());
+/* The print-notes window is never opened in this file, so its selector
+   answers null the way a browser does for something that is not on the
+   page - otherwise the page's Escape handler, which closes the topmost
+   window first, would think it was there. */
+const el = sel => sel === "#nhost" ? null : (EL[sel] || (EL[sel] = stubEl()));
 const MADE = [];
 const HANDLERS = {};            // the page's own document-level listeners, so a key can be pressed
 global.document = {
@@ -95,11 +99,19 @@ global.whoAmI = () => "exporter@example.test";
 
 /* ---------- the fixtures: invented jobs, distinctive fake contact values ---- */
 const PH3 = "742", EIR = "ZZ99XY7";
+/* the whole number, carried by the John template and by nothing else. It ends
+   in the same three digits as PH3, so every standing "no phone" assertion
+   below catches a Default export that leaked either of them. */
+const PHONE = "021 555 0" + PH3;
+/* the number Production (2) holds for the same job - deliberately not the
+   model's, so a John print that quietly used the wrong sheet is caught */
+const JPHONE = "065 555 0" + PH3;
 const SECTIONS = ["Can sell as second hand", "Ready, customer won't take",
                   "Collect & supply only", "Ready to fit", "In production"];
 const mkJob = o => Object.assign({
   id: "R0000", cust: "", area: "", off: "", colour: "", wnd: 0, drs: 0,
-  ph3: PH3, eir: EIR,                       // present on every job, exported by none
+  ph3: PH3, eir: EIR, ph: PHONE,            // present on every job; only John carries the phone
+  flag: "", flagHex: "",                    // the colour of the row's own text on Production
   glass: {}, prods: [], notes: [], sheets: ["Production"], src: {},
   dates: { sold: null, stamp: null, ivana: null, ready: null, floor: null },
   cp: { win: "", drs: "", glass: {}, prod: {} },
@@ -115,7 +127,8 @@ const A = mkJob({
   dates: { sold: "2026-01-05", stamp: "2026-01-20", ivana: null, ready: "2026-02-10", floor: "2026-03-01" },
   notes: [{ k: "comment", t: "Ring before delivery", s: "Production" },
           { k: "brendan", t: "Check the cill height", s: "Production" }],
-  sheets: ["Production", "Glass"], blk: 4, stage: "floor"
+  sheets: ["Production", "Glass"], blk: 4, seq: 2, stage: "floor",
+  flag: "trade", flagHex: "FF3399"
 });
 const B = mkJob({
   id: "R1002", cust: "Customer Two", area: "Kerry", off: "OF-102", colour: "Grey",
@@ -124,12 +137,12 @@ const B = mkJob({
   cp: { win: "done", drs: "", glass: { dg: "done" }, prod: { sliding: { f: "done", s: "done" } } },
   dates: { sold: "2026-02-01", stamp: null, ivana: null, ready: null, floor: null },
   notes: [{ k: "specials", t: "Urgent - customer waiting", s: "Production" }],
-  blk: 3, done: 1, urg: 1, stage: "office"
+  blk: 3, seq: 1, done: 1, urg: 1, stage: "office", flag: "urgent", flagHex: "FF0000"
 });
 /* R1003 carries a date the sheet holds as words, not a date */
 const C = mkJob({
   id: "R1003", cust: "Customer Three", area: "Cork", off: "OF-103",
-  drs: 2, sheets: ["Production", "PVC Doors"], blk: 4, stage: "office",
+  drs: 2, sheets: ["Production", "PVC Doors"], blk: 4, seq: 3, stage: "office",
   dates: { sold: "Before 12 Nov", stamp: null, ivana: null, ready: null, floor: null }
 });
 const PAST = mkJob({ id: "R0900", cust: "Customer Nine", cat: "past", blk: -1 });
@@ -143,7 +156,7 @@ const TALL = mkJob({
   dates: { sold: "2026-01-02", stamp: "2026-01-09", ivana: "2026-01-16", ready: "2026-01-23", floor: "2026-02-02" },
   notes: (function () { const out = []; for (let i = 1; i <= 30; i++)
     out.push({ k: "comment", t: "Note number " + i + " about the fabrication of this job", s: "Production" }); return out; })(),
-  blk: 4, stage: "floor"
+  blk: 4, seq: 4, stage: "floor", flag: "hold", flagHex: "00B0F0"
 });
 
 function useJobs(list) {
@@ -547,8 +560,9 @@ function pdfRunsPerPage(buf) {
     "Comment", "Office no", "Job no", "Sold", "Stamp", "Ivana", "Ready to print", "Sent to floor",
     "Customer", "Area", "Section", "Ready to deliver", "Urgent", "WND", "DRS", "Windows colour",
     "7000 CASEMENT F", "7000 CASEMENT S", "7000 CASEMENT T", "SLIDING F", "SLIDING S", "SLIDING T",
-    "TG", "DG", "Alerts", "Comments"
-  ], "the Production sheet's own order, without PHONE NO. and without EIRCODE");
+    "TG", "DG", "Alerts", "Comments", "Flag"
+  ], "the Production sheet's own order, without PHONE NO. and without EIRCODE; " +
+     "Flag last, because it is not one of the sheet's columns but the colour of the row's own text");
   assert.deepStrictEqual(Object.keys(jobs.tables), ["Jobs_1"], "a real Excel table, not just cells");
   assert.strictEqual(jobs.views[0].state, "frozen");
   assert.strictEqual(jobs.views[0].ySplit, 1, "the header row stays put when you scroll");
@@ -756,8 +770,8 @@ function pdfRunsPerPage(buf) {
     glass: { tg: 1, dg: 2, tuff: 3, "not tuff": 4, arch: 5, astragal: 6, fancy: 7, extra: 8 },
     prods: (function () { const p = []; for (let i = 1; i <= 21; i++) p.push({ n: "profile " + i, f: i, s: i, t: i, st: [] }); return p; })() });
   const wideRows = exportRows([wide], fields, CTX());
-  assert.strictEqual(exportColumns(wideRows, fields).length, 21 * 3 + 8 + 18,
-    "the real sheet really is that wide in the workbook: 89 columns");
+  assert.strictEqual(exportColumns(wideRows, fields).length, 21 * 3 + 8 + 19,
+    "the real sheet really is that wide in the workbook: 90 columns, Flag included");
   const tcols = exportTableColumns(fields);
   assert.deepStrictEqual(tcols.map(c => c.name), ["Job no", "Customer", "County", "Section", "Ready", "Urgent",
     "WND", "DRS", "Components F/S/T", "Glass units", "Sold", "Ready to print", "Sent to floor", "Comments"],
@@ -1018,6 +1032,169 @@ function pdfRunsPerPage(buf) {
     assert.ok(squash(gTableText).indexOf(bit) >= 0, "grouped table: missing " + bit));
   assertNoValues([cardsText, tableText, groupText, gTableText], "a rendered PDF");
   pass("grouped: both layouts render with every job and every section heading present");
+
+  /* ---- 15b. the John print sheet ----
+     A fixed layout printed from "Production (2)" and from nothing else. It is
+     the one export in the app that carries a phone number, sanctioned by the
+     owner on 2026-09-09; the eircode is in none of it, and the Default
+     template still carries neither.
+
+     Production (2) deliberately disagrees with the Production model here - a
+     different phone, area, ready date and note on R1001 - because the whole
+     point of the amendment is that John's paper comes from John's sheet. */
+  const JOHN2 = [
+    { id: "R1002", section: "Ready to fit", ready: "2026-04-02", cust: "Customer Two",
+      phone: PHONE, area: "Kerry", wnd: 5, drs: 0, notes: "Collect on Friday",
+      fillHex: "FFE699", inkHex: "FF0000", seq: 0 },
+    { id: "R1001", section: "In production", ready: "2026-02-10", cust: "Customer One",
+      phone: JPHONE, area: "West Clare", wnd: 12, drs: 4, notes: "Check the cill height",
+      fillHex: "FFFF00", inkHex: "FF3399", seq: 1 },
+    { id: "R1003", section: "In production", ready: "", cust: "Customer Three",
+      phone: PHONE, area: "Cork", wnd: 0, drs: 2, notes: "", fillHex: "", inkHex: "", seq: 2 }
+  ];
+  JOHN2.sections = ["Ready to fit", "In production"];
+  const JCTX = () => Object.assign(CTX(), { all: [A, B, C, TALL], john: JOHN2 });
+
+  const JN = { R1001: "Leave at the side gate", R9999: "a note for a job not in this print" };
+  const johnRows = exportJohnRows(["R1003", "R1001", "R1002"], JN, JCTX());
+  assert.deepStrictEqual(johnRows.map(r => r.kind === "section" ? "== " + r.section : r.id),
+    ["== Ready to fit", "R1002", "== In production", "R1001", "R1003"],
+    "Production (2)'s own order: section by section, and inside a section by its own row order");
+  const jr = johnRows.filter(r => r.kind === "job");
+  assert.deepStrictEqual(jr.map(r => r.phone), [PHONE, JPHONE, PHONE],
+    "every row carries a phone number - this template and no other");
+  assert.strictEqual(jr[1].phone, JPHONE, "and it is Production (2)'s number, not the Production model's");
+  assert.strictEqual(jr[1].area, "West Clare", "the area comes from Production (2) too");
+  assert.strictEqual(jr[1].ready, "10-Feb", "Ready to print is dd-MMM, from that sheet's date");
+  assert.strictEqual(jr[0].ready, "02-Apr");
+  assert.strictEqual(jr[2].ready, "", "and a row with no ready date has an empty cell");
+  assert.strictEqual(jr[1].notes, "Check the cill height · Leave at the side gate",
+    "Notes: Production (2)'s Brendan note, then the dashboard's print note");
+  assert.strictEqual(jr[2].notes, "", "a row with neither has an empty Notes cell");
+  assert.strictEqual(jr[0].fill, "#FFE699", "R1002 wears its own gold");
+  assert.strictEqual(jr[1].fill, "#FFFF00", "R1001 its own yellow");
+  assert.strictEqual(jr[2].fill, "", "and R1003 has no fill on that sheet");
+  assert.strictEqual(jr[0].colour, "#FF0000", "the text colour is that sheet's own hex");
+  assert.strictEqual(jr[0].flag, "urgent", "with the word it stands for");
+  assert.strictEqual(jr[1].colour, "#FF3399");
+  assert.strictEqual(jr[1].flag, "trade");
+  assert.strictEqual(jr[2].colour, "", "a black row stays black");
+  assert.ok(jr.every(r => !r.missing));
+  assert.strictEqual(xpJohnDate("Before 12 Nov"), "Before 12 Nov",
+    "what the office wrote in words in a date cell is printed as written");
+  const johnStrings = strings(johnRows);
+  johnStrings.forEach(x => assert.strictEqual(String(x).toLowerCase().indexOf(EIR.toLowerCase()), -1,
+    'the John rows leaked the eircode: "' + x + '"'));
+  assert.ok(johnStrings.some(x => String(x).indexOf(JPHONE) >= 0),
+    "and they really do carry the phone number, or this test is proving nothing");
+  pass("John rows come from Production (2): its order, its dividers, its colours, its phone and note");
+
+  /* a job the sheet does not have */
+  const withMissing = exportJohnRows(["R1001", "R1004"], {}, JCTX());
+  const gone = withMissing.filter(r => r.kind === "job").find(r => r.id === "R1004");
+  assert.ok(gone, "a job that is not on Production (2) is still printed");
+  assert.strictEqual(gone.missing, true);
+  assert.strictEqual(gone.fill, "", "with no fill");
+  assert.strictEqual(gone.colour, "", "and no colour at all: that sheet said nothing about it");
+  assert.ok(gone.notes.indexOf(XP_JOHN_MISSING) >= 0, "and its Notes say so: " + gone.notes);
+  assert.strictEqual(gone.cust, "Customer Four", "the rest of it comes from the Production model");
+  assert.deepStrictEqual(withMissing.filter(r => r.kind === "section").map(r => r.section),
+    ["In production"], "and it lands in its own Production section, not a new one");
+  assert.deepStrictEqual(exportJohnRows([], {}, JCTX()), [], "nothing chosen, nothing to print");
+  assert.deepStrictEqual(exportJohnRows(["R1001"], {}, Object.assign(CTX(), { john: [] }))
+    .filter(r => r.kind === "job").map(r => r.missing), [true],
+    "and with no Production (2) sheet at all, every job prints as one that is not on it");
+  pass("a job Production (2) does not have is printed from the model, uncoloured and marked");
+
+  const jwb = await roundTrip(buildJohnWorkbook(johnRows, { who: "Pat Exporter", when: when }));
+  assert.deepStrictEqual(jwb.worksheets.map(w => w.name), ["John print sheet"], "one sheet, named for the print");
+  const jws = jwb.getWorksheet("John print sheet");
+  const jcells = r => [1, 2, 3, 4, 5, 6, 7, 8].map(c => String(jws.getCell(r, c).value == null ? "" : jws.getCell(r, c).value));
+  assert.deepStrictEqual(jcells(1),
+    ["Job no", "Ready to print", "Customer", "Phone no", "Area", "QUANTITY", "QUANTITY", "Notes"],
+    "the sheet's own two-row header, with QUANTITY over the two counts");
+  assert.strictEqual(jcells(2)[5], "Wnd");
+  assert.strictEqual(jcells(2)[6], "Drs");
+  assert.deepStrictEqual([1, 2, 3, 4, 5, 6, 7, 8].map(c => jws.getColumn(c).width), [11, 10, 20, 14, 12, 6, 5, 60],
+    "and the widths of the sheet it is a copy of");
+  assert.strictEqual(jcells(3)[0], "Ready to fit", "row 3 is the first section divider");
+  assert.strictEqual((jws.getCell(3, 1).font || {}).bold, true, "bold");
+  assert.strictEqual(((jws.getCell(3, 1).fill || {}).fgColor || {}).argb, "FFEFECE7", "on light grey");
+  assert.deepStrictEqual(jcells(4).slice(0, 5), ["R1002", "02-Apr", "Customer Two", PHONE, "Kerry"]);
+  assert.strictEqual(jws.getCell(4, 6).value, 5, "Wnd is a number");
+  assert.strictEqual(jws.getCell(4, 7).value, null, "and a zero count is left blank, as the sheet leaves it");
+  assert.strictEqual(((jws.getCell(4, 1).fill || {}).fgColor || {}).argb, "FFFFE699", "R1002's row is gold");
+  assert.strictEqual(((jws.getCell(4, 1).font || {}).color || {}).argb, "FFFF0000", "and its text is red");
+  assert.strictEqual(((jws.getCell(6, 1).font || {}).color || {}).argb, "FFFF3399", "R1001's is pink");
+  assert.strictEqual(((jws.getCell(6, 1).fill || {}).fgColor || {}).argb, "FFFFFF00", "on yellow");
+  assert.ok((jws.getCell(4, 1).border || {}).bottom, "every cell is bordered");
+  assert.strictEqual(jws.pageSetup.orientation, "landscape");
+  assert.strictEqual(jws.pageSetup.fitToWidth, 1, "fitted to one page across");
+  assert.strictEqual(jws.pageSetup.printTitlesRow, "1:2", "with the header repeated on every printed page");
+  assert.strictEqual(jws.views[0].ySplit, 2, "and frozen under the two header rows on screen");
+  const jstr = sheetStrings(jwb);
+  jstr.forEach(x => assert.strictEqual(String(x).toLowerCase().indexOf(EIR.toLowerCase()), -1,
+    "the John workbook leaked the eircode"));
+  assert.ok(jstr.some(x => String(x) === JPHONE), "and it carries Production (2)'s phone number");
+  pass("the John workbook: one sheet, the two-row header, the sheet's widths, colours and print setup");
+
+  const missWb = await roundTrip(buildJohnWorkbook(withMissing, { who: "Pat Exporter", when: when }));
+  const missWs = missWb.getWorksheet("John print sheet");
+  let missRow = 0;
+  missWs.eachRow({ includeEmpty: false }, (row, i) => { if (String(row.getCell(1).value) === "R1004") missRow = i; });
+  assert.ok(missRow, "the missing job is a row of its own in the file");
+  assert.strictEqual(((missWs.getCell(missRow, 1).font || {}).color || {}).argb, "FF6D6A62",
+    "printed grey, so the eye can see its line came from somewhere else");
+  assert.strictEqual((missWs.getCell(missRow, 1).font || {}).italic, true);
+  assert.strictEqual(((missWs.getCell(missRow, 1).fill || {}).fgColor || {}).argb, undefined,
+    "and with no fill of any kind");
+  pass("a job not on Production (2) prints grey and italic, with no colour borrowed from anywhere");
+
+  assert.strictEqual(exportJohnFilename("xlsx", when), "John print sheet 2026-09-07.xlsx");
+  assert.strictEqual(exportJohnFilename("pdf", when), "John print sheet 2026-09-07.pdf");
+  assert.strictEqual(exportLogFrom("xlsx", 3, "john"), "Excel · 3 jobs · John print sheet · with phone numbers");
+  assert.strictEqual(exportLogFrom("pdf", 1, "john"), "PDF · 1 job · John print sheet · with phone numbers");
+  assert.strictEqual(exportLogFrom("xlsx", 3), "Excel · 3 jobs",
+    "and the Default template's log line is exactly what it always was");
+  assert.strictEqual(exportLogFrom("xlsx", 3, "default"), "Excel · 3 jobs");
+  pass("the file name, and a log line that says in words that this file has phone numbers in it");
+
+  const johnBuf = await render(buildJohnDoc(johnRows,
+    { who: "Pat Exporter", when: when, company: "Costello Production" }));
+  const johnText = flat(pdfText(johnBuf));
+  ["R1001", "R1002", "R1003"].forEach(id =>
+    assert.ok(johnText.indexOf(id) >= 0, "the John PDF is missing job " + id));
+  ["Readytofit", "Inproduction", "Jobno", "Readytoprint", "Phoneno", "QUANTITY", "Wnd", "Drs", "Notes"]
+    .forEach(bit => assert.ok(squash(johnText).indexOf(bit) >= 0, "the John PDF is missing " + bit));
+  assert.ok(squash(johnText).indexOf(squash(JPHONE)) >= 0, "and the phone number is on the page");
+  assert.ok(squash(johnText).indexOf("Printed") >= 0, "with the printed-by footer");
+  assert.strictEqual(johnText.toLowerCase().indexOf(EIR.toLowerCase()), -1, "the John PDF leaked the eircode");
+  pass("the John PDF renders on A4 landscape with every job, every divider and the header band");
+
+  /* the Default template, with the John one sitting in the same file: still
+     neither a phone number nor an eircode, anywhere */
+  const cleanRows = exportRows([A, B, C, TALL], exportAllFields(), CTX());
+  assertNoValues(strings(cleanRows), "a Default row");
+  assertNoValues(sheetStrings(await roundTrip(buildWorkbook(cleanRows, opts))), "the Default workbook");
+  assertNoValues([flat(pdfText(await render(buildDocDefinition(cleanRows, pdfOpts))))], "the Default PDF");
+  assert.strictEqual(exportColumns(cleanRows, exportAllFields()).filter(c => c.key === "phone").length, 0);
+  assert.strictEqual(JSON.stringify(cleanRows).indexOf(JPHONE), -1,
+    "and Production (2)'s numbers do not reach a Default row either");
+  pass("the Default template still carries no phone number and no eircode of any kind");
+
+  /* the Flag column and chip in the Default export */
+  const flagCell = exportCell(cleanRows[0], { key: "flag", kind: "flag" });
+  assert.strictEqual(flagCell.text, "Trade order", "the word, always");
+  assert.strictEqual(flagCell.colour, "#FF3399", "in the sheet's own colour");
+  assert.strictEqual(exportCell(cleanRows[2], { key: "flag", kind: "flag" }).text, "",
+    "and nothing at all for a black row");
+  assert.strictEqual(exportCell({ flag: "hold" }, { key: "flag", kind: "flag" }).colour, "#1565C0",
+    "a flag with no hex still prints in a readable stand-in colour");
+  const withFlag = exportRows([A], ["job", "flag"], CTX());
+  assert.deepStrictEqual(Object.keys(withFlag[0]), ["id", "flag", "flagHex"]);
+  assert.deepStrictEqual(Object.keys(exportRows([A], ["job"], CTX())[0]), ["id"],
+    "and no flag at all when the field is not ticked");
+  pass("Flag is a Default field like any other: a word, its colour, and only when it is ticked");
 
   /* ---- 16. the standing assertions ---- */
   assert.strictEqual(FETCHES, 0, "no fetch() happened anywhere in this run");

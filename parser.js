@@ -45,6 +45,85 @@ function fillOf(cell) {
   return '';
 }
 
+/** Normalised font colour of a cell as RRGGBB, or '' when the cell says nothing
+    about its own colour (no font, no colour, or a colour this reader cannot
+    resolve). Theme colours go through the same palette and tint the fills use.
+
+    Two colours are deliberately not read at all. A hyperlink is drawn blue and
+    underlined by Excel itself, and theme 10 and 11 ARE those two hyperlink
+    colours - so a cell carrying a link, or painted in either of them, says
+    nothing about the job and would otherwise arrive here as "on hold". */
+function fontOf(cell) {
+  if (!cell) return '';
+  const v = cell.value;
+  if (cell.hyperlink || (v && typeof v === 'object' && v.hyperlink)) return '';
+  const f = cell.font;
+  const col = f && f.color;
+  if (!col) return '';
+  if (col.argb) return String(col.argb).slice(-6).toUpperCase();
+  if (col.theme !== undefined) {
+    if (col.theme === 10 || col.theme === 11) return '';       // hlink / followed hlink
+    return applyTint(THEME[col.theme] || '000000', col.tint || 0);
+  }
+  return '';                                  // indexed / unknown: say nothing rather than guess
+}
+
+/* ---- the row colour code --------------------------------------------------
+   The Production sheet says four things with the colour of a job row's TEXT,
+   and says them nowhere else on the sheet:
+
+     word        colour the office uses      hue range read here
+     ----------  --------------------------  -------------------
+     urgent      red (FF0000, C00000, …)     345-360 and 0-20
+     booked      green (00B050, 92D050, …)   75-170        (an exact delivery date is agreed)
+     trade       pink / magenta (FF3399,     275-345
+                 FF00FF, …)
+     hold        blue (00B0F0, 0070C0, …)    170-260
+
+   Ranges, not exact hex, because the colours are picked by hand out of Excel's
+   palette and drift: one row's "red" is FF0000 and the next is FF3300. A cell
+   with almost no colour in it (grey, black, white) is ordinary text and means
+   nothing, so saturation and lightness gate the hue before it is read at all.
+   Orange, yellow and violet fall through deliberately: the sheet does not use
+   them as a code, and guessing at one would invent a status.               */
+function hsl(hex) {
+  if (!/^[0-9A-F]{6}$/i.test(String(hex || ''))) return null;
+  const n = parseInt(hex, 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  if (!d) return { h: 0, s: 0, l: l };
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  return { h: h, s: s, l: l };
+}
+/** The flag word a text colour stands for, or '' for "no code here". */
+function flagOf(hex) {
+  const c = hsl(hex);
+  if (!c) return '';
+  if (c.s < 0.25 || c.l < 0.12 || c.l > 0.92) return '';   // grey, black, white: ordinary text
+  const h = c.h;
+  if (h >= 345 || h < 20) return 'urgent';
+  if (h >= 75 && h < 170) return 'booked';
+  if (h >= 170 && h < 260) return 'hold';
+  if (h >= 275 && h < 345) return 'trade';
+  return '';
+}
+/** Is this ink "the sheet said nothing here" - unset, or the black the rows
+    are written in? Grey, orange and everything else are somebody's decision,
+    even when they are not one of the four words, so they are left alone: the
+    customer cell is only asked when the job number itself is plain black. */
+function blackInk(hex) {
+  if (!hex) return true;
+  const c = hsl(hex);
+  return !!c && c.s < 0.2 && c.l < 0.2;
+}
+
 const GOLD = new Set(['FFE699', 'FFC000']);
 const YELLOW = new Set(['FFFF00']);
 /* "Cut" is a green the sheet paints on a product cell once that part has been
@@ -236,6 +315,98 @@ function templateForJob(ws, jobId) {
   return null;
 }
 
+/* ---- "Production (2)": John's own sheet -------------------------------------
+   Production (2) is not a copy of Production that happens to lag: it is a
+   separate sheet, kept by the office for the paper John works from, with its
+   own rows, its own order, its own sections and its own colouring. So it is
+   read on its own terms here and NOTHING from it is merged into the job model
+   above - a job's status, checkpoints and colour code still come from
+   Production alone, and John's print comes from this and nothing else.
+
+   The identity columns are the fixed ones of that sheet (C, G, I, J, K, M, N);
+   only the notes column is found by its header, because "Notes from Brendan's
+   office" has moved along the row before now.                               */
+const JOHN_SHEET = 'Production (2)';
+const JOHN_COLS = { id: 3, ready: 7, cust: 9, phone: 10, area: 11, wnd: 13, drs: 14 };
+
+/** The row's own fill: the job-number cell if it carries one, otherwise the
+    first of the eight printed cells that does - the office paints a whole row,
+    but not always every cell of it. */
+function johnFill(row) {
+  const first = fillOf(row.getCell(JOHN_COLS.id));
+  if (first && first !== 'FFFFFF') return first;
+  const cols = [JOHN_COLS.ready, JOHN_COLS.cust, JOHN_COLS.phone, JOHN_COLS.area,
+                JOHN_COLS.wnd, JOHN_COLS.drs];
+  for (const c of cols) {
+    const f = fillOf(row.getCell(c));
+    if (f && f !== 'FFFFFF') return f;
+  }
+  return '';
+}
+
+/** Production (2) as the rows John prints, in that sheet's own order.
+    [] when the workbook has no such sheet - never null, so a caller can
+    always iterate it. Each row:
+      { id, section, ready, cust, phone, area, wnd, drs, notes,
+        fillHex, inkHex, seq }                                              */
+function parseJohnSheet(wb) {
+  const ws = wb && wb.getWorksheet ? wb.getWorksheet(JOHN_SHEET) : null;
+  if (!ws) return [];
+  const maxR = ws.rowCount || 0;
+
+  /* the notes column, by its header, anywhere in the first six rows. The whole
+     width has to be searched: on the real sheet it is column BY, seventy-odd
+     columns out past the ones that are printed. */
+  let notesCol = 0;
+  const maxC = Math.min(ws.columnCount || 150, 150);
+  for (let r = 1; r <= Math.min(6, maxR) && !notesCol; r++) {
+    for (let c = 1; c <= maxC; c++) {
+      if (norm(cellText(ws.getRow(r).getCell(c))).indexOf('brendan') >= 0) { notesCol = c; break; }
+    }
+  }
+
+  /* this sheet's own sections, from its own divider rows */
+  const matrix = [];
+  for (let r = 1; r <= maxR; r++) {
+    const row = ws.getRow(r), line = [];
+    for (let c = 1; c <= 11; c++) line.push(cellText(row.getCell(c)));
+    matrix.push(line);
+  }
+  const B = blocksFromValues(matrix);
+  const sectionOf = {};
+  B.blocks.forEach(b => b.jobs.forEach(j => { sectionOf[j.row] = B.names[b.idx] || ''; }));
+
+  const out = [];
+  for (let r = 1; r <= maxR; r++) {
+    const row = ws.getRow(r);
+    const id = cellText(row.getCell(JOHN_COLS.id)).trim().toUpperCase();
+    if (!JOB_RE.test(id)) continue;
+    let ink = fontOf(row.getCell(JOHN_COLS.id));
+    if (blackInk(ink)) {
+      const alt = fontOf(row.getCell(JOHN_COLS.cust));
+      if (flagOf(alt)) ink = alt;
+    }
+    out.push({
+      id: id,
+      section: sectionOf[r] || '',
+      ready: cellDate(row.getCell(JOHN_COLS.ready)) || cellText(row.getCell(JOHN_COLS.ready)).trim(),
+      cust: cellText(row.getCell(JOHN_COLS.cust)).trim().slice(0, 70),
+      phone: cellText(row.getCell(JOHN_COLS.phone)).trim().slice(0, 40),
+      area: cellText(row.getCell(JOHN_COLS.area)).trim().slice(0, 70),
+      wnd: num(row.getCell(JOHN_COLS.wnd)),
+      drs: num(row.getCell(JOHN_COLS.drs)),
+      notes: notesCol ? cellText(row.getCell(notesCol)).trim().slice(0, 300) : '',
+      fillHex: johnFill(row),
+      inkHex: flagOf(ink) ? ink : '',
+      seq: out.length
+    });
+  }
+  /* the section names this sheet uses, in the order it uses them */
+  out.sections = [];
+  out.forEach(x => { if (x.section && out.sections.indexOf(x.section) < 0) out.sections.push(x.section); });
+  return out;
+}
+
 function parseWorkbook(wb) {
   const prodSheet = wb.getWorksheet('Production');
   CUT = cutColours(prodSheet);          // the sheet's legend decides, once per workbook
@@ -272,6 +443,20 @@ function parseWorkbook(wb) {
       j.src[LABEL[name]] = r;
       if (rowDone) j.done = 1;
       if (j.sheets.indexOf(LABEL[name]) < 0) j.sheets.push(LABEL[name]);
+
+      /* The colour code is read from the Production sheet alone: Production (2)
+         is a copy of it and is repainted by hand, so it is never asked. The
+         job-number cell is the one that is always filled in; when its font is
+         black (or has no colour of its own) the customer cell is asked instead,
+         because the two are coloured by hand and do not always agree. */
+      if (cpHere && !j.flag) {
+        let hex = fontOf(row.getCell(3)), fl = flagOf(hex);
+        if (!fl && blackInk(hex) && m.ident.cust) {
+          const h2 = fontOf(row.getCell(m.ident.cust)), f2 = flagOf(h2);
+          if (f2) { hex = h2; fl = f2; }
+        }
+        if (fl) { j.flag = fl; j.flagHex = hex; }
+      }
 
       for (const k in m.ident) { const v = cellText(row.getCell(m.ident[k])).trim(); if (v && !j[k]) j[k] = v.slice(0, 70); }
       for (const k in m.dates) { const v = cellDate(row.getCell(m.dates[k])); if (v && !j['d_' + k]) j['d_' + k] = v; }
@@ -334,11 +519,21 @@ function parseWorkbook(wb) {
     return {
       id, cust: j.cust || '', area: j.area || '', eir: j.eir || '', off: j.off || '',
       colour: j.colour || '', ph3: ph.length >= 3 ? ph.slice(-3) : '',
+      /* The whole phone number, as the sheet holds it. It exists for exactly
+         one reader: the John print template, which the owner sanctioned on
+         2026-09-09 to carry it (docs/specs/2026-09-09-john-template.md, §3).
+         Nothing else may read `ph` - the dashboard shows `ph3`, and every other
+         export path reads neither. The eircode is never carried anywhere. */
+      ph: String(j.phone || '').trim().slice(0, 40),
+      /* the colour of the row's own text on Production: '' / urgent / booked /
+         trade / hold, with the hex that said so, for the exports */
+      flag: j.flag || '', flagHex: j.flagHex || '',
       wnd: j.wnd || 0, drs: j.drs || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
       prods: prods, cp: j.cp,
       glass: j.glass, notes: j.notes, sheets: j.sheets, src: j.src,
-      urg: URG_RE.test(cmtxt) ? 1 : 0, done: j.done || 0,
+      /* the word in a comment, or the sheet's own red text: either says urgent */
+      urg: (URG_RE.test(cmtxt) || j.flag === 'urgent') ? 1 : 0, done: j.done || 0,
       cat: PRODCAT[id] || 'past',
       blk: (B.blk[id] === undefined ? -1 : B.blk[id]),
       seq: (B.order[id] === undefined ? 99999 : B.order[id]),
@@ -349,7 +544,9 @@ function parseWorkbook(wb) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { parseWorkbook, mapSheet, fillOf, JOB_RE, blocksFromValues, templateForJob, cutColours };
+if (typeof module !== 'undefined') module.exports = { parseWorkbook, parseJohnSheet, mapSheet, fillOf, fontOf, flagOf, blackInk, JOB_RE, URG_RE, blocksFromValues, templateForJob, cutColours };
 if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet;
+  window.fontOf = fontOf; window.flagOf = flagOf; window.blackInk = blackInk;
+  window.parseJohnSheet = parseJohnSheet;
   window.blocksFromValues = blocksFromValues; window.templateForJob = templateForJob;
   window.cutColours = cutColours; }

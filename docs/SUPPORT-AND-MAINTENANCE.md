@@ -252,6 +252,7 @@ Kept in the session's scratchpad directory, never checked in:
 | List | Site | Written by | Columns |
 |---|---|---|---|
 | `Dashboard phases` | the workbook's own site | office (dashboard) | Title (job, unique), Phase, PhaseName, SetBy, SetAt |
+| `Dashboard print notes` | the workbook's own site | office (dashboard), through `listUpsert` only | Title (job, unique), Note (multi-line, **not** enhanced rich text), By, At — the extra line printed on a John print sheet; never written into the workbook |
 | `Glass station` | `Floor stations` (or the interim fallback) | feeder (job facts + seeded counters); tablet (counters, By/At, last-touch) | Title, Job, Customer, GlassType (`GLASS`), Total, Seq, Active, FedAt, FedBy — feeder; Cut, Hotmelt, Glazed, CutBy/At, HotmeltBy/At, GlazedBy/At, DoneBy, DoneAt — tablet, or the feeder only while seeding |
 | `Station people` | `Floor stations` | admin, by hand in SharePoint | Title, Station, Stages, PIN, Active |
 | `Station log` | `Floor stations` | tablet only | Title (job), Station, GlassType, Stage, From, To, Who, At |

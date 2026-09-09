@@ -82,10 +82,11 @@ doors — for the current view.
 
 | Control | What it does |
 |---|---|
+| Select all shown (n) | Appears at the left of the toolbar whenever a tile, a category or a search is narrowing the list: one tick picks every job on screen, one untick clears them again. It is not there when the whole sheet is showing, because then "all shown" and "all" are the same thing |
 | Search box | Filters the job list by job number, customer, county, eircode or any comment |
 | View | Switches between the flat list, the sheet's own section order, or a saved custom grouping |
-| Show | Switches the main panel between **All jobs** and the **Glass station** board |
-| Floor log | Opens the read-only Floor log window (§3.9) |
+| Show | Switches the main panel between **All jobs**, the **Glass station** board (§3.10) and the **John print sheet** (§3.9) |
+| Floor log | Opens the read-only Floor log window (§3.11) |
 | Categories… | Manage custom groupings used by the View dropdown |
 | Sort | Reorders the job list |
 
@@ -99,6 +100,30 @@ counts, product component counts (Frame · Sash · Transom) and a chip for
 every other workbook sheet the job appears on. Row colours and chips mirror
 the sheet's own colouring where relevant. Ticking the box on the left of one
 or more rows arms the selection wheel (§3.5).
+
+**The colour chip after a job number.** The Production sheet says four things
+with the colour of a job row's *text*, and the dashboard reads them back and
+writes them out in words, so nobody has to tell red from green to know what a
+row means:
+
+| Row text on the sheet | Chip |
+|---|---|
+| red | **Urgent** |
+| green | **Booked** — an exact delivery date is agreed |
+| pink / magenta | **Trade order** |
+| blue | **On hold** |
+
+A red row counts as urgent in the dashboard just as the word "urgent" in the
+Comment column always has. Black or grey text means nothing in particular and
+gets no chip. The same chip appears at the top of the job's drawer.
+
+**Selecting a whole section.** In a grouped view (View ▸ sheet order, or any
+saved grouping) each section header carries a **Select all n** tick box: it
+picks every job that section is currently showing, including after you have
+typed in the section's own search box. Ticking part of a section by hand
+leaves the box in its half-ticked state rather than claiming either way. In
+the flat list the same job is done by **Select all shown (n)** in the toolbar
+(§3.3).
 
 ### 3.5 The selection wheel
 
@@ -148,7 +173,7 @@ in Checkpoints above.
 shows the same three stages the floor tablet uses — Cutting, Hotmelting,
 Glazing — each with who last moved it and when, a short timeline of the most
 recent taps on this job (capped at twelve lines), and a "Full log" link into
-the Floor log window (§3.9).
+the Floor log window (§3.11).
 
 ![The drawer's Glass station section with the timeline](img/guide-master-drawer-station.png)
 *The Glass station section of the drawer, showing who moved each counter, when, and the recent timeline.*
@@ -180,15 +205,62 @@ touches any date.
 *The Alerts window, listing current subscriptions.*
 
 - **Export** — download the current jobs (or just the ticked ones) as an
-  Excel workbook or a PDF, with filters and a field picker. No phone number
-  and no eircode are ever included in any export, in any format, under any
-  filter. Every export is recorded once in the Changes log — nothing else
-  about what was exported is stored anywhere.
+  Excel workbook or a PDF. The window opens on a **Template** choice:
+
+  - **Default** — filters, a field picker and a card or table layout, exactly
+    as before. **No phone number and no eircode** are ever included in it, in
+    any format, under any filter. The field picker also offers **Flag**, the
+    row colour code from §3.4, which comes out as a column with the word in
+    the sheet's own colour.
+  - **John print sheet** — the `Production (2)` sheet as it prints for John,
+    and nothing to configure: job no, ready to print, customer, **phone no**,
+    area, windows, doors and the notes from Brendan's office, in that sheet's
+    own order, with its section dividers, its row fills and its row text
+    colours. Pick the scope (the ticked jobs, or everything the view you are
+    on is showing) and Excel or PDF, then **Continue to notes**. A job you
+    have picked that is not on `Production (2)` is still printed — from the
+    main Production sheet, in grey, marked "not on John's sheet".
+
+  Every export is recorded once in the Changes log — nothing else about what
+  was exported is stored anywhere. A John print's log line says in words that
+  the file carries phone numbers, because it is the only one that does.
 
 ![The Export window](img/guide-master-export.png)
 *The Export window: format, filters and the field picker.*
 
-### 3.9 Show ▸ Glass station board
+**Print notes (John print sheet only).** "Continue to notes" opens one row per
+job in the print: the job number, the customer, its colour chip, that job's
+note from `Production (2)` in grey (which you cannot change from here, with the
+main sheet's comment underneath it when the two differ) and a box for one extra
+note of your own, already filled in with whatever was typed last time.
+**Print** saves the notes you changed and then downloads the file. The notes
+are kept by the dashboard in SharePoint — **nothing here is ever written into
+the Excel file**, `Production (2)` included — and they are printed at the end
+of the Notes column, after the sheet's own. If a note cannot be saved, its row
+says "not saved" and the file is still made with what you typed. Escape or
+**Cancel** backs out without printing; clicking the greyed-out background asks
+first if you have typed anything. Each job's note also shows, read-only, under
+Comments in that job's drawer.
+
+### 3.9 Show ▸ John print sheet
+
+Switching the **Show** dropdown to **John print sheet** replaces the job list
+with `Production (2)` — the separate sheet the office keeps for the paper John
+works from. It is shown exactly as that sheet has it: its own rows, its own
+order, its own sections, and every row in its own fill and text colour, with
+the colour's word beside it. The columns are the eight that get printed: job
+no, ready to print, customer, phone no, area, Wnd, Drs, and the notes from
+Brendan's office.
+
+The search box at the top narrows it. Each row has a tick box and each section
+a **Select all n**, exactly as the grouped job list does, and what you tick
+feeds the same selection wheel. Opening **Export** from here starts on the John
+print sheet template.
+
+This view is read-only: there is no drawer, nothing can be dragged, and nothing
+in it writes to the workbook. It shows whatever the last refresh downloaded.
+
+### 3.10 Show ▸ Glass station board
 
 Switching the **Show** dropdown to **Glass station** replaces the job list
 with a read-only board: one card per active job, in the office's own order,
@@ -201,7 +273,7 @@ it is on screen. Nothing on it can be clicked to change anything.
 ![Show ▸ Glass station board](img/guide-master-board.png)
 *The office's read-only Glass station board.*
 
-### 3.10 The Floor log window
+### 3.11 The Floor log window
 
 Opened from the **Floor log** button or a drawer's "Full log" link, this
 lists every recorded floor tap, newest first, with filters for person,
@@ -317,7 +389,7 @@ cannot reach the Master dashboard or any other station's data.
    from either dashboard page. The tablet picks up a new row, a stage
    change, or a PIN change within ten minutes on its own, or immediately on
    reload.
-6. **Seeing who did what.** Use the Floor log window (§3.10) in the office,
+6. **Seeing who did what.** Use the Floor log window (§3.11) in the office,
    or the drawer's Glass station timeline for one job at a time.
 
 ---
@@ -343,9 +415,16 @@ cannot reach the Master dashboard or any other station's data.
 
 - The `Production` sheet is only ever changed by a checkpoint colour or a
   whole-row section move — never a new row, a new sheet, or any other cell.
-- No phone number and no eircode ever leave the app in an export, in any
-  format, under any filter.
+- No eircode ever leaves the app in an export, in any format, under any
+  filter, on any template.
+- No phone number leaves the app either, except on the **John print sheet**,
+  which the owner asked for on 2026-09-09 and which is the only export that
+  carries one. Its log line says so in words.
 - Every export is logged once; nothing else about the exported data is kept.
+- Print notes are kept by the dashboard in SharePoint and are never written
+  into the Excel file — not into `Production (2)` either.
+- The `Production (2)` sheet is only ever read, never written, by anything in
+  the dashboard.
 - Only the tablet ever writes the floor's own counters, By/At pairs, or log
   lines — the office never does, with the single exception of seeding a
   brand-new or never-tapped row from the office's own checkpoints.

@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 const fs = require('fs');
-const { parseWorkbook } = require('./parser.js');
+const { parseWorkbook, URG_RE } = require('./parser.js');
 
 (async () => {
   const wb = new ExcelJS.Workbook();
@@ -15,7 +15,13 @@ const { parseWorkbook } = require('./parser.js');
     ['total jobs',        jobs.length,                    py.length],
     ['on Production',     count(jobs, j => j.cat !== 'past'), count(py, j => j.cat !== 'past')],
     ['gold / done',       count(jobs, j => j.done),        count(py, j => j.done)],
-    ['urgent',            count(jobs, j => j.urg),         count(py, j => j.urg)],
+    /* The Python reference only ever read the word in a comment. Since
+       2026-09-09 j.urg is also set by the sheet's red row text, which the
+       reference knows nothing about - so the comparable number is the word on
+       its own, and the colour-coded rows are reported separately below.
+       j.flag / j.flagHex have no counterpart in the reference at all. */
+    ['urgent (comment)',  count(jobs, j => URG_RE.test(j.notes.map(n => n.t).join(' '))),
+                          count(py,   j => j.urg)],
     ['with notes',        count(jobs, j => j.notes.length), count(py, j => j.notes.length)],
     ['in fabrication',    count(jobs, j => j.prods.some(p => p.st.indexOf('process') >= 0)),
                           count(py,   j => j.prods.some(p => (p.st||[]).indexOf('process') >= 0))],
@@ -27,6 +33,10 @@ const { parseWorkbook } = require('./parser.js');
     const ok = a === b; if (!ok) allMatch = false;
     console.log('  ' + k.padEnd(20) + String(a).padStart(8) + String(b).padStart(18) + '   ' + (ok ? 'match' : ' <-- DIFFERS'));
   }
+  const flags = {};
+  jobs.forEach(j => { if (j.flag) flags[j.flag] = (flags[j.flag] || 0) + 1; });
+  console.log('\n  row colour code:', JSON.stringify(flags), '(no counterpart in the reference)');
+  console.log('  urgent, word or red row text:', count(jobs, j => j.urg));
   console.log('\n  categories JS  :', JSON.stringify(cats(jobs)));
   console.log('  categories PY  :', JSON.stringify(cats(py)));
 

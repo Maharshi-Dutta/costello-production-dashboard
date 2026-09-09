@@ -47,15 +47,22 @@ the same four steps above, done once by a tenant administrator.
 
 ## "List not found"
 
-The dashboard never creates a SharePoint list — `Dashboard phases`, `Glass
-station`, `Station people` and `Station log` are all created by hand by the
-admin, once (see `docs/STATIONS.md` → "Setting up the glass station"). If the
-dashboard or the tablet says a list is missing:
+The dashboard never creates a SharePoint list — `Dashboard phases`,
+`Dashboard print notes`, `Glass station`, `Station people` and `Station log`
+are all created by hand by the admin, once (see `docs/STATIONS.md` → "Setting
+up the glass station"). If the dashboard or the tablet says a list is missing:
 
 - Check the list exists in the right site, with the exact display name the
-  spec calls for (`Dashboard phases` in the workbook's own site; the other
-  three — `Glass station`, `Station people`, `Station log` — in the separate
-  `Floor stations` site, not the workbook's).
+  spec calls for (`Dashboard phases` and `Dashboard print notes` in the
+  workbook's own site; the other three — `Glass station`, `Station people`,
+  `Station log` — in the separate `Floor stations` site, not the workbook's).
+- `Dashboard print notes` (2026-09-09) is a plain list with Title (the job
+  number, "enforce unique values" on), `Note` (multiple lines of text, with
+  **"Use enhanced rich text" turned OFF** — the dashboard reads and writes
+  plain text, and rich text comes back as HTML in the printed note), `By` and
+  `At` (single line of text). Without it the John print sheet still prints —
+  the notes typed in the window go into the file, they just are not
+  remembered for next time.
 - Check the columns match the spec exactly (see
   `docs/specs/2026-09-07-phases-list.md` and `docs/STATIONS.md`) — the code
   reads columns by name and will not repair a mis-typed one.

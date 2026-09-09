@@ -88,11 +88,15 @@ Two kinds of Graph scope exist in `graph.js`:
   header for any path containing `/lists`, since a stale workbook session id
   on a list request earns an unrelated `InvalidSession` error.
 
-Lists in use: `Dashboard phases` (hand-set phase per job) and the floor's
-three, shipped 2026-09-08: `Glass station` (job/glass facts plus the floor's
-counters), `Station people` (who may record which stage) and `Station log`
+Lists in use: `Dashboard phases` (hand-set phase per job), `Dashboard print
+notes` (2026-09-09 — one extra note per job for the John print template:
+Title = job number, `Note`, `By`, `At`; written only through `listUpsert`,
+read only when the print-notes window opens) and the floor's three, shipped
+2026-09-08: `Glass station` (job/glass facts plus the floor's counters),
+`Station people` (who may record which stage) and `Station log`
 (one line per counter write) — see `docs/STATIONS.md`.
-`Dashboard phases` lives in the same SharePoint site as the workbook. The
+`Dashboard phases` and `Dashboard print notes` live in the same SharePoint
+site as the workbook. The
 floor's three are meant to live in a *separate* site, `Floor stations`, so the
 station account never needs any permission on the workbook's own site — but
 creating that site needs an administrator the owner has not got yet, so for now
@@ -163,9 +167,9 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | module | responsibility |
 |---|---|
 | `graph.js` | MSAL sign-in, token acquisition (with the quiet/popup split above), all Graph HTTP calls (`call()`), workbook session handling and retry-on-`InvalidSession`, `findFile()`/download/version history, the dashboard-owned-sheet upserts, `moveJobRow()` and its supporting row-capture/write/border functions, the SharePoint list layer (`listId`/`listItems`/`listUpsert`/`listDelete`/`listAdd`/`listPatch`/`listDelta`), batching (`batchGet`/`batchWrite`/`batchRun`) |
-| `parser.js` | `parseWorkbook()`: turns a downloaded workbook into the job model; section/divider detection (`blocksFromValues`); fill-colour reading and the Cut/process/done ranking; `mapSheet()` header detection; `templateForJob()` (captures formatting for a move) |
+| `parser.js` | `parseWorkbook()`: turns a downloaded workbook into the job model; section/divider detection (`blocksFromValues`); fill-colour reading and the Cut/process/done ranking; **font-colour reading and the row colour code** (`fontOf`/`flagOf` → `j.flag`/`j.flagHex`, by hue range, hyperlinks and the two hyperlink theme colours excluded); **`parseJohnSheet()`** — "Production (2)" read on its own terms for the John print sheet, and never merged into the job model; `mapSheet()` header detection; `templateForJob()` (captures formatting for a move) |
 | `checkpoints.js` | pure logic only, no DOM: the Excel-colour-vs-stored-count merge rule (`itemState`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`), and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
-| `export.js` | pure logic only, no DOM, no network: filtering (`exportFilter`), row shaping, filename/summary text, building an ExcelJS workbook and a pdfmake document definition; the phone/eircode exclusion lives here as a hard rule with a standing test |
+| `export.js` | pure logic only, no DOM, no network: filtering (`exportFilter`), row shaping, filename/summary text, building an ExcelJS workbook and a pdfmake document definition; §7b holds the fixed **John print sheet** (`exportJohnRows`/`buildJohnWorkbook`/`buildJohnDoc`), built from Production (2)'s own rows and the one export the owner sanctioned to carry a phone number; the eircode exclusion, and the phone exclusion from every other template, live here as hard rules with standing tests |
 | `app.js` | everything with a DOM: rendering the job list/drawer/windows, wiring every tap to a write, `PENDING`/`PENDV`/`PENDA` optimistic holds, sign-in/session boot, the phase-list read/write UI, the Export/Alerts/Versions windows, the radial selection menu, build-freshness polling |
 | `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassTotal`, `officeSeed`, `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `boardFilter`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
 | `station.js` | the glass station page UI (shipped 2026-09-08), using `CW` from `graph.js` and the pure functions from `station-core.js` |
@@ -190,6 +194,19 @@ v3 for the binding spec (the code wins over any of them where they disagree).
   `graph.js`) is written with a leading apostrophe, Excel's own way of
   forcing text interpretation, so a job note like `07/04` doesn't silently
   become a date on the next write.
+- **Contact details leave the app in exactly one place.** The eircode
+  (`j.eir`) is never read by any export path, in any format. The phone number
+  is carried by the **John print sheet alone**, sanctioned by the owner on
+  2026-09-09: it comes from Production (2)'s own Phone column via
+  `parseJohnSheet`, with `j.ph` read only by `exportJohnRows` and only for a
+  job Production (2) does not have. The Default template's builders read
+  neither, and every John print's `Dashboard Log` line says in words that the
+  file has phone numbers in it.
+- **Production and Production (2) are two sheets, not one.** Production is the
+  job model, its colours and its status; Production (2) is the paper John
+  works from. Neither is read for the other: the John print sheet view and the
+  John print come from `parseJohnSheet` alone, and the job model comes from
+  `parseWorkbook` alone.
 - **Writes are serialised per sheet (and per list).** `serialised(key, fn)`
   chains every write against a given dashboard sheet (or `"list:" +
   displayName` for a SharePoint list) into one promise queue, because every
@@ -209,6 +226,8 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | email subscriptions | `Dashboard Alerts` sheet |
 | admin address and other read-only config | `Dashboard Config` sheet (read by the dashboard, never written) |
 | hand-set phase per job | `Dashboard phases` SharePoint list (not the workbook) |
+| the extra note printed on a John print | `Dashboard print notes` SharePoint list (not the workbook) — shipped 2026-09-09 |
+| the rows John's paper is printed from | never stored — re-read from the `Production (2)` sheet of every download into `JOHNROWS` |
 | glass station job facts and floor counters | `Glass station` SharePoint list, in the separate `Floor stations` site — shipped 2026-09-08 |
 | who may record which stage on the floor | `Station people` SharePoint list, same site — shipped 2026-09-08 |
 | who moved which counter, and when | `Station log` SharePoint list, same site; written by the tablet, read by the master, never deleted from — shipped 2026-09-08 |

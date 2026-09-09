@@ -24,6 +24,46 @@ const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep
    empty states and the reset in renderChips all follow from this array.
    SHEETNAMES stays exactly as it was, for the export filter and the row chips. */
 const STATIONS = [["glass", "Glass station"]];
+/* Everything the Show dropdown can put in the job list's place. The floor
+   stations, and then the John print sheet - which is not a station at all: it
+   is the office's own second sheet, "Production (2)", shown on its own terms
+   (see JOHNROWS below). Anything keyed here that is not in STATIONS must never
+   reach the station polling, feeding or list code. */
+const BOARDS = STATIONS.concat([["john", "John print sheet"]]);
+/* "Production (2)" as parseJohnSheet last read it: the rows John's paper is
+   printed from, in that sheet's own order. Never merged into ALL. */
+let JOHNROWS = [];
+
+/* ---- the row colour code ----
+   The Production sheet says four things with the colour of a job row's text.
+   parser.js reads it into j.flag (the word) and j.flagHex (the colour that said
+   so). Everywhere it is shown, the WORD is shown: the colour only ever goes
+   with it, because some of the people reading these screens and printouts
+   cannot tell red from green. */
+const FLAGWORD = { urgent: "Urgent", booked: "Booked", trade: "Trade order", hold: "On hold" };
+/* what to draw it in when the sheet's own hex is missing - close to the
+   colours the office uses, and readable on both themes */
+const FLAGINK = { urgent: "var(--urgent)", booked: "var(--green)", trade: "#B5179E", hold: "var(--single)" };
+/* the sheet's own hex, pushed into a readable range for whichever theme is on
+   (inkFor, below) - the exported FILE always keeps the sheet's hex exactly */
+const flagInk = j => inkFor((j && j.flagHex) || "", false) || (FLAGINK[j && j.flag] || "var(--ink)");
+/** Tick or untick a whole list of jobs at once - a section, or everything the
+    list is showing. Two hundred jobs is two hundred assignments and ONE draw,
+    which is the whole reason this is a function and not a loop that calls
+    renderAll each time round. Hands back how many are ticked afterwards. */
+function pickMany(ids, on) {
+  (ids || []).forEach(id => { if (on) state.picked[id] = 1; else delete state.picked[id]; });
+  renderAll();
+  return Object.keys(state.picked).length;
+}
+
+/** The little chip after a job number, in the list and at the head of the
+    drawer. Nothing at all when the row's text is plain black. */
+function flagChip(j) {
+  if (!j || !j.flag || !FLAGWORD[j.flag]) return "";
+  return '<span class="badge flagchip" style="color:' + flagInk(j) + '" title="The colour of this row on the Production sheet">' +
+    esc(FLAGWORD[j.flag]) + "</span>";
+}
 
 let ALL = [], PRODMAP = null, lastStamp = null, busy = false;
 /* SharePoint takes ~35s to write our change into the downloadable file, while
@@ -662,7 +702,10 @@ let STATION_SITE_GEN = 0;               // which site the tokens in hand belong 
 
 /** Is anyone actually looking at the floor's data right now? */
 function stationWatching() {
-  if (state.board) return true;
+  /* the John print sheet is a board in the same slot, but it is the office's
+     own second sheet: nothing on it can change because the floor tapped
+     something, so it is no reason to poll the floor six times a minute */
+  if (state.board && state.board !== "john") return true;
   if ($("#lhost")) return true;
   const j = state.sel ? byId(state.sel) : null;
   return !!(j && typeof ST !== "undefined" && ST.glassTotal(j) > 0);
@@ -1037,6 +1080,10 @@ async function load(reason, force) {
     const prev = ALL;
     const parsed = parseWorkbook(wb);
     BLOCKNAMES = parsed.blockNames || [];
+    /* "Production (2)" on its own terms: John's own sheet, read straight out
+       of the same download and never merged into the job model above. It is
+       what the John print sheet view shows and what a John print prints. */
+    JOHNROWS = parseJohnSheet(wb);
     /* the checkpoint counts, read before the held ticks are applied: a hold is
        let go the moment the file agrees with it, and that comparison needs the
        counts from this download, not the ones from the last */
@@ -1742,6 +1789,10 @@ let XLOGO = null;                  // assets/logo.png as a data URL, when the fi
 
 function xpNewState() {
   return { format: "xlsx", layout: "cards", fields: exportAllFields(), f: exportDefaults(), preset: "",
+           /* "default" is everything the window has always done; "john" is the
+              fixed print layout, which has no field picker and no card/table
+              choice because its whole point is to come out the same every time */
+           template: "default",
            /* which groups are expanded: kept here rather than left to <details>,
               because a chip click redraws the window and would otherwise fold
               the group the person was working in */
@@ -1811,6 +1862,9 @@ function xpLoadPdf() {
 /** Everything export.js needs to know about this dashboard, right now. */
 function xpCtxNow() {
   return { all: live(), view: filtered(), picked: state.picked, sections: BLOCKNAMES,
+           /* Production (2)'s own rows, for the John print sheet and nothing
+              else - no Default export reads them */
+           john: JOHNROWS,
            comments: id => commentsFor(id), alerts: id => alertsFor(id) };
 }
 const xpMatched = () => exportJobs(xpCtxNow(), XSTATE.f);
@@ -1856,6 +1910,11 @@ const xpGroup = (title, inner, key) =>
 
 function renderExportWindow() {
   if (!XSTATE) XSTATE = xpNewState();
+  /* opened from the John print sheet view, the window OPENS on that template -
+     there is nothing else it could sensibly mean from in there. Only on the way
+     in, though: this function re-runs on every click inside the window, and
+     forcing it every time would make the Template choice unclickable. */
+  if (state.board === "john" && !$("#xhost")) XSTATE.template = "john";
   let host = $("#xhost");
   if (!host) { host = document.createElement("div"); host.id = "xhost"; document.body.appendChild(host); }
   const keep = $("#xbody") ? $("#xbody").scrollTop : 0;
@@ -1868,23 +1927,37 @@ function renderExportWindow() {
     : '<span class="xnone">The sheet has no sections yet.</span>';
 
   const counties = xpCounties(), prods = xpProductNames(), glass = xpGlassNames();
+  const john = XSTATE.template === "john";
 
   host.innerHTML = '<div class="scrim" id="xscrim"></div><div class="logwin xwin">' +
     '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Export</div>' +
-      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">Download the jobs you choose. ' +
-      'No phone numbers and no eircodes are ever included.</div></div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + (john
+        ? "“Production (2)” as it prints for John, with the phone numbers. Eircodes are never included."
+        : "Download the jobs you choose. No phone numbers and no eircodes are ever included.") +
+      '</div></div>' +
       '<button class="ghost" id="xclose">Close</button></div>' +
     '<div class="logbody xbody" id="xbody">' +
 
       '<div class="xsec">' +
+        xpRow("Template", "template", XSTATE.template, [["default", "Default"], ["john", "John print sheet"]]) +
+        (john ? '<div class="xnote2">Fixed layout, printed from the <b>Production (2)</b> sheet: job no, ' +
+                'ready to print, customer, phone no, area, windows, doors and the notes from Brendan’s ' +
+                'office — in that sheet’s own order, with its section dividers, its row colours and its ' +
+                'text colours. The field picker and the PDF layout do not apply. A chosen job that is not ' +
+                'on that sheet is printed in grey, marked “not on John’s sheet”.</div>' : "") +
         xpRow("Format", "format", XSTATE.format, [["xlsx", "Excel workbook"], ["pdf", "PDF"]]) +
-        (XSTATE.format === "pdf"
+        (XSTATE.format === "pdf" && !john
           ? xpRow("PDF layout", "layout", XSTATE.layout, [["cards", "Job cards"], ["table", "Table"]])
           : "") +
-        xpRow("Scope", "f.scope", f.scope, [["view", "What I see now"], ["ticked", "Ticked jobs (" + nPicked + ")"], ["sections", "Sections…"]]) +
-        (f.scope === "sections" ? '<div class="xrow"><span class="xlab"></span><span class="xpick">' + sectionPick + "</span></div>" : "") +
+        (john
+          ? xpRow("Scope", "f.scope", f.scope === "ticked" ? "ticked" : "view",
+                  [["view", state.board === "john" ? "All of John’s sheet" : "What I see now"],
+                   ["ticked", "Ticked jobs (" + nPicked + ")"]])
+          : xpRow("Scope", "f.scope", f.scope, [["view", "What I see now"], ["ticked", "Ticked jobs (" + nPicked + ")"], ["sections", "Sections…"]])) +
+        (!john && f.scope === "sections" ? '<div class="xrow"><span class="xlab"></span><span class="xpick">' + sectionPick + "</span></div>" : "") +
       "</div>" +
 
+      (john ? "" :
       xpGroup("Filters", '<div class="xsec">' +
         xpRow("Ready to deliver", "f.ready", f.ready, XP_TRI) +
         xpRow("Urgent", "f.urgent", f.urgent, [["", "Any"], ["true", "Urgent only"]]) +
@@ -1946,11 +2019,12 @@ function renderExportWindow() {
           '<button class="xchip" id="xpsave">Save</button>' +
         "</span></div>" +
         '<div class="xnote2">A preset remembers the filters, the fields and the format. It never holds job data.</div>' +
-      "</div>", "presets") +
+      "</div>", "presets")) +
 
     "</div>" +
     '<div class="foot xfoot"><span id="xcount">…</span>' +
-      '<button class="btn" id="xdl">Download</button></div>' +
+      (john ? '<button class="btn" id="xnotes">Continue to notes</button>'
+            : '<button class="btn" id="xdl">Download</button>') + "</div>" +
     "</div>";
 
   if ($("#xbody")) $("#xbody").scrollTop = keep;
@@ -1992,6 +2066,17 @@ function xpDatePreset(key, kind) {
     the PDF as a cover page with nothing behind it, so the reason is shown
     beside the count rather than found out the hard way. */
 function xpUpdateCount() {
+  /* the John print sheet has no fields to tick and no layout to get wrong: the
+     only question it can fail on is whether there is a job in the scope */
+  if (XSTATE.template === "john") {
+    let jn = 0;
+    try { jn = xpJohnIds().length; } catch (e) { jn = 0; }
+    const jc = $("#xcount");
+    if (jc) jc.textContent = jn + " job" + (jn === 1 ? "" : "s") + (jn ? "" : " — nothing to print");
+    const jb = $("#xnotes");
+    if (jb) jb.disabled = XBUSY || !jn;
+    return jn;
+  }
   let n = 0, jobs = [];
   try { jobs = xpMatched(); n = jobs.length; } catch (e) { jobs = []; n = 0; }
   let can = { ok: false, why: "no jobs match" };
@@ -2061,6 +2146,9 @@ function xpWire(host) {
     renderExportWindow();
   };
   if ($("#xdl")) $("#xdl").onclick = () => xpDownload();
+  /* the John print sheet never downloads straight from here: the notes window is
+     the last step, and it is what builds the file */
+  if ($("#xnotes")) $("#xnotes").onclick = () => openNotesWindow();
 }
 
 /** Build the file, hand it to the browser, then write the one log line.
@@ -2068,6 +2156,7 @@ function xpWire(host) {
     until the bytes have actually been handed over. */
 async function xpDownload() {
   if (XBUSY) return null;
+  if (XSTATE.template === "john") return null;     // that file is built by the notes window
   const ctx = xpCtxNow(), f = XSTATE.f;
   const jobs = exportJobs(ctx, f);
   const rows = exportRows(jobs, XSTATE.fields, ctx);
@@ -2106,6 +2195,422 @@ async function xpDownload() {
   if ($("#xdl")) $("#xdl").textContent = "Download";
   xpUpdateCount();
   return name;
+}
+
+/* ---------- the John print sheet and its notes -------------------------------
+   A second, fixed export layout (export.js §7b) plus the one window that
+   drives it. Two things about it are worth having in front of you before
+   changing a line of this block:
+
+   1. It is the ONLY export that carries a phone number. The owner sanctioned
+      that on 2026-09-09 for this template alone; the eircode is not carried
+      here or anywhere else. Every John print writes one Dashboard Log line
+      that says, in words, that the file has phone numbers in it.
+   2. The notes people type here are the dashboard's, not the sheet's. They go
+      to the SharePoint list "Dashboard print notes" - Title = job number,
+      Note, By, At - through listUpsert and nothing else. Not one cell of any
+      workbook sheet is written by this block, including the Production sheet.
+      A note that will not save does not stop the print: the file is built from
+      what was typed, and the row says it was not saved.
+
+   The list is made by hand in SharePoint, like every other list here. If it is
+   not there the window says so plainly and the print still works.
+
+   The rows the file is built from come from "Production (2)" (export.js §7b),
+   never from this block: nothing here touches that sheet either.           */
+const PRINT_NOTE_LIST = "Dashboard print notes";
+const PRINT_NOTE_FIELDS = ["Title", "Note", "By", "At"];
+const PRINT_NOTE_MISSING = "The “Dashboard print notes” list is not in SharePoint yet, so notes cannot be " +
+  "saved. Ask the manager to add it — nothing in the Excel file is involved. You can still print with what you type here.";
+const PRINT_NOTE_CONSENT_MSG = "Saving print notes needs a SharePoint permission that has not been granted yet. " +
+  "Nothing in the Excel file is involved. You can still print with what you type here.";
+let PRINTNOTES = {};            // { JOB: { note, who, at } } - everyone's print notes
+let PRINT_NOTE_OK = null;       // null: not looked yet · false: no list, or no permission · true: read it
+let PRINT_NOTE_CONSENT = false; // the last read failed for want of the list permission
+let printNotesReading = null;   // the read in flight, so two callers share one
+
+/** Read the whole list, quietly. Called whenever the print-notes window
+    opens - never on every page load, because most days nobody prints John's
+    sheet at all. */
+function readPrintNotes() {
+  if (printNotesReading) return printNotesReading;
+  printNotesReading = (async () => {
+    /* no Graph layer at all (a test harness, or a page that failed to load it):
+       that is "the list cannot be read", not "not looked yet" - leaving it at
+       null would keep the window saying "reading…" for ever */
+    if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") {
+      PRINT_NOTE_OK = false; PRINT_NOTE_CONSENT = false;
+      return PRINTNOTES;
+    }
+    try {
+      const items = await CW.listItems(PRINT_NOTE_LIST, { fields: PRINT_NOTE_FIELDS });
+      if (items == null) { PRINT_NOTE_OK = false; PRINT_NOTE_CONSENT = false; PRINTNOTES = {}; return PRINTNOTES; }
+      PRINT_NOTE_OK = true; PRINT_NOTE_CONSENT = false;
+      const next = {};
+      items.forEach(it => {
+        const f = it.fields || {};
+        const job = String(f.Title == null ? "" : f.Title).trim().toUpperCase();
+        if (!job) return;
+        const at = String(f.At == null ? "" : f.At);
+        /* two browsers can add the same job at once on a list without the
+           unique-Title rule; the newest is what somebody most recently meant */
+        const seen = next[job];
+        if (seen && seen.at >= at) return;
+        next[job] = { note: String(f.Note == null ? "" : f.Note),
+                      who: String(f.By == null ? "" : f.By), at: at };
+      });
+      PRINTNOTES = next;
+    } catch (e) {
+      PRINT_NOTE_CONSENT = /permission needed/.test((e && e.message) || "");
+      PRINT_NOTE_OK = false;
+    }
+    return PRINTNOTES;
+  })().then(v => { printNotesReading = null; return v; },
+            e => { printNotesReading = null; throw e; });
+  return printNotesReading;
+}
+const printNoteInfo = id => PRINTNOTES[String(id).toUpperCase()] || null;
+const printNoteOf = id => String((printNoteInfo(id) || {}).note || "");
+/** Why notes cannot be saved right now, in words, or "" when they can. */
+function printNoteTrouble() {
+  if (PRINT_NOTE_OK === true) return "";
+  if (PRINT_NOTE_OK === null) return "";                 // the first read has not answered yet
+  return PRINT_NOTE_CONSENT ? PRINT_NOTE_CONSENT_MSG : PRINT_NOTE_MISSING;
+}
+
+/** The job numbers a John print covers: the ticked ones, or everything the
+    view in front of the person is showing. The John print sheet has no filters
+    of its own on purpose - the two views are the filter.
+
+    From the John print sheet view "what I see now" means that sheet's own rows
+    (searched), not the master list's; from the master it means `filtered()`. */
+function xpJohnIds() {
+  if (state.board === "john") {
+    const shown = johnShown();
+    if (XSTATE && XSTATE.f && XSTATE.f.scope === "ticked") return shown.filter(r => state.picked[r.id]).map(r => r.id);
+    return shown.map(r => r.id);
+  }
+  const ctx = xpCtxNow();
+  if (XSTATE && XSTATE.f && XSTATE.f.scope === "ticked") return ctx.all.filter(j => ctx.picked[j.id]).map(j => j.id);
+  return (ctx.view || []).map(j => j.id);
+}
+
+/* the notes window's own state, while it is open */
+let NSTATE = null;              // { ids, typed:{JOB:text}, failed:{JOB:why}, busy }
+let NBUSY = false;
+
+async function openNotesWindow() {
+  const ids = xpJohnIds();
+  if (!ids.length) { toast("There are no jobs to print", true); return null; }
+  NSTATE = { ids: ids.slice(), typed: {}, failed: {}, busy: false };
+  renderNotesWindow();
+  /* the window opening is one of the two moments the list is read */
+  try { await readPrintNotes(); } catch (e) {}
+  if (NSTATE) renderNotesWindow();
+  return NSTATE;
+}
+/** Has anybody typed something that is not already saved? */
+function notesUnsaved() {
+  if (!NSTATE) return false;
+  return Object.keys(NSTATE.typed).some(k => String(NSTATE.typed[k]).trim() !== printNoteOf(k).trim());
+}
+function closeNotesWindow(ask) {
+  /* clicking the scrim by accident with half a dozen notes typed into the
+     window is a real way to lose work, so that one asks first; Cancel and
+     Escape are deliberate and do not */
+  if (ask && notesUnsaved() && typeof confirm === "function" &&
+      !confirm("Close without printing? The notes you have typed will be lost.")) return false;
+  NSTATE = null;
+  const h = $("#nhost");
+  if (h) h.remove();
+  renderFab();
+  return true;
+}
+/** What the box for one job currently holds: what was typed, or the note the
+    list already has. */
+function noteValue(id) {
+  const k = String(id).toUpperCase();
+  const typed = NSTATE && NSTATE.typed;
+  return typed && typed[k] != null ? String(typed[k]) : printNoteOf(id);
+}
+
+function renderNotesWindow() {
+  if (!NSTATE) return null;
+  let host = $("#nhost");
+  if (!host) { host = document.createElement("div"); host.id = "nhost"; document.body.appendChild(host); }
+  const keep = $("#nbody") ? $("#nbody").scrollTop : 0;
+  const trouble = printNoteTrouble();
+  const checking = PRINT_NOTE_OK === null;
+  const ctx = xpCtxNow();
+  const rows = NSTATE.ids.slice();
+
+  host.innerHTML = '<div class="scrim" id="nscrim"></div><div class="logwin nwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Print notes — John print sheet</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + rows.length + " job" + (rows.length === 1 ? "" : "s") +
+      ", in the sheet’s order. Notes are kept by the dashboard — the Excel file is never changed.</div></div>" +
+      '<button class="ghost" id="nclose">Cancel</button></div>' +
+    (checking ? '<div class="nnote">Reading the notes already saved…</div>' : "") +
+    (trouble ? '<div class="nnote err">' + esc(trouble) + "</div>" : "") +
+    '<div class="logbody nbody" id="nbody">' +
+      (rows.length ? rows.map(id => {
+        const k = String(id).toUpperCase();
+        const jr = johnRowFor(ctx, id);            // Production (2)'s own row
+        const j = byId(id);                        // and the Production model, if it has it
+        const flag = jr ? johnFlag(jr) : (j ? j.flag : "");
+        const ink = jr ? inkFor(jr.inkHex, false) : (j ? flagInk(j) : "");
+        /* the grey line is Production (2)'s note - the one this print will
+           carry - with the Production comment underneath it, labelled, when the
+           two say different things */
+        const sheetNote = jr ? String(jr.notes || "") : "";
+        const prod = j ? xpJohnNotes(j, "") : "";
+        const extra = prod && prod.toLowerCase() !== sheetNote.toLowerCase() ? prod : "";
+        const info = printNoteInfo(id);
+        return '<div class="nrow" data-job="' + esc(id) + '">' +
+          '<div class="nwho"><span class="tab" style="font-weight:600">' + esc(id) + "</span>" +
+            (flag ? '<span class="badge flagchip" style="color:' + ink + '">' + esc(FLAGWORD[flag]) + "</span>" : "") +
+            '<div class="ell" style="font-size:12.5px;color:var(--ink-2)">' +
+              esc((jr && jr.cust) || (j && j.cust) || "—") + "</div>" +
+            (jr ? "" : '<div class="nfail">not on John’s sheet</div>') +
+            (NSTATE.failed[k] ? '<div class="nfail">not saved</div>' : "") + "</div>" +
+          '<div class="nsheet">' +
+            (sheetNote ? esc(sheetNote) : '<span style="color:var(--ink-4)">no note on John’s sheet</span>') +
+            (extra ? '<div style="margin-top:4px;color:var(--ink-4)">Production comment: ' + esc(extra) + "</div>" : "") +
+            (info && info.who ? '<div style="margin-top:4px;color:var(--ink-4)">last print note by ' +
+              esc(shortWho(info.who)) + (info.at ? " · " + esc(stamp(info.at)) : "") + "</div>" : "") + "</div>" +
+          '<textarea class="nbox" data-note="' + esc(id) + '" rows="2" maxlength="2000" ' +
+            'placeholder="No print note yet">' + esc(noteValue(id)) + "</textarea>" +
+          "</div>";
+      }).join("") : '<div class="empty">No jobs.</div>') +
+    "</div>" +
+    '<div class="foot xfoot"><span id="ncount">' + rows.length + " job" + (rows.length === 1 ? "" : "s") +
+      " · " + (XSTATE.format === "pdf" ? "PDF" : "Excel") + "</span>" +
+      '<span style="display:flex;gap:8px"><button class="btn sec" id="ncancel">Cancel</button>' +
+      '<button class="btn" id="nprint"' + (NSTATE.busy ? " disabled" : "") + ">" +
+      (NSTATE.busy ? "Printing…" : "Print") + "</button></span></div>" +
+    "</div>";
+
+  if ($("#nbody")) $("#nbody").scrollTop = keep;
+  host.querySelectorAll("[data-note]").forEach(box => {
+    box.oninput = () => { NSTATE.typed[String(box.dataset.note).toUpperCase()] = box.value; };
+  });
+  if ($("#nscrim")) $("#nscrim").onclick = () => closeNotesWindow(true);
+  if ($("#nclose")) $("#nclose").onclick = () => closeNotesWindow(false);
+  if ($("#ncancel")) $("#ncancel").onclick = () => closeNotesWindow(false);
+  if ($("#nprint")) $("#nprint").onclick = () => johnPrint();
+  renderFab();
+  return host;
+}
+
+/** Save the notes that changed, one after another. Not three at a time: every
+    write to one list already goes through `serialised("list:" + name)` in
+    graph.js, so lanes would queue behind each other anyway - and running them
+    one at a time is what keeps a single consent prompt single. A failure is
+    remembered against its job and nothing else: the print goes ahead. */
+async function savePrintNotes(ids, typed) {
+  const who = whoAmI(), at = new Date().toISOString();
+  const list = (ids || []).slice();
+  for (let i = 0; i < list.length; i++) {
+    const id = list[i], k = String(id).toUpperCase();
+    try {
+      await CW.listUpsert(PRINT_NOTE_LIST, id, { Note: typed[k] || "", By: who, At: at });
+      PRINTNOTES[k] = { note: typed[k] || "", who: who, at: at };
+      if (NSTATE) delete NSTATE.failed[k];
+    } catch (e) {
+      if (NSTATE) NSTATE.failed[k] = friendly(e);
+    }
+  }
+  return NSTATE ? Object.keys(NSTATE.failed).length : 0;
+}
+
+/** Build the John print sheet from the notes as they are typed right now, hand
+    it to the browser, then write the one Dashboard Log line - last, so nothing
+    claims to have been exported until the bytes have actually gone.
+
+    `ids` is exactly what the notes window showed. It is passed in rather than
+    worked out again: a poll can land between opening the window and pressing
+    Print, and the file must be the jobs the person was looking at. */
+async function johnDownload(ids, notes) {
+  const rows = exportJohnRows(ids, notes, xpCtxNow());
+  const when = new Date();
+  const name = exportJohnFilename(XSTATE.format, when);
+  const opts = { who: xpWhoName(), when: when, company: xpCompany() };
+  if (XSTATE.format === "pdf") {
+    const pm = await xpLoadPdf();
+    pm.createPdf(buildJohnDoc(rows, opts)).download(name);
+  } else {
+    const wb = buildJohnWorkbook(rows, opts);
+    const buf = await wb.xlsx.writeBuffer();
+    downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);
+  }
+  noteChange("(export)", "Export", exportLogFrom(XSTATE.format, (ids || []).length, "john"),
+             "John print sheet · " + (XSTATE.f.scope === "ticked" ? "ticked jobs" : "what I see now"));
+  return name;
+}
+
+/** Print: save what changed, then build the file from what is on screen. */
+async function johnPrint() {
+  if (!NSTATE || NBUSY) return null;
+  NBUSY = true; NSTATE.busy = true; renderNotesWindow();
+  const ids = NSTATE.ids.slice();
+  const typed = {}, changed = [];
+  ids.forEach(id => {
+    const k = String(id).toUpperCase();
+    const v = String(noteValue(id)).trim();
+    typed[k] = v;
+    /* last time's failure marks are somebody else's news: this print is
+       answered by this pass, so they start clear */
+    delete NSTATE.failed[k];
+    if (v !== printNoteOf(id).trim()) changed.push(id);
+  });
+  let name = null;
+  try {
+    if (changed.length) {
+      /* One popup, not one per note. Every listUpsert asks for the list
+         permission itself, and MSAL hands out a cached token silently once
+         there is one - but the FIRST time, three writes starting together
+         opened three consent dialogs on top of each other. So the click asks
+         once, here, before any of them. A refusal is not fatal: the writes
+         below will fail one by one, each row will say "not saved", and the
+         print still goes. */
+      if (PRINT_NOTE_OK !== true) {
+        try { if (CW && CW.listConsent) await CW.listConsent(); } catch (e) {}
+      }
+      await savePrintNotes(changed, typed);
+    }
+    name = await johnDownload(ids, typed);
+    const failed = NSTATE ? Object.keys(NSTATE.failed).length : 0;
+    toast(failed ? "Downloading " + name + " — " + failed + " note" + (failed === 1 ? "" : "s") + " could not be saved"
+                 : "Downloading " + name);
+  } catch (e) {
+    name = null;
+    toast("Print failed: " + ((e && e.message) || String(e)).slice(0, 160), true);
+  }
+  NBUSY = false;
+  if (NSTATE) {
+    NSTATE.busy = false;
+    /* the window stays open when something did not save, so the person can see
+       which row it was; a clean print takes itself away */
+    if (name && !Object.keys(NSTATE.failed).length) { closeNotesWindow(); return name; }
+    renderNotesWindow();
+  }
+  if (state.sel) renderDrawer();
+  return name;
+}
+
+/* ---------- the John print sheet view ---------------------------------------
+   Production (2) drawn on its own terms, in the job list's place: its rows,
+   its order, its sections, its fills and its text colours, plus a tick box per
+   row so the wheel and the Export window work here exactly as they do on the
+   master list. Nothing in this block reads the Production job model, and
+   nothing in it writes anything anywhere. */
+
+/** The rows the view is showing: Production (2)'s own, narrowed by the
+    header search box. */
+function johnShown() {
+  const q = String(state.q || "").trim().toLowerCase();
+  return (JOHNROWS || []).filter(r => !q ||
+    (r.id + " " + r.cust + " " + r.area + " " + r.notes).toLowerCase().indexOf(q) >= 0);
+}
+/** [[section name, rows], …] in that sheet's own order. */
+function johnGroups(rows) {
+  const order = [], by = {};
+  (rows || []).forEach(r => {
+    const k = r.section || "No section";
+    if (!by[k]) { by[k] = []; order.push(k); }
+    by[k].push(r);
+  });
+  return order.map(k => [k, by[k]]);
+}
+/** The sheet's own ink, pushed until it can be read on the screen it is on.
+    The FILE always keeps the hex exactly as the sheet has it: this is for the
+    display only, where a dark blue on a dark background is unreadable. A row
+    that carries one of the sheet's fills is left alone - those fills are all
+    pale, so the sheet's own ink is already right on top of them. */
+function inkFor(hex, onFill) {
+  const h = String(hex || "").replace("#", "");
+  if (!/^[0-9A-Fa-f]{6}$/.test(h)) return "";
+  if (onFill) return "#" + h.toUpperCase();
+  const dark = (document.documentElement.dataset || {}).theme === "dark";
+  const n = parseInt(h, 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const mix = (c, t, k) => Math.round(c + (t - c) * k);
+  if (dark && lum < 0.45) { const k = Math.min(0.62, (0.45 - lum) * 1.4); r = mix(r, 255, k); g = mix(g, 255, k); b = mix(b, 255, k); }
+  if (!dark && lum > 0.62) { const k = Math.min(0.55, (lum - 0.62) * 1.6); r = mix(r, 0, k); g = mix(g, 0, k); b = mix(b, 0, k); }
+  return "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function johnRowHtml(r) {
+  const picked = !!state.picked[r.id];
+  const flag = johnFlag(r);
+  const fill = /^[0-9A-Fa-f]{6}$/.test(String(r.fillHex || "")) ? "#" + r.fillHex.toUpperCase() : "";
+  const ink = inkFor(r.inkHex, !!fill);
+  /* every one of the sheet's fills is a pale one, so dark ink on top of it is
+     right in both themes - and the row must not borrow the dark theme's
+     near-white text and vanish */
+  const style = (fill ? "background:" + fill + ";color:#17171A" : "");
+  return '<div class="jrow' + (picked ? " picked" : "") + '" data-id="' + esc(r.id) + '"' +
+    (style ? ' style="' + style + '"' : "") + ">" +
+    '<span class="pickcell"><input type="checkbox" class="pick"' + (picked ? " checked" : "") + "></span>" +
+    '<span class="tab" style="font-weight:600' + (ink ? ";color:" + ink : "") + '">' + esc(r.id) +
+      (flag ? '<span class="badge flagchip" style="color:' + ink + '">' + esc(FLAGWORD[flag]) + "</span>" : "") +
+    "</span>" +
+    '<span class="tab">' + esc(xpJohnDate(r.ready)) + "</span>" +
+    '<span class="ell">' + esc(r.cust || "—") + "</span>" +
+    '<span class="tab">' + esc(r.phone || "—") + "</span>" +
+    '<span class="ell">' + esc(r.area || "—") + "</span>" +
+    '<span class="tab" style="text-align:center">' + (r.wnd || "") + "</span>" +
+    '<span class="tab" style="text-align:center">' + (r.drs || "") + "</span>" +
+    '<span class="ell" title="' + esc(r.notes) + '">' + esc(r.notes) + "</span>" +
+    "</div>";
+}
+
+function johnViewHtml() {
+  if (!(JOHNROWS || []).length) {
+    return '<div class="empty">The workbook has no “Production (2)” sheet, so there is nothing to print for John.</div>';
+  }
+  const groups = johnGroups(johnShown());
+  if (!groups.length) return '<div class="empty">No row on John’s sheet matches that search.</div>';
+  return '<div class="jhead">' +
+      "<span></span><span class=\"kick\">Job no</span><span class=\"kick\">Ready to print</span>" +
+      '<span class="kick">Customer</span><span class="kick">Phone no</span><span class="kick">Area</span>' +
+      '<span class="kick" style="text-align:center">Wnd</span><span class="kick" style="text-align:center">Drs</span>' +
+      '<span class="kick">Notes from Brendan’s office</span></div>' +
+    groups.map((g, gi) => {
+      const name = g[0], rows = g[1];
+      const on = rows.filter(r => state.picked[r.id]).length;
+      /* keyed by its position, not its name: a section name carries an
+         ampersand ("Collect & supply only") and an attribute is no place to
+         have to think about that twice */
+      return '<div class="grp jgrp" data-jg="' + gi + '">' +
+        '<div class="ghead"><span class="gname">' + esc(name) + "</span>" +
+        '<span class="gcount">' + rows.length + "</span>" +
+        '<label class="selall gsel"><input type="checkbox" class="pick gall"' +
+          (on === rows.length ? " checked" : "") + '><span>Select all ' + rows.length + "</span></label>" +
+        "</div><div class=\"gbody\">" + rows.map(johnRowHtml).join("") + "</div></div>";
+    }).join("");
+}
+
+/** Tick boxes only: this view has no drawer, no drag and nothing to write. */
+function wireJohnView(host) {
+  host.querySelectorAll(".jrow[data-id]").forEach(el => {
+    const cb = el.querySelector(".pick");
+    if (cb) cb.onchange = () => {
+      if (cb.checked) state.picked[el.dataset.id] = 1; else delete state.picked[el.dataset.id];
+      renderAll();
+    };
+  });
+  const groups = johnGroups(johnShown());
+  host.querySelectorAll(".jgrp").forEach(gEl => {
+    const g = groups[Number(gEl.dataset.jg)];
+    const shown = g ? g[1].map(r => r.id) : [];
+    const gall = gEl.querySelector(".gall");
+    if (!gall) return;
+    const on = shown.filter(id => state.picked[id]).length;
+    gall.indeterminate = on > 0 && on < shown.length;
+    gall.onclick = e => e.stopPropagation();
+    gall.onchange = () => pickMany(shown, gall.checked);
+  });
 }
 
 /* ---------- render ---------- */
@@ -2163,6 +2668,29 @@ function renderChips() {
   const all = live();
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 
+  /* "Select all shown": the flat list's answer to the grouped view's per-group
+     tick box. It only appears when something is actually narrowing the list - a
+     tile, a category, a search, a hidden category - because with every job on
+     screen "all shown" and "all" are the same thing and the box says nothing.
+     One pass over the already-filtered list, one render: ticking two hundred
+     jobs is two hundred assignments, not two hundred re-draws. */
+  if (!state.board && state.view === "flat") {
+    const shown = filtered();
+    if (shown.length && shown.length < all.length) {
+      const on = shown.filter(j => state.picked[j.id]).length;
+      const lab = mk("label", "selall");
+      const box = mk("input");
+      box.type = "checkbox";
+      box.className = "pick";
+      box.checked = on === shown.length;
+      box.indeterminate = on > 0 && on < shown.length;
+      box.onchange = () => pickMany(shown.map(j => j.id), box.checked);
+      lab.appendChild(box);
+      lab.appendChild(mk("span", null, "Select all shown (" + shown.length + ")"));
+      c.appendChild(lab);
+    }
+  }
+
   c.appendChild(mk("span", "kick", "View"));
   const vsel = mk("select", "txt");
   vsel.innerHTML = '<option value="flat">Flat list</option><option value="Abin">Abin — sheet order, grouped</option>' +
@@ -2171,25 +2699,29 @@ function renderChips() {
   vsel.onchange = () => { state.view = vsel.value; state.picked = {}; renderAll(); };
   c.appendChild(vsel);
 
-  /* The list, or a floor station's board in its place. The other workbook
-     sheets used to be here; they are still the export's own filter and still
-     the chips on every row, but as a thing to switch the whole page to they
-     only ever repeated what the row chips already said. */
+  /* The list, or a floor station's board — or the John print sheet — in its
+     place. The other workbook sheets used to be here; they are still the
+     export's own filter and still the chips on every row, but as a thing to
+     switch the whole page to they only ever repeated what the row chips
+     already said. */
   c.appendChild(mk("span", "kick", "Show"));
   const ssel = mk("select", "txt");
   ssel.innerHTML = '<option value="">All jobs (' + all.length + ')</option>' +
-    STATIONS.map(s => '<option value="' + esc(s[0]) + '"' + (state.board === s[0] ? " selected" : "") +
+    BOARDS.map(s => '<option value="' + esc(s[0]) + '"' + (state.board === s[0] ? " selected" : "") +
       '>' + esc(s[1]) + "</option>").join("");
   ssel.id = "showsel";
   ssel.onchange = () => {
     state.board = ssel.value || null; state.picked = {}; renderAll();
     /* the tick was armed at the slow rate while nobody was looking at the
        floor; picking the board is exactly the moment to speed it up, or the
-       first delta lands up to a minute later */
+       first delta lands up to a minute later - and leaving it is the moment to
+       slow it down again, which is why this runs for the John print sheet too */
     stationTick();
     /* the feeder normally fills STATION_ITEMS in on every load; if it skipped
-       (nothing changed, or the permission was granted since) read it now */
-    if (state.board) stationReadIfNeeded(() => renderAll());
+       (nothing changed, or the permission was granted since) read it now. Only
+       for a floor station: the John print sheet came out of the workbook
+       download the page already made and has nothing at all to read. */
+    if (state.board && state.board !== "john") stationReadIfNeeded(() => renderAll());
   };
   c.appendChild(ssel);
 
@@ -2361,7 +2893,13 @@ function rowHtml(j, i, max) {
       '<span class="tab" style="font-size:12px;color:var(--ink-3)">' + T + '</span></span>' +
     '<span style="display:flex;gap:4px;overflow:hidden">' +
       j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
-      (j.urg ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
+      /* the colour-code chip lives here, with the other badges, because this is
+         the cell that already handles overflow - in the job-number column it
+         pushed the number itself out of sight on a narrow screen */
+      flagChip(j) +
+      /* and the chip already says Urgent when the row is red; this badge is for
+         the jobs whose comment is the only thing saying it */
+      (j.urg && j.flag !== "urgent" ? '<span class="badge" style="background:var(--urgent-bg);color:var(--urgent)">Urgent</span>' : "") +
       (fab ? '<span class="badge" style="background:var(--fab-bg);color:var(--fab)">In fab</span>' : "") +
       (cpn ? '<span class="badge cpbadge">' + cpn + ' in progress</span>' : "") +
       (function () { const n = commentsFor(j.id).length;
@@ -2641,6 +3179,20 @@ function paintStationLog() {
 
 function renderRows() {
   const host = $("#rows");
+  /* the master list's column header belongs to the job list only; any board
+     (a floor station, the John print sheet) draws its own */
+  const thead = document.querySelector(".thead"); if (thead) thead.hidden = !!state.board;
+  /* John's own sheet takes the list's place: tickable, but with no drawer, no
+     drag and nothing that writes anything anywhere */
+  if (state.board === "john") {
+    host.innerHTML = '<div class="jboard">' + johnViewHtml() + "</div>";
+    wireJohnView(host);
+    const shown = johnShown().length, total = (JOHNROWS || []).length;
+    $("#count").textContent = !total ? "No “Production (2)” sheet in the workbook"
+      : shown === total ? "Showing all " + total + " rows on John’s sheet"
+      : "Showing " + shown + " of " + total + " rows on John’s sheet";
+    return;
+  }
   /* a floor station's board takes the whole list's place: read-only, no
      selection, no drag targets, nothing that writes anything anywhere */
   if (state.board) {
@@ -2666,16 +3218,24 @@ function renderRows() {
     list.forEach(j => { const g = groupOf(j, state.view); (groups[g] = groups[g] || []).push(j); });
     const keys = Object.keys(groups).map(Number).sort((x, y) => x - y);
     const names = BLOCKNAMES.length ? BLOCKNAMES : [];
+    /* what each group's tick box means: the jobs that group is showing right
+       now, after its own search box has had its say */
+    const shownBy = {};
     host.innerHTML = keys.length ? keys.map(g => {
       const name = names[g] || (state.view + " group " + g);
       const open = !state.collapsed[state.view + "|" + g];
       const q = (state.gq && state.gq[state.view + "|" + g]) || "";
       let rows = groups[g];
       if (q) rows = rows.filter(j => (j.id + " " + j.cust + " " + j.area).toLowerCase().indexOf(q.toLowerCase()) >= 0);
+      shownBy[g] = rows.map(j => j.id);
+      const nOn = rows.filter(j => state.picked[j.id]).length;
       return '<div class="grp" data-g="' + g + '">' +
         '<div class="ghead"><button class="gtog">' + (open ? "▾" : "▸") + '</button>' +
         '<span class="gname">' + esc(name) + '</span>' +
         '<span class="gcount">' + rows.length + (q ? " of " + groups[g].length : "") + '</span>' +
+        /* one tick box per section: everything this group is showing, at once */
+        (rows.length ? '<label class="selall gsel"><input type="checkbox" class="pick gall"' +
+          (nOn === rows.length ? " checked" : "") + '><span>Select all ' + rows.length + '</span></label>' : "") +
         '<input class="gsearch txt" placeholder="Search in this group…" value="' + esc(q) + '">' +
         '</div>' + (open ? '<div class="gbody">' +
           (rows.length ? rows.map((j, i) => rowHtml(j, i, max)).join("")
@@ -2689,6 +3249,16 @@ function renderRows() {
         if (state.collapsed[key]) delete state.collapsed[key]; else state.collapsed[key] = 1;
         saveUi(); renderRows();
       };
+      const gall = gEl.querySelector(".gall");
+      if (gall) {
+        const shown = shownBy[g] || [];
+        const on = shown.filter(id => state.picked[id]).length;
+        /* the third state a tick box has: some of this group is picked. It can
+           only be set from script, never from markup, so it is set here. */
+        gall.indeterminate = on > 0 && on < shown.length;
+        gall.onclick = e => e.stopPropagation();
+        gall.onchange = () => pickMany(shown, gall.checked);
+      }
       const s = gEl.querySelector(".gsearch");
       s.oninput = () => { state.gq = state.gq || {}; state.gq[key] = s.value;
         const p = s.selectionStart; renderRows();
@@ -2791,7 +3361,7 @@ function fabActions() {
 }
 /** A window or the drawer is open. On a phone the wheel would sit right on top
     of their Download / Save buttons, so it takes itself out of the way. */
-const fabCovered = () => !!($("#dhost") || $("#xhost") || $("#ahost") || $("#chost") || $("#vhost") || $("#lhost"));
+const fabCovered = () => !!($("#dhost") || $("#xhost") || $("#ahost") || $("#chost") || $("#vhost") || $("#lhost") || $("#nhost"));
 const fabClass = () => "fabwrap" + (FABOPEN ? " open" : "") + (fabCovered() ? " over" : "");
 /** Every window's Close and scrim go through here: the wheel hid itself while
     the window was open, so something has to tell it the window has gone. */
@@ -3211,7 +3781,8 @@ function renderDrawer() {
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
       '<span class="badge" style="background:var(--brand-2);color:#d5d1c8">' + esc(statusWord(j)) + '</span>' +
-      (j.urg ? '<span class="badge" style="background:var(--urgent);color:#fff">Urgent</span>' : "") +
+      (j.urg && j.flag !== "urgent" ? '<span class="badge" style="background:var(--urgent);color:#fff">Urgent</span>' : "") +
+      flagChip(j) +
       '</div><div style="font-size:13px;color:#d5d1c8;margin-top:4px">' + esc(j.cust || "—") + ' · ' + esc(j.area || "—") + '</div></div>' +
       '<div style="display:flex;gap:7px"><button class="ghost" id="editbtn">' + (ed ? "Done" : "Edit") + '</button>' +
       '<button class="ghost" id="dclose">Close</button></div></div>' +
@@ -3255,6 +3826,24 @@ function renderDrawer() {
                 '<button class="btn" id="cadd">Add comment</button></div>'
               : '<div style="font-size:12px;color:var(--ink-4)">Click <strong>Edit</strong> above to add a comment.</div>') +
           '</div>';
+      })() +
+      /* the print note, read only here: it is written in the print-notes
+         window before a John print, and lives in a SharePoint list */
+      (function () {
+        const info = printNoteInfo(j.id);
+        const note = info ? String(info.note || "").trim() : "";
+        const body = PRINT_NOTE_OK === null
+          ? '<div style="font-size:13px;color:var(--ink-4)">Print notes are read when the print-notes ' +
+            'window opens, so there is nothing to show here yet.</div>'
+          : note
+          ? '<div class="cmt"><div style="display:flex;justify-content:space-between;font-size:11px;' +
+              'color:var(--ink-3);margin-bottom:4px"><strong style="color:var(--ink-2)">' +
+              esc(shortWho(info.who)) + '</strong><span>' + esc(stamp(info.at)) + '</span></div>' +
+              '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">' + esc(note) + '</div></div>'
+          : '<div style="font-size:13px;color:var(--ink-4)">No print note for this job.</div>';
+        return '<div class="sect"><span class="kick">Print notes (John print sheet)</span>' + body +
+          '<div style="font-size:11.5px;color:var(--ink-4);margin-top:6px">Written in the print-notes ' +
+          'window before a John print. Kept in SharePoint, never in the Excel file.</div></div>';
       })() +
       alertsSectionHtml(j) +
       (j.notes.length ? '<div class="sect"><span class="kick">From the sheet</span>' +
@@ -3603,6 +4192,9 @@ async function start() {
   $("#q").addEventListener("input", e => { state.q = e.target.value; renderRows(); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && FABOPEN) { fabClose(); return; }
+    /* the notes window sits on top of the Export window, so it takes Escape
+       first: one press steps back to the Export window, the next closes that */
+    if (e.key === "Escape" && $("#nhost")) { closeNotesWindow(); return; }
     if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#lhost")) { $("#lhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
