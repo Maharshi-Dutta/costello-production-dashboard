@@ -427,6 +427,19 @@ function buildJobs(items, keep) {
 const glassWords = n => Math.max(0, Math.round(stNum(n, 0))) +
   (Math.round(stNum(n, 0)) === 1 ? " glass" : " glasses");
 
+/** How much glass is on the floor: the totals of the jobs still to do, added
+    up. A finished job is out of it altogether - the number is what is left to
+    make, not what the day has come to - and a job part done still counts all
+    of its glass, because that is what is standing there waiting.
+
+    It is given the whole board and never the searched one. Somebody looking a
+    job number up must not make the floor's work read smaller than it is; that
+    is the one way this number could tell a lie. */
+function boardGlassTotal(board) {
+  return (board || []).reduce((sum, g) =>
+    sum + (g && !g.finished ? Math.max(0, Math.round(stNum(g.total, 0))) : 0), 0);
+}
+
 /** The cards somebody typing in the tablet's search box is looking for: a job
     number or a customer name, matched anywhere in either. An empty box is
     every card - the box narrows the board, it never becomes the board. */
@@ -717,7 +730,7 @@ const ST = {
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
   inProduction, glassTotal, officeSeed, glassSlice, feederFields, seedFields, feedPlan, sliceHash,
-  jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, applyTap, boardDiff, mergeDelta,
+  jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, boardGlassTotal, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };

@@ -69,6 +69,19 @@
             border-radius:24px; min-height:44px; padding:0 16px; font-size:16px; width:min(230px,40vw);
             font-family:inherit }
   #search::placeholder { color:#8a867e }
+  /* how much glass is standing on the floor, beside the box - and pointedly
+     not narrowed by it. It is read at a glance and never tapped, so it takes
+     #whois' 40px rather than a 44px target. What keeps it from squeezing
+     Switch person or the search box is flex-wrap on the header itself: items
+     that will not fit wrap onto the next line instead of shrinking. flex:none
+     only stops this pill being the one that gives way, so a long number is
+     never compressed into an unreadable one, and nowrap keeps "12 glasses" on
+     a single line. On a narrow tablet the header therefore grows a second row
+     rather than crushing anything on the first. */
+  #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
+            background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
+            padding:8px 16px; min-height:40px; flex:none; white-space:nowrap;
+            display:flex; align-items:center; justify-content:center }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
                        border-radius:5px; min-height:44px; padding:0 14px; font-size:13px }
@@ -168,6 +181,7 @@
   <span id="whois"></span>
   <button id="switchbtn" hidden>Switch person</button>
   <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
+  <span id="gtotal" hidden></span>
   <span id="upd"></span>
   <button id="themebtn">Light</button>
   <button id="outbtn">Sign out</button>
@@ -179,8 +193,8 @@
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
-<script src="graph.js?v=20260909-1214"></script>
-<script src="station-core.js?v=20260909-1214"></script>
-<script src="station.js?v=20260909-1214"></script>
+<script src="graph.js?v=20260909-1509"></script>
+<script src="station-core.js?v=20260909-1509"></script>
+<script src="station.js?v=20260909-1509"></script>
 </body>
 </html>

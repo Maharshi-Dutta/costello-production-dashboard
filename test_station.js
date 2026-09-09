@@ -729,6 +729,24 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.boardFilter(null, "x"), []);
   pass("the search box matches a job number or a customer name, and nothing else about a job");
 
+  /* the number beside that box: how much glass is on the floor, which is a
+     different question from which cards are on screen */
+  assert.strictEqual(ST.boardGlassTotal(board), 10,
+    "eight glasses on R5303 and two on R5304 - R5301 is finished and out of it");
+  assert.strictEqual(ST.boardGlassTotal([board[1]]), 8,
+    "a job seven of eight cut still counts all eight: the glass is on the floor either way");
+  const allDone = ST.jobBoard([item({ Title: "R6", Job: "R6", GlassType: "GLASS", Total: 3, Seq: 1,
+                                      Active: "Yes", Cut: 3, Hotmelt: 3, Glazed: 3 }, "620")]);
+  assert.strictEqual(ST.boardGlassTotal(allDone), 0, "a board with nothing left to do is nought");
+  const noGlass = ST.jobBoard([item({ Title: "R7", Job: "R7", GlassType: "GLASS", Total: 0, Seq: 1,
+                                      Active: "Yes" }, "621")]);
+  assert.strictEqual(ST.boardGlassTotal(noGlass), 0, "and a job with no glasses on it adds nothing");
+  assert.strictEqual(ST.boardGlassTotal([]), 0);
+  assert.strictEqual(ST.boardGlassTotal(null), 0);
+  assert.strictEqual(ST.boardGlassTotal([{ total: -4 }, { total: "" }, null]), 0,
+    "nothing it is handed can make it negative or NaN");
+  pass("the floor's total is the glass still to do: finished jobs out, part-done jobs whole");
+
   /* ================= 6. the tap ================= */
   const trow = { id: "1", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
   assert.strictEqual(ST.applyTap(trow, "cut", 1), 4);
@@ -2763,6 +2781,47 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "clearing it brings them back");
   pass("the search box narrows the cards as it is typed, by job number or customer name");
 
+  /* THE TOTAL BESIDE THE BOX: it says how much glass is on the floor, so what
+     somebody types must never move it - a smaller number would read as less
+     work rather than as a narrower screen */
+  reset();
+  S("QUERY = ''; render();");
+  assert.strictEqual(REQ.length, 0, "drawing the total asks nobody anything");
+  assert.strictEqual(EL["#gtotal"].hidden, false, "it is up while the board is");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses", "six on one job and two on the other");
+  S("QUERY = '5310'; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "one card on screen");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses",
+    "and the total is still the whole floor's, not the two glasses being looked at");
+  S("QUERY = 'zzz'; render();");
+  assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0, "nothing matches");
+  assert.strictEqual(EL["#gtotal"].hidden, false, "the total is still there");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses",
+    "and still the full one: an empty screen is not an empty floor");
+  assert.strictEqual(REQ.length, 0, "and none of that sent a single request");
+  S("QUERY = ''; render();");
+  pass("the total beside the search box is the whole floor's glass, whatever is typed in the box");
+
+  /* a tap that finishes a job takes that job's glass out of the number: it is
+     what is left to make, and it moves on the next draw rather than on the
+     write coming back */
+  ITEMS = [item({ Title: "R5330", Job: "R5330", Customer: "Customer Fourteen", GlassType: "GLASS",
+                  Total: 2, Seq: 1, Active: "Yes", Cut: 2, Hotmelt: 2, Glazed: 0 }, "970"),
+           item({ Title: "R5331", Job: "R5331", Customer: "Customer Fifteen", GlassType: "GLASS",
+                  Total: 5, Seq: 2, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "971")];
+  S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = '';");
+  S("PERSON = { name: 'Person A', stages: ['cut', 'hotmelt', 'glazed'], pin: '' }; LAST_TAP = Date.now();");
+  await S("readList()");
+  assert.strictEqual(EL["#gtotal"].textContent, "7 glasses", "two jobs, seven glasses between them");
+  S("tap('970', 'glazed', 'all')");
+  assert.strictEqual(EL["#gtotal"].textContent, "5 glasses",
+    "the finished job's two are out of it at once, before the write has even left the tablet");
+  await settle(80);
+  S("render()");
+  assert.strictEqual(EL["#gtotal"].textContent, "5 glasses", "and they stay out once it has");
+  S("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("finishing a job drops its glass out of the floor's total on the next draw");
+
   /* AMENDMENT 11: a stored stamp from the future is not a licence */
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() + 86400000 });
   S("PERSON = null; LAST_TAP = 0; loadPerson();");
@@ -2848,7 +2907,10 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("QUERY"), "", "Switch person clears the search");
   assert.strictEqual(EL["#search"].value, "", "in the box as well as in the page's own state");
   assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0, "and the picker is back");
+  assert.strictEqual(EL["#gtotal"].hidden, true, "the total goes with the box: no board, nothing to total");
+  assert.strictEqual(EL["#gtotal"].textContent, "", "and it says nothing while it is down");
   S("PERSON = PEOPLE.find(p => p.name === 'Person A'); LAST_TAP = Date.now(); render();");
+  assert.strictEqual(EL["#gtotal"].hidden, false, "picking a name brings both back");
   pass("Switch person hands the next person the whole board, not one narrowed by a search");
 
   /* ---- the ten-second poll on the tablet ---- */
@@ -2951,6 +3013,16 @@ const person = (name, stages, pin, active, station) =>
   /* AMENDMENT 6: under 16px iOS zooms the page in on focus, and a tablet on a
      wall is not something anybody can pinch back out */
   assert.ok(/#search \{[^}]*font-size:16px/.test(gs), "the search box is 16px, so iOS does not zoom");
+  assert.ok(gs.indexOf('id="gtotal"') > 0, "the floor's total is in the header too");
+  assert.ok(gs.indexOf('id="search"') < gs.indexOf('id="gtotal"') &&
+            gs.indexOf('id="gtotal"') < gs.indexOf('id="upd"'),
+    "beside the box, before the updated line, so a narrow header wraps them together");
+  assert.ok(/#gtotal \{[^}]*min-height:40px/.test(gs), "it is read, not tapped, so it takes 40px");
+  assert.ok(/#gtotal \{[^}]*flex:none/.test(gs),
+    "and it never squeezes the tap targets either side of it");
+  assert.ok(/#gtotal \{[^}]*var\(--brand-2\)[^}]*var\(--brand-line\)/.test(gs) &&
+            !/#gtotal \{[^}]*#[0-9a-f]{3}/i.test(gs),
+    "in the header's own tokens, in both themes, with no new colour invented for it");
   ["class=\"bar\"", ".track", ".chip {", ".chips {"].forEach(w =>
     assert.ok(gs.indexOf(w) < 0, "with no " + w + " left on the page"));
   pass("the tablet's layout is one card per job, two columns from 700 px, everything thumb-sized");
@@ -2985,10 +3057,14 @@ const person = (name, stages, pin, active, station) =>
      tap, and a people list that failed once is retried on the ten-second clock */
   S("READY = false; PROBLEM = ''; PEOPLE_READ = false; render();");
   assert.ok(EL["#board"].innerHTML.indexOf("Reading the board") > 0);
+  assert.strictEqual(EL["#gtotal"].hidden, EL["#search"].hidden,
+    "the total follows the search box exactly: both down over a message");
+  assert.strictEqual(EL["#gtotal"].hidden, true);
   assert.ok(EL["#board"].innerHTML.indexOf('id="again"') > 0,
     "Try again is offered even when the trouble has no name yet");
   S("PROBLEM = 'reauth'; render();");
   assert.ok(EL["#board"].innerHTML.indexOf('id="reauth"') > 0, "an expired sign-in gets its own button");
+  assert.strictEqual(EL["#gtotal"].hidden, true, "and no total floats over it");
   assert.ok(EL["#board"].innerHTML.indexOf('id="again"') < 0, "and only that one");
   S("PROBLEM = ''; PEOPLE = []; PEOPLE_READ = false; SITEID = " + JSON.stringify(FSITE) + ";");
   reset();

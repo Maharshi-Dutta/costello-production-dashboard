@@ -746,6 +746,20 @@ function render() {
   const sb = $("#search");
   const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
+  /* the board as it stands, before the box has narrowed it: the total beside
+     the box is read off this, and the cards below off the filtered copy */
+  const live = boarding ? boardNow() : null;
+  /* how much glass is on the floor altogether, next to the box that narrows
+     the cards and deliberately not narrowed by it - a job number typed in
+     must not make the day's work look smaller. It comes and goes with the
+     search box for the same reason: a total floating over "ask the office for
+     the permission" is a number about nothing. */
+  const gt = $("#gtotal");
+  if (gt) {
+    gt.hidden = !boarding;
+    gt.style.display = boarding ? "" : "none";
+    gt.textContent = boarding ? ST.glassWords(ST.boardGlassTotal(live)) : "";
+  }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + agoWords(LASTREAD) : "";
   /* the passing-failure line is part of the page, not of the board, so it is
@@ -768,7 +782,7 @@ function render() {
 
   /* the search box narrows the board and never becomes it: an empty box is
      every card, and a box nothing matches says so rather than looking broken */
-  const board = ST.boardFilter(boardNow(), QUERY);
+  const board = ST.boardFilter(live, QUERY);
   if (!board.length) {
     DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {};
     host.innerHTML = '<div class="msg">' +
