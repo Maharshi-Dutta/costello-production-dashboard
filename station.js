@@ -577,13 +577,18 @@ function stepHtml(g, stage, label) {
 }
 
 /** Everything inside one card. The card element itself is kept between draws
-    (see paintBoard), so only this string is ever rebuilt. */
+    (see paintBoard), so only this string is ever rebuilt.
+
+    The headline number is what THIS person has left on the job, not how big
+    the job is: two people at the same tablet see two different numbers on the
+    same card. It is drawn from PERSON, which is not part of the board, so
+    paintBoard has to notice PERSON moving on its own - see pState(). */
 function cardInner(g) {
   const owed = owedFor(g.id), bad = badFor(g.id);
   return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
-      '<span class="cnum tab">' + esc(ST.glassWords(g.total)) + '</span>' +
+      '<span class="cnum tab">' + esc(ST.leftWords(ST.jobLeftFor(g, PERSON && PERSON.stages))) + '</span>' +
     '</div>' +
     '<div class="steps">' + ST.STAGES.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
@@ -660,6 +665,7 @@ let NODES = {};                 // job -> the card element
 let DOING = null, FINHEAD = null, FIN = null;
 let BOARD_PREV = null;          // the board these nodes were drawn from
 let QSIG = {};                  // job -> what this tablet owed on it when it was last drawn
+let PSIG = "";                  // who the cards were drawn for, and with which stages
 let WIRED = false;
 
 /* The "saving..." and "not saved yet" lines come from this tablet's own queue,
@@ -668,6 +674,18 @@ let WIRED = false;
    appears on a board whose numbers did not move. */
 function qState(g) {
   return (owedFor(g.id) ? "o" : "") + (badFor(g.id) ? "b" : "");
+}
+
+/* The person is not in the list either, and every card is drawn from them
+   twice over: the headline number is their own remaining work, and a stage
+   they do not hold is greyed. Switching person goes through the picker, which
+   lets every node go anyway - but readPeople() re-reads the stages of whoever
+   is signed in on the ten-second clock, so an edit to their Stages column in
+   SharePoint changes what every card should say with no picker in between.
+   Without this the cards would keep the numbers of the stages they used to
+   hold until something else happened to move them. */
+function pState() {
+  return PERSON ? PERSON.name + "|" + (PERSON.stages || []).join(",") : "";
 }
 
 function makeCard(g) {
@@ -693,7 +711,7 @@ function paintBoard(host, board) {
       FINHEAD.addEventListener("click", () => { FINOPEN = !FINOPEN; render(); });
     FIN = document.createElement("div"); FIN.className = "grp fin";
     host.appendChild(DOING); host.appendChild(FINHEAD); host.appendChild(FIN);
-    NODES = {}; BOARD_PREV = null; QSIG = {};
+    NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
   }
   const diff = ST.boardDiff(BOARD_PREV, board);
   const byJob = {};
@@ -706,9 +724,13 @@ function paintBoard(host, board) {
     delete QSIG[j];
   });
   const changed = diff.changed.slice();
+  /* the person changing is every card changing, because every card is drawn
+     from them - see pState() */
+  const psig = pState(), pmoved = PSIG !== psig;
+  PSIG = psig;
   board.forEach(g => {
     const sig = qState(g);
-    if (QSIG[g.job] !== sig && changed.indexOf(g.job) < 0 && diff.added.indexOf(g.job) < 0)
+    if ((pmoved || QSIG[g.job] !== sig) && changed.indexOf(g.job) < 0 && diff.added.indexOf(g.job) < 0)
       changed.push(g.job);
     QSIG[g.job] = sig;
   });
@@ -746,19 +768,20 @@ function render() {
   const sb = $("#search");
   const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
-  /* the board as it stands, before the box has narrowed it: the total beside
+  /* the board as it stands, before the box has narrowed it: the number beside
      the box is read off this, and the cards below off the filtered copy */
   const live = boarding ? boardNow() : null;
-  /* how much glass is on the floor altogether, next to the box that narrows
-     the cards and deliberately not narrowed by it - a job number typed in
-     must not make the day's work look smaller. It comes and goes with the
-     search box for the same reason: a total floating over "ask the office for
-     the permission" is a number about nothing. */
+  /* everything the person signed in has left to do, added up over the whole
+     board: the same number as the cards, so it counts down with them. It is
+     next to the box that narrows the cards and deliberately not narrowed by
+     it - a job number typed in must not make somebody's day look shorter. It
+     comes and goes with the search box for the same reason: a total floating
+     over "ask the office for the permission" is a number about nothing. */
   const gt = $("#gtotal");
   if (gt) {
     gt.hidden = !boarding;
     gt.style.display = boarding ? "" : "none";
-    gt.textContent = boarding ? ST.glassWords(ST.boardGlassTotal(live)) : "";
+    gt.textContent = boarding ? ST.leftWords(ST.boardLeftFor(live, PERSON.stages)) : "";
   }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + agoWords(LASTREAD) : "";
@@ -773,7 +796,7 @@ function render() {
   if (PROBLEM || !PEOPLE_READ || !PERSON || !READY) {
     /* a message or the picker takes the board's place, so the card nodes are
        let go: the next good read paints them fresh */
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {};
+    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     if (!PROBLEM && PEOPLE_READ && !PERSON) { host.innerHTML = pickerHtml(); wirePicker(host); return; }
     host.innerHTML = '<div class="msg">' + esc(words()) + againHtml() + '</div>';
     wireAgain();
@@ -784,7 +807,7 @@ function render() {
      every card, and a box nothing matches says so rather than looking broken */
   const board = ST.boardFilter(live, QUERY);
   if (!board.length) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {};
+    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
       (QUERY ? "No job on the board matches “" + esc(QUERY) + "”." : "Nothing on the board yet.") +
       '</div>';

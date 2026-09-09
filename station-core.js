@@ -427,17 +427,70 @@ function buildJobs(items, keep) {
 const glassWords = n => Math.max(0, Math.round(stNum(n, 0))) +
   (Math.round(stNum(n, 0)) === 1 ? " glass" : " glasses");
 
-/** How much glass is on the floor: the totals of the jobs still to do, added
-    up. A finished job is out of it altogether - the number is what is left to
-    make, not what the day has come to - and a job part done still counts all
-    of its glass, because that is what is standing there waiting.
+/** "28 left" - the same number after it has started counting down, which has
+    to say so. The tablet's number is how much work the person signed in has
+    left, not the size of the job and not even a count of glasses (somebody
+    who holds two stages has two jobs of work on each glass), so a bare "28"
+    beside a customer's name on a workshop screen would be read as the size of
+    the job it used to mean. "left" is true of both; "glasses" would be false
+    for the two-stage person. The office keeps glassWords: there, the number
+    really is how big the job is. */
+const leftWords = n => Math.max(0, Math.round(stNum(n, 0))) + " left";
 
-    It is given the whole board and never the searched one. Somebody looking a
-    job number up must not make the floor's work read smaller than it is; that
-    is the one way this number could tell a lie. */
-function boardGlassTotal(board) {
-  return (board || []).reduce((sum, g) =>
-    sum + (g && !g.finished ? Math.max(0, Math.round(stNum(g.total, 0))) : 0), 0);
+/** How much of one job is left for ONE person: every stage they hold, counted
+    separately and added up.
+
+    A person who cuts AND hotmelts a 14-glass job has 28 things left to do on
+    it, not 14, and every single tap of either stage takes one off. The other
+    reading - the smallest of their counters, so the number means glasses
+    rather than jobs of work - was tried and rejected by the owner: it lets
+    somebody cut six and watch the big number on the wall sit still, because
+    hotmelt had not caught up. A number that does not move while somebody
+    works is worse than a number that counts something slightly abstract.
+
+    Somebody who holds no stage at all has the whole job left: they cannot
+    move any of it, and saying nought would read as "done". stationPeople has
+    already dropped any word in the Stages column that is not a stage, so a
+    person whose column was all nonsense arrives here holding nothing and gets
+    that same answer.
+
+    Two people therefore see two different numbers for the same job, and
+    neither of them is the office's `Glass 12/24`. That is what was asked for -
+    the tablet answers "how much have I left", not "how big is this job".
+
+    Note what this is NOT: it does not decide gold. A job goes gold, and folds
+    into Finished, when it is complete for everybody (buildJobs' `finished`),
+    never when it reaches nought for whoever is holding the tablet.          */
+function jobLeftFor(g, stages) {
+  const total = Math.max(0, Math.round(stNum(g && g.total, 0)));
+  const seen = {};
+  let held = 0, left = 0;
+  (stages || []).forEach(s => {
+    const k = stTxt(s).trim().toLowerCase();
+    /* a Stages column typed by hand can say anything; a word that is not one
+       of the three stages is not a stage this person holds, and must not be
+       the one place on the tablet that throws */
+    if (STAGE_KEYS.indexOf(k) < 0) return;
+    /* "cut, cut" is one stage held, not two. stationPeople already drops the
+       repeat, so this only matters if something else ever calls in - but a
+       number on a wall that doubles because a column was typed twice is not a
+       thing to leave to another function's care */
+    if (seen[k]) return;
+    seen[k] = true;
+    held++;
+    /* the clamp is what keeps this in 0...total per stage, so a row saying
+       -9 or 99 or nothing at all cannot make the wall read a negative */
+    left += total - stClamp(g && g[STAGE_ROW[k]], total);
+  });
+  return held ? left : total;
+}
+
+/** The same sum over the whole board: everything the person signed in still
+    has to do. It is given the whole board and never the searched one -
+    somebody looking a job number up must not make their own work read smaller
+    than it is, which is the one way this number could tell a lie. */
+function boardLeftFor(board, stages) {
+  return (board || []).reduce((sum, g) => sum + (g ? jobLeftFor(g, stages) : 0), 0);
 }
 
 /** The cards somebody typing in the tablet's search box is looking for: a job
@@ -730,7 +783,8 @@ const ST = {
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
   inProduction, glassTotal, officeSeed, glassSlice, feederFields, seedFields, feedPlan, sliceHash,
-  jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, boardGlassTotal, applyTap, boardDiff, mergeDelta,
+  jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
+  jobLeftFor, boardLeftFor, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };

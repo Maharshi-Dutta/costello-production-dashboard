@@ -1,7 +1,10 @@
 # A running total of glass on the tablet's header
 
 **Date:** 2026-09-09
-**Status:** in progress
+**Status:** shipped 2026-09-09 (`3d26677`) — **superseded the same day** by
+`2026-09-09-tablet-my-work-left.md`, which replaced this floor-wide total with a
+per-person countdown. `boardGlassTotal` no longer exists; do not build from §4
+of this file.
 **Consulted:** yes — the owner asked for "a total number of glass including all
 the jobs in the glass section dashboard, beside the search bar" on 2026-09-09,
 and settled the two ambiguities the same day (see §2).

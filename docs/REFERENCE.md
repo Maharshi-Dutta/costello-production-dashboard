@@ -253,10 +253,18 @@ guide: `docs/STATIONS.md`.
    (Title=name, Station, Stages comma list, PIN, Active); PIN pad when the
    row has one; a person may hold one or more stages; steppers for other
    stages are greyed and `tap()` refuses them too. One card per job, with the
-   job number, the customer, "12 glasses" and the three steppers (−, +, All /
-   None) on the card itself — nothing to expand, no bars, nothing to scroll
-   inside — plus a search box in the header (`boardFilter`, job number or
-   customer). Ten quiet minutes lock the
+   job number, the customer, **how much of the job is left for the person
+   signed in** ("12 left", `jobLeftFor` = the job's total less that stage's
+   counter, summed over **each** stage they hold — so a 14-glass job is 14 to
+   the person who only cuts and 28 to the person who cuts and hotmelts, every
+   tap of either stage moves it by one, and two people at one tablet see two
+   different numbers) and the
+   three steppers (−, +, All / None) on the card itself — nothing to expand,
+   no bars, nothing to scroll inside — plus a search box in the header
+   (`boardFilter`, job number or customer) and, beside it, `#gtotal`: the same
+   sum over the whole board (`boardLeftFor`), never narrowed by the search and
+   hidden whenever the search box is. Both are derived on the device at every
+   draw and stored nowhere. Ten quiet minutes lock the
    tablet back to the picker; Switch person does the same. Every tap shows at
    once, is queued in `cw_stationq`, PATCHes only that stage's counter plus
    `<Stage>By/<Stage>At/DoneBy/DoneAt`, then POSTs one `Station log` line
@@ -272,8 +280,10 @@ guide: `docs/STATIONS.md`.
    (`rebaseQueue`), and folds finished jobs — all three counters at the
    total, with a total > 0 — into a collapsed "Finished · n" group, gold.
 5. **The office view.** Show ▸ Glass station replaces the job list with a
-   read-only board: one card per job with "12 glasses", the three counters
-   with who · when under each, "last: …" from the log, and the same gold rule
+   read-only board: one card per job with "12 glasses" — the office's number
+   is still the size of the job, where the tablet's is one person's remaining;
+   they answer different questions and are not meant to agree — the three
+   counters with who · when under each, "last: …" from the log, and the same gold rule
    (finished cards go gold and sink to the bottom). The drawer shows the same
    three lines, a 12-line timeline and Full log; the Floor log window filters
    by person, stage, job and day with counts, read-only, 90-day horizon, and

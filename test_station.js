@@ -729,23 +729,105 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.boardFilter(null, "x"), []);
   pass("the search box matches a job number or a customer name, and nothing else about a job");
 
-  /* the number beside that box: how much glass is on the floor, which is a
-     different question from which cards are on screen */
-  assert.strictEqual(ST.boardGlassTotal(board), 10,
-    "eight glasses on R5303 and two on R5304 - R5301 is finished and out of it");
-  assert.strictEqual(ST.boardGlassTotal([board[1]]), 8,
-    "a job seven of eight cut still counts all eight: the glass is on the floor either way");
-  const allDone = ST.jobBoard([item({ Title: "R6", Job: "R6", GlassType: "GLASS", Total: 3, Seq: 1,
-                                      Active: "Yes", Cut: 3, Hotmelt: 3, Glazed: 3 }, "620")]);
-  assert.strictEqual(ST.boardGlassTotal(allDone), 0, "a board with nothing left to do is nought");
+  /* THE NUMBER THE TABLET SHOWS: how much of a job is left for the person
+     holding it, which is a different question from how big the job is and a
+     different question again from which cards are on screen */
+  const j14 = ST.jobBoard([item({ Title: "R14", Job: "R14", GlassType: "GLASS", Total: 14, Seq: 1,
+                                  Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "640")])[0];
+  assert.strictEqual(ST.jobLeftFor(j14, ["cut"]), 14, "fourteen to cut before anything is cut");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1 }), ["cut"]), 13,
+    "one of fourteen cut and it is thirteen - the owner's own words");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 14 }), ["cut"]), 0,
+    "and nought when every one of them is cut");
+  /* OWNER DECISION, 2026-09-09: somebody who holds two stages has two jobs of
+     work on every glass, and they are counted separately. The other reading -
+     the smallest of their counters, so the number stays a count of glasses -
+     lets them cut six and watch the number on the wall sit still because
+     hotmelt has not caught up, and the owner will not have that on a
+     workshop wall. */
+  assert.strictEqual(ST.jobLeftFor(j14, ["cut", "hotmelt"]), 28,
+    "fourteen to cut and fourteen to hotmelt is twenty-eight things left to do");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1 }), ["cut", "hotmelt"]), 27,
+    "one cut takes exactly one off");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1, hotmelt: 1 }), ["cut", "hotmelt"]), 26,
+    "and one hotmelt takes exactly one more: EITHER stage moves it, which the smallest could not");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["cut", "hotmelt"]), 24,
+    "cut three and hotmelted one is four of the twenty-eight done, so twenty-four are left");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["hotmelt", "cut"]), 24,
+    "and the order the stages are listed in cannot change it");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["cut", "cut"]), 11,
+    "a stage named twice in the column is one stage held, not two");
+  assert.strictEqual(ST.jobLeftFor(j14, ["cut", "hotmelt", "glazed"]), 42,
+    "all three stages on a fourteen-glass job is forty-two");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 14, hotmelt: 14, glazed: 14 }),
+                                   ["cut", "hotmelt", "glazed"]), 0, "a finished job is nought for anybody");
+  /* somebody who holds no stage cannot move any of it: the whole job is still
+     to do, and nought would read as "done" */
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), []), 14,
+    "a person with no stages has the whole job left, whatever anybody else has done");
+  assert.strictEqual(ST.jobLeftFor(j14, null), 14);
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), ["tough", "TUFF"]), 14,
+    "and a word in the Stages column that is not a stage is not a stage they hold");
+  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), [" CUT "]), 9,
+    "while a real one typed with spaces and capitals still is");
+  assert.strictEqual(ST.jobLeftFor(null, ["cut"]), 0, "nothing it is handed throws");
+  assert.strictEqual(ST.jobLeftFor({ total: -4, cut: "" }, ["cut"]), 0);
+  assert.strictEqual(ST.jobLeftFor({ total: "abc", cut: 3 }, ["cut"]), 0);
+  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: 99 }, ["cut"]), 0, "a count above the total is clamped");
+  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: -9 }, ["cut"]), 4, "and one below nought is too");
+  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: -9, hotmelt: 99, glazed: "" },
+                                   ["cut", "hotmelt", "glazed"]), 8,
+    "the clamp is per stage, so the worst a malformed row can say is total times stages held");
+  pass("a person's number on a job is the total less each of the stages they hold, added up");
+
+  /* the counts are separate for each person, which falls out of that rule
+     rather than being enforced anywhere */
+  const shared = Object.assign({}, j14, { cut: 1 });
+  assert.strictEqual(ST.jobLeftFor(shared, ["cut"]), 13, "the person cutting has counted one off");
+  assert.strictEqual(ST.jobLeftFor(shared, ["glazed"]), 14,
+    "and the person glazing still has all fourteen: one person's tap is not another's");
+  pass("what one person has left is not moved by what another person recorded");
+
+  /* THE HEADER: the owner's own example - 14 on one job, 13 on another, 27
+     between them, and one cut takes it to 26 */
+  const twoJobs = ST.jobBoard([
+    item({ Title: "R5035", Job: "R5035", Customer: "Customer One", GlassType: "GLASS",
+           Total: 14, Seq: 1, Active: "Yes" }, "641"),
+    item({ Title: "R5041", Job: "R5041", Customer: "Customer Two", GlassType: "GLASS",
+           Total: 13, Seq: 2, Active: "Yes" }, "642")]);
+  assert.strictEqual(ST.boardLeftFor(twoJobs, ["cut"]), 27, "fourteen and thirteen make twenty-seven");
+  const afterOne = twoJobs.map(g => g.job === "R5035" ? Object.assign({}, g, { cut: 1 }) : g);
+  assert.strictEqual(ST.boardLeftFor(afterOne, ["cut"]), 26, "and one glass cut makes it twenty-six");
+  assert.strictEqual(ST.boardLeftFor(afterOne, ["glazed"]), 27,
+    "while the person glazing still has all twenty-seven of it");
+  assert.strictEqual(ST.boardLeftFor(twoJobs, ["cut", "hotmelt"]), 54,
+    "and somebody who cuts and hotmelts both jobs has twice that: fifty-four");
+  assert.strictEqual(ST.boardLeftFor(afterOne, ["cut", "hotmelt"]), 53,
+    "one cut off one job takes one off it, wherever their other stage has got to");
+  assert.strictEqual(ST.boardLeftFor(board, ["cut"]), 3,
+    "on the fixture board: one left to cut on R5303, two on R5304, none on the finished R5301");
+  assert.strictEqual(ST.boardLeftFor(board, []), 14,
+    "somebody who holds nothing sees the whole board's glass and can move none of it");
   const noGlass = ST.jobBoard([item({ Title: "R7", Job: "R7", GlassType: "GLASS", Total: 0, Seq: 1,
                                       Active: "Yes" }, "621")]);
-  assert.strictEqual(ST.boardGlassTotal(noGlass), 0, "and a job with no glasses on it adds nothing");
-  assert.strictEqual(ST.boardGlassTotal([]), 0);
-  assert.strictEqual(ST.boardGlassTotal(null), 0);
-  assert.strictEqual(ST.boardGlassTotal([{ total: -4 }, { total: "" }, null]), 0,
+  assert.strictEqual(ST.boardLeftFor(noGlass, ["cut"]), 0, "a job with no glasses on it adds nothing");
+  assert.strictEqual(ST.boardLeftFor([], ["cut"]), 0);
+  assert.strictEqual(ST.boardLeftFor(null, ["cut"]), 0);
+  assert.strictEqual(ST.boardLeftFor([{ total: -4 }, { total: "" }, null], ["cut"]), 0,
     "nothing it is handed can make it negative or NaN");
-  pass("the floor's total is the glass still to do: finished jobs out, part-done jobs whole");
+  assert.strictEqual(ST.boardGlassTotal, undefined,
+    "and the floor-wide total it replaces is gone, not kept beside it to drift");
+  pass("the header is the same sum over the whole board: what this person has left today");
+
+  /* the wording: a number that counts down has to say so */
+  assert.strictEqual(ST.leftWords(14), "14 left");
+  assert.strictEqual(ST.leftWords(1), "1 left", "no plural to get wrong");
+  assert.strictEqual(ST.leftWords(0), "0 left");
+  assert.strictEqual(ST.leftWords(-3), "0 left");
+  assert.strictEqual(ST.leftWords("x"), "0 left");
+  assert.strictEqual(ST.glassWords(12), "12 glasses",
+    "and the office's own wording is untouched: there the number IS the size of the job");
+  pass("the tablet says \"14 left\" where the office says \"14 glasses\"");
 
   /* ================= 6. the tap ================= */
   const trow = { id: "1", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
@@ -2443,7 +2525,10 @@ const person = (name, stages, pin, active, station) =>
 
   let bh = boardHtml();
   assert.ok(bh.indexOf("R5303") > 0 && bh.indexOf("Customer One") > 0);
-  assert.ok(bh.indexOf("6 glasses") > 0, "one number of glasses on the card, and no kinds of glass");
+  /* Person A holds cutting and nothing has been cut, so all six are theirs to
+     do. The card says what is left for them, not how big the job is. */
+  assert.ok(bh.indexOf("6 left") > 0, "one number on the card, and no kinds of glass");
+  assert.ok(bh.indexOf("6 glasses") < 0, "the office's wording is not what the floor is asked to read");
   ["Cutting", "Hotmelting", "Glazing"].forEach(w => assert.ok(bh.indexOf(w) > 0));
   ["Cork", "eircode", "@", "Export", "Delete", "index.html",
    "DG", "TG", "TUFF", "ARCH", "ASTRAGAL", "FANCY"].forEach(w =>
@@ -2781,30 +2866,76 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "clearing it brings them back");
   pass("the search box narrows the cards as it is typed, by job number or customer name");
 
-  /* THE TOTAL BESIDE THE BOX: it says how much glass is on the floor, so what
-     somebody types must never move it - a smaller number would read as less
-     work rather than as a narrower screen */
+  /* THE NUMBER BESIDE THE BOX: it says what the person signed in has left to
+     do over the whole board, so what somebody types must never move it - a
+     smaller number would read as less work rather than as a narrower screen */
+  ITEMS[0].fields.Cut = 0;
+  await S("readList()");
   reset();
   S("QUERY = ''; render();");
-  assert.strictEqual(REQ.length, 0, "drawing the total asks nobody anything");
+  assert.strictEqual(REQ.length, 0, "drawing the number asks nobody anything");
   assert.strictEqual(EL["#gtotal"].hidden, false, "it is up while the board is");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses", "six on one job and two on the other");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
+    "Person A cuts, and nothing is cut yet: six on one job and two on the other");
   S("QUERY = '5310'; render();");
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "one card on screen");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses",
-    "and the total is still the whole floor's, not the two glasses being looked at");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
+    "and the number is still their whole day's, not the two glasses being looked at");
   S("QUERY = 'zzz'; render();");
   assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0, "nothing matches");
-  assert.strictEqual(EL["#gtotal"].hidden, false, "the total is still there");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 glasses",
-    "and still the full one: an empty screen is not an empty floor");
+  assert.strictEqual(EL["#gtotal"].hidden, false, "the number is still there");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
+    "and still the full one: an empty screen is not an empty day");
   assert.strictEqual(REQ.length, 0, "and none of that sent a single request");
   S("QUERY = ''; render();");
-  pass("the total beside the search box is the whole floor's glass, whatever is typed in the box");
+  pass("the number beside the search box is the whole board's work, whatever is typed in the box");
 
-  /* a tap that finishes a job takes that job's glass out of the number: it is
-     what is left to make, and it moves on the next draw rather than on the
-     write coming back */
+  /* AND IT IS THIS PERSON'S: switching to somebody holding other stages
+     redraws every card with their numbers, not the last person's */
+  assert.strictEqual(S("NODES['R5303'].innerHTML").indexOf("6 left") > 0, true,
+    "Person A cuts, and none of the six is cut");
+  S("QUEUE = {}; LOGQ = {}; tap('900', 'cut', 4);");
+  assert.ok(S("NODES['R5303'].innerHTML").indexOf("2 left") > 0,
+    "four cut and two are left for them");
+  assert.strictEqual(EL["#gtotal"].textContent, "4 left", "two here and the two on the other job");
+  await settle(80);
+  reset();
+  S("switchPerson()");
+  assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0, "the picker comes back between them");
+  S("pickPerson(PEOPLE.find(p => p.name === 'Person B'))");
+  assert.ok(S("NODES['R5303'].innerHTML").indexOf("10 left") > 0,
+    "Person B hotmelts AND glazes: two of six hotmelted and none glazed is four plus six, " +
+    "ten on this one job, where the person who only cuts had two");
+  assert.strictEqual(EL["#gtotal"].textContent, "14 left",
+    "and their whole board is fourteen, untouched by the four somebody else cut");
+  /* the same switch without the picker in between - which is what the people
+     read does when the office edits somebody's Stages column while they are
+     signed in - must move the cards too, or they keep the old stages' numbers */
+  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); render();");
+  assert.ok(S("NODES['R5303'].innerHTML").indexOf("2 left") > 0,
+    "the cards follow the person even when no picker let the nodes go");
+  assert.ok(/data-stage="cut" data-act="1">\+<\/button>/.test(S("NODES['R5303'].innerHTML")),
+    "and so do the steppers, which are drawn from the same person");
+  assert.strictEqual(EL["#gtotal"].textContent, "4 left");
+  S("PERSON = PEOPLE.find(p => p.name === 'Person C'); render();");
+  assert.ok(S("NODES['R5303'].innerHTML").indexOf("6 left") > 0,
+    "a person holding no stage at all has the whole job left: nought would read as done");
+  assert.strictEqual(EL["#gtotal"].textContent, "8 left", "and the whole board with it");
+  assert.ok(/data-stage="cut"[^>]*disabled/.test(S("NODES['R5303'].innerHTML")),
+    "while they can still move none of it");
+  assert.strictEqual(REQ.length, 0,
+    "and not one request went out for any of it: the numbers are worked out on the device, " +
+    "every time they are drawn, and stored nowhere");
+  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); QUEUE = {}; LOGQ = {}; LAST_TAP = Date.now();");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  ITEMS[0].fields.Cut = 0;
+  await S("readList()");
+  pass("the cards and the number are the signed-in person's own, and every card is redrawn when they change");
+
+  /* a tap counts down on the card and in the header the moment it is made -
+     on the next draw, not when the write comes back - and a job this person
+     has finished drops out of their number altogether by the same arithmetic,
+     with no special case for it anywhere */
   ITEMS = [item({ Title: "R5330", Job: "R5330", Customer: "Customer Fourteen", GlassType: "GLASS",
                   Total: 2, Seq: 1, Active: "Yes", Cut: 2, Hotmelt: 2, Glazed: 0 }, "970"),
            item({ Title: "R5331", Job: "R5331", Customer: "Customer Fifteen", GlassType: "GLASS",
@@ -2812,15 +2943,20 @@ const person = (name, stages, pin, active, station) =>
   S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = '';");
   S("PERSON = { name: 'Person A', stages: ['cut', 'hotmelt', 'glazed'], pin: '' }; LAST_TAP = Date.now();");
   await S("readList()");
-  assert.strictEqual(EL["#gtotal"].textContent, "7 glasses", "two jobs, seven glasses between them");
+  assert.strictEqual(EL["#gtotal"].textContent, "17 left",
+    "this person holds all three stages: two glazings left on one job and three times five on the other");
+  assert.ok(S("NODES['R5330'].innerHTML").indexOf("2 left") > 0,
+    "two glasses cut and hotmelted but not glazed are two glazings this person has left");
   S("tap('970', 'glazed', 'all')");
-  assert.strictEqual(EL["#gtotal"].textContent, "5 glasses",
-    "the finished job's two are out of it at once, before the write has even left the tablet");
+  assert.ok(S("NODES['R5330'].innerHTML").indexOf("0 left") > 0,
+    "the card is at nought before the write has even left the tablet");
+  assert.strictEqual(EL["#gtotal"].textContent, "15 left",
+    "and the header with it, in the same draw");
   await settle(80);
   S("render()");
-  assert.strictEqual(EL["#gtotal"].textContent, "5 glasses", "and they stay out once it has");
+  assert.strictEqual(EL["#gtotal"].textContent, "15 left", "and they stay out once it has");
   S("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
-  pass("finishing a job drops its glass out of the floor's total on the next draw");
+  pass("a tap counts the card and the header down together, before anything is sent");
 
   /* AMENDMENT 11: a stored stamp from the future is not a licence */
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() + 86400000 });
@@ -3013,7 +3149,7 @@ const person = (name, stages, pin, active, station) =>
   /* AMENDMENT 6: under 16px iOS zooms the page in on focus, and a tablet on a
      wall is not something anybody can pinch back out */
   assert.ok(/#search \{[^}]*font-size:16px/.test(gs), "the search box is 16px, so iOS does not zoom");
-  assert.ok(gs.indexOf('id="gtotal"') > 0, "the floor's total is in the header too");
+  assert.ok(gs.indexOf('id="gtotal"') > 0, "the signed-in person's own number is in the header too");
   assert.ok(gs.indexOf('id="search"') < gs.indexOf('id="gtotal"') &&
             gs.indexOf('id="gtotal"') < gs.indexOf('id="upd"'),
     "beside the box, before the updated line, so a narrow header wraps them together");

@@ -69,15 +69,15 @@
             border-radius:24px; min-height:44px; padding:0 16px; font-size:16px; width:min(230px,40vw);
             font-family:inherit }
   #search::placeholder { color:#8a867e }
-  /* how much glass is standing on the floor, beside the box - and pointedly
-     not narrowed by it. It is read at a glance and never tapped, so it takes
-     #whois' 40px rather than a 44px target. What keeps it from squeezing
-     Switch person or the search box is flex-wrap on the header itself: items
-     that will not fit wrap onto the next line instead of shrinking. flex:none
-     only stops this pill being the one that gives way, so a long number is
-     never compressed into an unreadable one, and nowrap keeps "12 glasses" on
-     a single line. On a narrow tablet the header therefore grows a second row
-     rather than crushing anything on the first. */
+  /* what the person signed in has left to do over the whole board, beside the
+     box - and pointedly not narrowed by it. It is read at a glance and never
+     tapped, so it takes #whois' 40px rather than a 44px target. What keeps it
+     from squeezing Switch person or the search box is flex-wrap on the header
+     itself: items that will not fit wrap onto the next line instead of
+     shrinking. flex:none only stops this pill being the one that gives way, so
+     a long number is never compressed into an unreadable one, and nowrap keeps
+     "12 left" on a single line. On a narrow tablet the header therefore grows
+     a second row rather than crushing anything on the first. */
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
             padding:8px 16px; min-height:40px; flex:none; white-space:nowrap;
@@ -193,8 +193,8 @@
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
-<script src="graph.js?v=20260909-1509"></script>
-<script src="station-core.js?v=20260909-1509"></script>
-<script src="station.js?v=20260909-1509"></script>
+<script src="graph.js?v=20260909-1612"></script>
+<script src="station-core.js?v=20260909-1612"></script>
+<script src="station.js?v=20260909-1612"></script>
 </body>
 </html>
