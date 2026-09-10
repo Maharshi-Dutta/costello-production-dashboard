@@ -646,3 +646,56 @@ The writes are deliberately in that order and were not reordered: clearing the
 floor first would leave the floor at nought with the sheet still gold if the
 workbook write then failed, which is the mirror of the bug the feature exists
 to remove.
+
+### E. The clear now unlocks the card in its own write
+
+**Status: built, all suites green, not demoed, not committed.**
+
+#### E1. What the owner saw
+
+On the live build (a6b31c6, 20260910-1555): after an office un-tick the tablet
+card correctly went from gold to black with its counters at nought — and then
+sat **greyed**, saying *"the office has marked this job finished"*, for over a
+minute.
+
+`OfficeDone` was only ever released by the **feeder's** next run, and the
+feeder derives it from what the master currently shows. While the master was
+still showing gold — a separate display problem, being chased on its own — the
+feeder kept writing `OfficeDone: "Yes"` straight back on.
+
+#### E2. The change
+
+`ST.officeClearFields(who, at)` now returns **seven** fields, not six:
+`OfficeDone: "No"` joins the four noughts and the last-touch pair, so the
+unlock travels in the clear's own PATCH. The tablet frees the card on its next
+ten-second poll instead of waiting for a feed run that may be reading a stale
+master. `OFFICE_CLEAR_FIELDS` and every exact-key-set assertion moved with it.
+
+**It widens nothing in `CLAUDE.md` rule 3.** `OfficeDone` is a **feeder**
+field — the office's own column, which the office already writes on every feed
+and which the tablet can never write (`ST.floorOnly` drops it, asserted). The
+only floor columns on this path are still the same four counters, still only
+ever nought. Six of the seven fields are the floor's; the seventh is the
+office's and always was.
+
+`clearFloorGlass` needed no change: its local `STATION_ITEMS` update merges the
+whole body, so the office's own board and drawer show the job unlocked at once
+too — asserted.
+
+#### E3. What flipped, and what did not
+
+| check | on a6b31c6 | with the fix |
+|---|---|---|
+| A the clear's body is the seven fields, the unlock among them | FAIL | PASS |
+| B one poll after the clear the card is unlocked — no "finished" line, steppers live | FAIL | PASS |
+| C a feed straight after the un-tick never re-locks the row | PASS | PASS |
+
+**C already passed, and that is worth recording rather than glossing.** The
+feeder derives `OfficeDone` from `officeComplete(glassCounts(j))` over the
+**PENDING-applied** job, and the un-tick is held in `PENDING` from the moment of
+the click — so a feed running inside that window already saw "not complete" and
+wrote `No`. Check C is a regression guard, not a fix. It follows that the
+re-lock the owner saw did **not** come from this dashboard inside the hold
+window: it came from a feed whose master was reading gold with no hold to
+correct it — the display problem being investigated separately. The unlock in
+the clear's own write is what makes the card free regardless of that.

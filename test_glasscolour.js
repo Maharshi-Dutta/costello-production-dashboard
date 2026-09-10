@@ -1031,8 +1031,11 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual(clearWrites().length, 1, "one write to the floor's list, and one only");
   assert.strictEqual(clearWrites()[0].id, "700", "onto that job's own row");
   assert.deepStrictEqual(clearWrites()[0].fields,
-    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: clearWrites()[0].fields.DoneAt },
-    "the four counters at nought and the last touch - asserted as an exact key set");
+    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin",
+      DoneAt: clearWrites()[0].fields.DoneAt, OfficeDone: "No" },
+    "the four counters at nought, the last touch, and the unlock - asserted as an exact key set");
+  assert.strictEqual(A("stationForJob('R7001').officeDone"), false,
+    "and this dashboard's own copy of the row shows the job unlocked at once, without waiting for a feed");
   assert.ok(/^\d{4}-\d\d-\d\dT.*Z$/.test(clearWrites()[0].fields.DoneAt),
     "DoneAt is a real ISO stamp, so the floor's row does not read as old news");
   pass("an office clear on a job the floor has tapped writes exactly the four noughts and the last touch");
@@ -1040,13 +1043,16 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "TuffBy", "TuffAt"]
     .forEach(k => assert.ok(!(k in clearWrites()[0].fields),
       "no " + k + ": that says who did that stage's work, and nobody did"));
-  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "OfficeDone", "FedAt", "FedBy"]
+  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "FedAt", "FedBy"]
     .forEach(k => assert.ok(!(k in clearWrites()[0].fields), "and no job fact either: no " + k));
+  /* OfficeDone is the one office column that does ride along - the unlock, so
+     the tablet frees the card on its next poll rather than on the next feed */
+  assert.strictEqual(clearWrites()[0].fields.OfficeDone, "No");
   assert.ok(!ALLREQ.some(r => /Station log|Station people|list-station/.test(r.path)),
     "and not one request of any kind reached the Station log or the people list");
   assert.strictEqual(A("Object.keys(FLOORCLEAR_OK).length"), 0, "the office's permission is spent once");
   assert.strictEqual(A("Object.keys(FLOORCLEAR_OWED).length"), 0, "and nothing is left owed");
-  pass("no Station log line, no per-stage By or At, no job fact: the office wrote six fields and stopped");
+  pass("no Station log line, no per-stage By or At, no job fact but the unlock: seven fields and stopped");
 
   /* THE POINT OF THE WHOLE FEATURE: all three now say the same thing */
   assert.strictEqual(A("stationForJob('R7001').cut"), 0, "the floor's row reads nought");

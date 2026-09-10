@@ -422,27 +422,45 @@ const person = (name, stages, pin, active, station) =>
      Owner, 2026-09-10 (docs/specs/2026-09-10-office-clears-the-floor.md). Six
      fields, four of them a literal nought, and that is the whole of it. */
   assert.deepStrictEqual(ST.OFFICE_CLEAR_FIELDS,
-    ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt"]);
+    ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt", "OfficeDone"]);
   const CLEARBODY = ST.officeClearFields("the admin", "2026-09-10T15:00:00.000Z");
   assert.deepStrictEqual(Object.keys(CLEARBODY).sort(), ST.OFFICE_CLEAR_FIELDS.slice().sort(),
     "an office clear names exactly those six fields - asserted as a key set, not a subset");
   assert.deepStrictEqual(CLEARBODY,
-    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: "2026-09-10T15:00:00.000Z" });
+    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin",
+      DoneAt: "2026-09-10T15:00:00.000Z", OfficeDone: "No" });
+  /* OfficeDone rides along with the clear (owner, 2026-09-10, seeing the tablet
+     stay greyed for over a minute after an un-tick). It is an office column -
+     the feeder's, not the floor's - so this widens nothing: the office already
+     writes it. It only moves the unlock into the clear's own PATCH, so the
+     tablet frees the card on its next ten-second poll instead of waiting for a
+     feeder run that may be reading a master which has not caught up. */
+  assert.strictEqual(CLEARBODY.OfficeDone, "No", "and the clear unlocks the job in the same write");
+  assert.ok(ST.FEEDER_FIELDS.indexOf("OfficeDone") >= 0 && ST.FLOOR_FIELDS.indexOf("OfficeDone") < 0,
+    "OfficeDone is the office's own column, so no floor column was added to this path");
+  assert.deepStrictEqual(ST.floorOnly(CLEARBODY),
+    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: "2026-09-10T15:00:00.000Z" },
+    "and the tablet still cannot send it: floorOnly drops OfficeDone whatever hands it over");
   ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "TuffBy", "TuffAt"]
     .forEach(k => assert.ok(!(k in CLEARBODY),
       "a clear never writes " + k + ": that says who did that stage's work, and nobody did"));
-  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "OfficeDone", "FedAt", "FedBy", "Title"]
+  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "FedAt", "FedBy", "Title"]
     .forEach(k => assert.ok(!(k in CLEARBODY), "and it is not a feed either: no " + k));
   /* the shape of the function IS the guarantee: it takes a name and a time, so
      there is no argument through which a counter could be smuggled in */
   assert.strictEqual(ST.officeClearFields.length, 2, "who and when, and nothing else, go in");
   ST.ALL_STAGE_KEYS.forEach(k => assert.strictEqual(CLEARBODY[ST.STAGE_FIELD[k]], 0,
     ST.STAGE_FIELD[k] + " can only ever be nought on this path"));
-  assert.ok(ST.OFFICE_CLEAR_FIELDS.every(k => ST.FLOOR_FIELDS.indexOf(k) >= 0),
-    "every field of a clear is one of the floor's own - that is exactly why it needed the owner");
+  /* six of the seven are the floor's own columns - that is exactly why this
+     needed the owner. The seventh, OfficeDone, is the office's own and always
+     was: it is the unlock riding along with the clear, not a new floor column. */
+  assert.deepStrictEqual(ST.OFFICE_CLEAR_FIELDS.filter(k => ST.FLOOR_FIELDS.indexOf(k) < 0),
+    ["OfficeDone"], "only OfficeDone is outside the floor's columns, and it is the office's own");
+  assert.ok(ST.OFFICE_CLEAR_FIELDS.filter(k => ST.FLOOR_FIELDS.indexOf(k) >= 0).length === 6,
+    "and the other six are the floor's, which is why the owner had to grant this");
   assert.ok(ST.OFFICE_CLEAR_FIELDS.indexOf("Tuff") >= 0 && ST.SEED_FIELDS.indexOf("Tuff") < 0,
     "Tuff is cleared but never seeded: the two exceptions are separate and neither widens the other");
-  pass("an office clear is six fields, four literal noughts and the last touch - and cannot express anything else");
+  pass("an office clear is seven fields - four literal noughts, the last touch and the unlock - and can express nothing else");
 
   /* when there is anything to clear at all, and what the office is told first */
   const clrRow = o => ST.jobRecord([item(Object.assign({ Title: "R5303", Job: "R5303",
@@ -1498,6 +1516,7 @@ const person = (name, stages, pin, active, station) =>
     "with nobody's name on any of it: the office did this, not the floor");
   pass("a job the office had already ticked off reaches the floor carrying that, not nothing");
 
+
   /* an untouched row moves with the office's record, on the wire this time */
   useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
                    cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } }),
@@ -1918,6 +1937,32 @@ const person = (name, stages, pin, active, station) =>
   ITEMS = []; LOGITEMS = []; OWNITEMS = []; OWNLOG = [];
   A("STATION_SITE_GEN = CW.stationSiteMoves(); STATION_FEED = { hash: '', at: 0 };");
   pass("the feeder and the office board work the same on the fallback, and no wording anywhere names a site");
+
+  /* ---- and a feed run straight after an un-tick must not put the lock back ----
+     This is the other half of the owner's greyed card. The feeder derives
+     OfficeDone from the office's own glass checkpoints, read through the
+     PENDING-applied job - and the un-tick is held in PENDING from the moment
+     of the click. So a feed running in the ~36 s before the downloaded file
+     agrees still sees "not complete" and writes No, or writes nothing. Never
+     Yes: that would re-lock the card the clear has just freed. */
+  ITEMS = []; forget();
+  useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } })]);
+  A("STATION_FEED = { hash: '', at: 0 }");
+  await feedStation();
+  assert.strictEqual(ITEMS[0].fields.OfficeDone, "Yes", "locked, because the office has ticked it off");
+  /* the office un-ticks it: held at the click, long before the file agrees */
+  A("PENDING = {}; savePending(); pend('R4941', { cp: { 'glass:tg': 0, 'glass:dg': 0 } });");
+  A("ALL = applyPending(ALL, true);");
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  const unlockFeed = writes().filter(w => w.method === "PATCH");
+  assert.ok(unlockFeed.every(w => w.body.OfficeDone !== "Yes"),
+    "no feed write puts the lock back on while the office's un-tick is still settling");
+  assert.strictEqual(ITEMS[0].fields.OfficeDone, "No", "the row is left unlocked");
+  A("PENDING = {}; savePending();");
+  pass("a feed run straight after an un-tick never re-locks the job: the held un-tick is what it reads");
 
   /* ================= 14. the office: board, drawer, log window ================= */
   ITEMS = bItems.slice(); LOGITEMS = lItems.slice(); forget();
@@ -3822,7 +3867,38 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ITEMS[0].fields.Cut, 0);
   pass("office-complete greys every stepper on that job and tap() refuses them");
 
+  /* ---- and the office's own clear unlocks it, in the same write ----
+     OWNER, 2026-09-10, on the live build: after an un-tick the card correctly
+     went black with its counters at nought, and then sat GREYED, saying the
+     office had marked the job finished, for over a minute. The lock was only
+     released by the feeder's next run, and the feeder derives it from what the
+     master currently shows - so while the master was still showing gold it
+     kept writing the lock back on. The clear now carries the unlock itself. */
+  Object.assign(ITEMS[0].fields, { Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, OfficeDone: "Yes",
+                                   DoneAt: "2026-09-10T14:00:00.000Z", DoneBy: "Person A" });
+  S("TOKEN = null;"); await S("readList()");
+  assert.ok(S("NODES['R6001'].innerHTML").indexOf("the office has marked this job finished") > 0,
+    "the job is locked to begin with");
+  Object.assign(ITEMS[0].fields, ST.officeClearFields("the admin", "2026-09-10T15:00:00.000Z"));
+  S("TOKEN = null;"); await S("readList()");   // the tablet's own ten-second poll
+  tb = S("NODES['R6001'].innerHTML");
+  assert.ok(tb.indexOf("the office has marked this job finished") < 0,
+    "one poll after the clear the card is not saying the job is finished any more");
+  assert.ok(!/data-stage="cut"[^>]*disabled/.test(tb),
+    "and the stepper this person holds is live again - no feeder run needed");
+  assert.ok(/>0</.test(tb) || tb.indexOf("0 of 8") > 0, "with the counters the clear put back to nought");
+  reset();
+  S("tap('700', 'cut', 1)");
+  await settle(80);
+  assert.strictEqual(writes().filter(w => w.method === "PATCH").length, 1,
+    "and the floor can move it again straight away");
+  assert.strictEqual(ITEMS[0].fields.Cut, 1);
+  assert.ok(JSON.stringify(writes().map(w => w.body)).indexOf("OfficeDone") < 0,
+    "while the tablet still has no way to write that column itself");
+  pass("an office clear unlocks the card in its own write: the tablet frees it on the next poll, not on the next feed");
+
   /* only the office clears it */
+  ITEMS[0].fields.Cut = 0;
   ITEMS[0].fields.OfficeDone = "No";
   S("TOKEN = null;"); await S("readList()");   // the poll brings the lock over
   reset();

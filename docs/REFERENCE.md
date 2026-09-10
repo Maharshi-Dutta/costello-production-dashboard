@@ -375,7 +375,7 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_john.js` | the John print sheet, template and print notes | 31 |
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
-| `test_station.js` | floor stations end to end (offline), incl. tuff, the lock, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 243 |
+| `test_station.js` | floor stations end to end (offline), incl. tuff, the lock and its release by a clear, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 245 |
 | `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, and the office-absolute guard | 65 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
@@ -767,7 +767,13 @@ download lag and is not this.
 **What happens now.** When the office **clears a job's glass checkpoints** —
 the group **Clear**, or a per-item clear that leaves no other DG/TG ticked —
 the office writes that job's `Glass station` row's `Cut`, `Hotmelt`, `Glazed`
-and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`. Six fields, and nothing else.
+and `Tuff` to **zero**, plus `DoneBy`/`DoneAt` and `OfficeDone = "No"`. Seven
+fields, and nothing else. The unlock rides along so the **card frees itself on
+the tablet's next ten-second poll** (owner, 2026-09-10: it used to sit greyed,
+"the office has marked this job finished", for over a minute, because only the
+feeder released the lock and the feeder derives it from what the master
+currently shows). `OfficeDone` is a feeder column — the office's own, which the
+tablet can never write — so nothing about rule 3 moves.
 `DoneBy`/`DoneAt` are written on purpose: last-writer-wins reads
 `ST.floorStamp` off them, so zeros under a stale stamp would read as old news
 and the tablet's "last touch" line would name the wrong person. The per-stage
@@ -824,7 +830,7 @@ several checkpoint bursts at once and any of them landing would otherwise spend
 the answer and clear the floor before the glass write had landed;
 `clearFloorGlass()` re-deriving the reason from the office's own record and the
 floor's row at write time rather than trusting the caller; and `ST.officeClearFields(who, at)` — a name and a
-time in, six fields out, every counter a literal nought — so the path has no
+time in, seven fields out, every counter a literal nought — so the path has no
 argument through which a counter or a per-stage stamp could enter.
 `test_station.js` asserts the counts of each of those in the source.
 

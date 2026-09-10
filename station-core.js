@@ -118,20 +118,35 @@ const FEEDER_WRITES = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], SEED_F
    is in the shape of officeClearFields below: it takes a name and a time, so
    there is no argument it could carry a counter or a per-stage stamp IN. Every
    counter it writes is a literal nought, written here, once. */
-const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt"];
-/** The whole body of an office clear: four noughts and the last-touch pair.
+const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt", "OfficeDone"];
+/** The whole body of an office clear: four noughts, the last-touch pair, and
+    the unlock.
 
     DoneBy/DoneAt are written, and not writing them would be the bug: the
     last-writer-wins rule reads floorStamp off those fields (spec §3), so
     counters dropped to nought under a stale stamp would look like old news and
     the tablet's "last touch" line would name whoever tapped last rather than
     whoever actually moved the row. The per-stage By/At pairs are NOT written -
-    they say who did that stage's WORK, and nobody did. */
+    they say who did that stage's WORK, and nobody did.
+
+    OfficeDone = "No" joined them on 2026-09-10, after the owner watched a card
+    go correctly black with its counters at nought and then sit GREYED, saying
+    the office had marked the job finished, for over a minute. The lock was
+    only ever released by the feeder's next run, and the feeder derives it from
+    what the master currently shows - so while the master had not caught up it
+    kept writing the lock straight back on. Carrying the unlock in the clear's
+    own PATCH frees the card on the tablet's next ten-second poll instead.
+
+    It widens nothing. OfficeDone is a FEEDER field - the office's own column,
+    which the office already writes and the tablet never can (floorOnly drops
+    it). The counters are the only floor columns on this path, and they are
+    still the same four, still only ever nought. */
 function officeClearFields(who, at) {
   const out = {};
   ALL_STAGE_KEYS.forEach(k => { out[STAGE_FIELD[k]] = 0; });
   out.DoneBy = stTxt(who);
   out.DoneAt = stTxt(at) || new Date().toISOString();
+  out.OfficeDone = "No";
   return out;
 }
 /** Is there anything on this row for an office clear to clear? Two things have

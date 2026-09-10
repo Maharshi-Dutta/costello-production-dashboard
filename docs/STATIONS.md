@@ -55,7 +55,7 @@ iteration is deployed; the code tolerates them either way. Columns:
 | TuffTotal | number | feeder | tuff units on the job, off the sheet's own TUFF column. **Never added to `Total`** (added 2026-09-10) |
 | Seq | number | feeder | the job's position in the master list, so the floor sees the office's order |
 | Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards |
-| OfficeDone | text | feeder | `Yes` when the office has ticked this job's DG and TG off. The job is then **read-only on the tablet** (added 2026-09-10) |
+| OfficeDone | text | feeder; **also set to `No` by an office clear** | `Yes` when the office has ticked this job's DG and TG off. The job is then **read-only on the tablet** (added 2026-09-10) |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |
 | Cut | number | station; the feeder while the floor has not touched the row; **zeroed by an office clear** | glasses cut |
@@ -145,7 +145,7 @@ in the office cleared the workbook correctly but left the floor's counters
 standing, so the tablet stayed gold for ever and the only way back was somebody
 tapping `−` forty-nine times. So a clear now reaches the list: the office
 writes `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`
-— six fields, and nothing else, ever.
+and `OfficeDone = "No"` — seven fields, and nothing else, ever.
 
 - **When.** Only when the office's own record of the job's **DG and TG** goes
   from saying something to saying nothing — the group **Clear**, or a per-item
@@ -160,6 +160,15 @@ writes `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`
 - **The office is asked first**, in plain words naming what will go (*"The
   floor has recorded 49 cut, 49 hotmelted, 12 glazed on this job…"*). Answering
   no writes **nothing at all**, not even the workbook half.
+- **`OfficeDone = "No"` rides along**, so the clear unlocks the card itself
+  (owner, 2026-09-10: after an un-tick the card went correctly black with its
+  counters at nought and then sat greyed, saying the office had marked the job
+  finished, for over a minute). The lock used to be released only by the
+  feeder's next run, and the feeder derives it from what the master currently
+  shows — so while the master had not caught up it wrote the lock straight back
+  on. Now the tablet frees the card on its next ten-second poll. This widens
+  nothing: `OfficeDone` is a **feeder** column, the office's own, which the
+  office already writes and the tablet never can (`ST.floorOnly` drops it).
 - **`DoneBy`/`DoneAt` are written on purpose.** Last-writer-wins reads
   `ST.floorStamp` off those fields; counters dropped to nought under a stale
   stamp would read as old news and the tablet's "last touch" line would name
@@ -180,8 +189,9 @@ writes `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`
   *unlocks* the job (`OfficeDone` goes to `No`), so a dropped tap can simply be
   tapped again.
 
-It is `ST.officeClearFields(who, at)` — a name and a time in, six fields out,
-every counter a literal nought, so the path cannot express anything else — with
+It is `ST.officeClearFields(who, at)` — a name and a time in, seven fields out,
+every counter a literal nought and the lock a literal `No`, so the path cannot
+express anything else — with
 `ST.floorWorkToClear()` and `ST.clearWarning()` beside it. In `app.js` the
 whole of it is `clearFloorGlass()`, reached only from the two clear paths and
 only after the office has confirmed.
