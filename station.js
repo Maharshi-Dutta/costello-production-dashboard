@@ -631,7 +631,8 @@ function stepHtml(g, stage, label) {
   const total = Math.max(0, Math.round(Number(g[ST.STAGE_TOTAL_ROW[stage]]) || 0));
   /* the office's lock is not about who is holding the tablet, so it greys every
      stepper on the card rather than the ones a person does not hold */
-  const mine = ST.canStage(PERSON, stage) && !g.officeDone;
+  const holds = ST.canStage(PERSON, stage);
+  const mine = holds && !g.officeDone;
   const off = mine ? "" : ' disabled aria-disabled="true"';
   const b = (t, act, cls, dead) => '<button class="' + cls + '" data-id="' + esc(g.id) + '" data-stage="' + stage +
     '" data-act="' + act + '"' + (dead ? ' disabled aria-disabled="true"' : off) + '>' + t + '</button>';
@@ -641,7 +642,17 @@ function stepHtml(g, stage, label) {
   const none = !(total > 0);
   return '<div class="step' + (mine ? "" : " locked") + '">' +
     '<span class="stepl">' + esc(label) +
-      (g.officeDone ? "" : mine ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
+      /* what is still to do on THIS stage of THIS job, under the name of the
+         stage and beside the buttons that move it. It is the job's number, not
+         a personal tally: two people who both cut read the same one here. It
+         is drawn only for a stage this person holds - a number against
+         somebody else's stage is not theirs to work off - and it is drawn even
+         when the office has locked the card, because the counters underneath
+         it have not changed and half the row is greyed already. It rides in
+         space the row already had, so a card with four stages on it is no
+         taller than it was with one number in the headline. */
+      (holds ? '<span class="stepleft tab">' + esc(ST.leftWords(ST.stageLeft(g, stage))) + '</span>'
+             : g.officeDone ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") +
       '<span class="stepn tab' + (full ? " full" : "") + '">' + v + '</span>' + b("+", "1", "sbtn") +
       b(none || !full ? "All" : "None", full ? "none" : "all", "sall", none) + '</span>' +
@@ -651,9 +662,15 @@ function stepHtml(g, stage, label) {
 /** Everything inside one card. The card element itself is kept between draws
     (see paintBoard), so only this string is ever rebuilt.
 
-    The headline number is what THIS person has left on the job, not how big
-    the job is: two people at the same tablet see two different numbers on the
-    same card. It is drawn from PERSON, which is not part of the board, so
+    The headline says how big the job is - the glasses it holds, and the tuff
+    beside them where there is any - and it is the same for everybody. One
+    number that tried to say how much of it was left for the person holding the
+    tablet was shipped on 2026-09-09 and rejected by the owner on sight: it
+    added up the stages they held, so 49 glasses and 10 tuff read 157. What is
+    left is now one number per stage, drawn by stepHtml on the row of the stage
+    it counts, where the buttons that move it are.
+
+    The rows are still drawn from PERSON, which is not part of the board, so
     paintBoard has to notice PERSON moving on its own - see pState(). */
 function cardInner(g) {
   const owed = owedFor(g.id), bad = badFor(g.id);
@@ -665,7 +682,8 @@ function cardInner(g) {
   return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
-      '<span class="cnum tab">' + esc(ST.leftWords(ST.jobLeftFor(g, PERSON && PERSON.stages))) + '</span>' +
+      '<span class="cnum tab">' + esc(ST.glassWords(g.total) +
+          (g.tuffTotal > 0 ? " · " + g.tuffTotal + " tuff" : "")) + '</span>' +
     '</div>' +
     '<div class="steps">' + stages.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
     (g.officeDone ? '<div class="officedone">the office has marked this job finished</div>' : "") +
@@ -854,17 +872,24 @@ function render() {
   /* the board as it stands, before the box has narrowed it: the number beside
      the box is read off this, and the cards below off the filtered copy */
   const live = boarding ? boardNow() : null;
-  /* everything the person signed in has left to do, added up over the whole
-     board: the same number as the cards, so it counts down with them. It is
-     next to the box that narrows the cards and deliberately not narrowed by
-     it - a job number typed in must not make somebody's day look shorter. It
-     comes and goes with the search box for the same reason: a total floating
-     over "ask the office for the permission" is a number about nothing. */
+  /* what is left for the person signed in, one number per stage they hold,
+     added down the whole board: the very same numbers the cards show, said the
+     same way, so the header and the cards always agree and every tap moves
+     both. It is next to the box that narrows the cards and deliberately not
+     narrowed by it - a job number typed in must not make somebody's day look
+     shorter. It comes and goes with the search box for the same reason: a
+     total floating over "ask the office for the permission" is a number about
+     nothing. And somebody holding no stage at all gets no pill: they have
+     nothing to work off, and a number here would be about somebody else's
+     work. */
   const gt = $("#gtotal");
   if (gt) {
-    gt.hidden = !boarding;
-    gt.style.display = boarding ? "" : "none";
-    gt.textContent = boarding ? ST.leftWords(ST.boardLeftFor(live, PERSON.stages)) : "";
+    const lefts = boarding ? ST.boardLefts(live, PERSON.stages) : [];
+    const on = boarding && lefts.length > 0;
+    gt.hidden = !on;
+    gt.style.display = on ? "" : "none";
+    gt.textContent = on
+      ? lefts.map(e => e.label + " " + ST.leftWords(e.left)).join(" · ") : "";
   }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + agoWords(LASTREAD) : "";

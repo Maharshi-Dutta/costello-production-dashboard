@@ -74,13 +74,15 @@
      tapped, so it takes #whois' 40px rather than a 44px target. What keeps it
      from squeezing Switch person or the search box is flex-wrap on the header
      itself: items that will not fit wrap onto the next line instead of
-     shrinking. flex:none only stops this pill being the one that gives way, so
-     a long number is never compressed into an unreadable one, and nowrap keeps
-     "12 left" on a single line. On a narrow tablet the header therefore grows
-     a second row rather than crushing anything on the first. */
+     shrinking.
+     Since 2026-09-10 it carries one number per stage the person holds -
+     "Cutting 63 left · Tuff 12 left" - so it can be four numbers long on
+     somebody who holds everything. It is therefore allowed to shrink and to
+     wrap onto a second line inside its own pill (flex:0 1 auto, no nowrap)
+     rather than running off the side of a tablet nobody can scroll back. */
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-            padding:8px 16px; min-height:40px; flex:none; white-space:nowrap;
+            padding:8px 16px; min-height:40px; flex:0 1 auto; line-height:1.35;
             display:flex; align-items:center; justify-content:center }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
@@ -123,6 +125,14 @@
   .step { display:grid; grid-template-columns:minmax(72px,1fr) auto; gap:10px; align-items:center }
   .step.locked { opacity:.5 }
   .stepl { font-size:14px; color:var(--ink-2) }
+  /* how much of this stage of this job is still to do, under the name of the
+     stage: the number a person works off, on the row whose buttons move it.
+     Bigger and brighter than the stage's name, because it is the thing being
+     read from across a workshop, and it fits in the height the row already had
+     for a 56px button - a card with four stages on it is no taller than it was
+     when one number sat in the headline. */
+  .stepleft { font-size:15px; font-weight:600; color:var(--ink); display:block; margin-top:2px }
+  .card.done .stepleft { color:var(--done) }
   .nomine { font-size:11px; color:var(--ink-4); display:block }
   .stepn { font-size:20px; font-weight:700; min-width:44px; text-align:center }
   .stepn.full { color:var(--done) }
@@ -196,8 +206,8 @@
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
-<script src="graph.js?v=20260910-1117"></script>
-<script src="station-core.js?v=20260910-1117"></script>
-<script src="station.js?v=20260910-1117"></script>
+<script src="graph.js?v=20260910-1227"></script>
+<script src="station-core.js?v=20260910-1227"></script>
+<script src="station.js?v=20260910-1227"></script>
 </body>
 </html>

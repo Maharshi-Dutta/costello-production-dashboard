@@ -522,73 +522,86 @@ function buildJobs(items, keep) {
 const glassWords = n => Math.max(0, Math.round(stNum(n, 0))) +
   (Math.round(stNum(n, 0)) === 1 ? " glass" : " glasses");
 
-/** "28 left" - the same number after it has started counting down, which has
-    to say so. The tablet's number is how much work the person signed in has
-    left, not the size of the job and not even a count of glasses (somebody
-    who holds two stages has two jobs of work on each glass), so a bare "28"
-    beside a customer's name on a workshop screen would be read as the size of
-    the job it used to mean. "left" is true of both; "glasses" would be false
-    for the two-stage person. The office keeps glassWords: there, the number
-    really is how big the job is. */
+/** "20 left" - a number that has started counting down, which has to say so.
+    Every number the tablet counts down now belongs to one stage of one job and
+    is drawn on that stage's own row; the card's headline says how big the job
+    is, in glasses, and does not move. "left" is the word that tells the two
+    apart at arm's length. The office keeps glassWords everywhere: there, the
+    number really is only ever the size of the job. */
 const leftWords = n => Math.max(0, Math.round(stNum(n, 0))) + " left";
 
-/** How much of one job is left for ONE person: every stage they hold, counted
-    separately and added up.
+/** How much of ONE stage of ONE job is still to do: that stage's own quantity
+    less its own counter.
 
-    A person who cuts AND hotmelts a 14-glass job has 28 things left to do on
-    it, not 14, and every single tap of either stage takes one off. The other
-    reading - the smallest of their counters, so the number means glasses
-    rather than jobs of work - was tried and rejected by the owner: it lets
-    somebody cut six and watch the big number on the wall sit still, because
-    hotmelt had not caught up. A number that does not move while somebody
-    works is worse than a number that counts something slightly abstract.
+    This is the only "what is left" arithmetic on the tablet, and it is
+    deliberately small. The number is the JOB's, not a person's: two people who
+    both cut see the same "20 left" on the same card, because 20 is genuinely
+    what is left to cut on it - the owner's rule of 2026-09-10: if one person
+    finishes 20 cuts out of 40, 20 are left for the others. Nothing here knows
+    who is holding the tablet, so nothing here can make that untrue.
 
-    Somebody who holds no stage at all has the whole job left: they cannot
-    move any of it, and saying nought would read as "done". stationPeople has
-    already dropped any word in the Stages column that is not a stage, so a
-    person whose column was all nonsense arrives here holding nothing and gets
-    that same answer.
+    Each stage counts against its OWN quantity (STAGE_TOTAL_ROW): cutting,
+    hotmelting and glazing against the job's DG + TG, tuff against the sheet's
+    own TUFF number. Tuff is never folded into the glass number - a job can be
+    8 glasses and 11 tuff at the same time, and 19 is a count of nothing.
 
-    Two people therefore see two different numbers for the same job, and
-    neither of them is the office's `Glass 12/24`. That is what was asked for -
-    the tablet answers "how much have I left", not "how big is this job".
+    The clamp is what keeps it in 0...total, so a row saying -9, or 99, or
+    nothing at all, cannot put a negative or a NaN on a workshop wall. A word
+    that is not one of the four stages is not a stage and gets 0 rather than a
+    throw: the Stages column is typed by hand.
 
-    Note what this is NOT: it does not decide gold. A job goes gold, and folds
-    into Finished, when it is complete for everybody (buildJobs' `finished`),
-    never when it reaches nought for whoever is holding the tablet.          */
-function jobLeftFor(g, stages) {
-  const total = Math.max(0, Math.round(stNum(g && g.total, 0)));
-  const seen = {};
-  let held = 0, left = 0;
-  (stages || []).forEach(s => {
-    const k = stTxt(s).trim().toLowerCase();
-    /* a Stages column typed by hand can say anything; a word that is not one
-       of the three stages is not a stage this person holds, and must not be
-       the one place on the tablet that throws */
-    if (ALL_STAGE_KEYS.indexOf(k) < 0) return;
-    /* "cut, cut" is one stage held, not two. stationPeople already drops the
-       repeat, so this only matters if something else ever calls in - but a
-       number on a wall that doubles because a column was typed twice is not a
-       thing to leave to another function's care */
-    if (seen[k]) return;
-    seen[k] = true;
-    held++;
-    /* every stage against its OWN quantity: eight glasses to cut and eleven
-       tuff to count is nineteen things left for the person who holds both */
-    const t = Math.max(0, Math.round(stNum(g && g[STAGE_TOTAL_ROW[k]], 0)));
-    /* the clamp is what keeps this in 0...total per stage, so a row saying
-       -9 or 99 or nothing at all cannot make the wall read a negative */
-    left += t - stClamp(g && g[STAGE_ROW[k]], t);
-  });
-  return held ? left : total;
+    Note what this is NOT. It does not decide gold: a job goes gold, and folds
+    into Finished, when it is complete for everybody (jobBoard's `finished`).
+    It does not decide a colour either: glassColours reads the raw counters
+    through stageComplete and must keep doing so.                            */
+function stageLeft(g, stage) {
+  const k = stTxt(stage).trim().toLowerCase();
+  if (ALL_STAGE_KEYS.indexOf(k) < 0) return 0;
+  const t = Math.max(0, Math.round(stNum(g && g[STAGE_TOTAL_ROW[k]], 0)));
+  return t - stClamp(g && g[STAGE_ROW[k]], t);
 }
 
-/** The same sum over the whole board: everything the person signed in still
-    has to do. It is given the whole board and never the searched one -
-    somebody looking a job number up must not make their own work read smaller
-    than it is, which is the one way this number could tell a lie. */
-function boardLeftFor(board, stages) {
-  return (board || []).reduce((sum, g) => sum + (g ? jobLeftFor(g, stages) : 0), 0);
+/** The stages a person actually holds, in the order the card draws them.
+    "cut, cut" is one stage held, not two, and a word that is not a stage is
+    not one they hold. stationPeople already drops both, but a number on a wall
+    that doubles because a column was typed twice is not a thing to leave to
+    another function's care. The order is the board's own, never the order the
+    column happened to be typed in, so the header reads down in the same order
+    as the steppers on every card. */
+function heldStages(stages) {
+  const seen = {};
+  (stages || []).forEach(s => {
+    const k = stTxt(s).trim().toLowerCase();
+    if (ALL_STAGE_KEYS.indexOf(k) >= 0) seen[k] = true;
+  });
+  return ALL_STAGE_KEYS.filter(k => seen[k]);
+}
+
+/** One number per stage the person holds, on one job: `{stage, label, left}`
+    in the order the steppers are drawn.
+
+    Never one number across stages. That was tried, shipped and rejected by the
+    owner on sight: a job of 49 glasses with 10 tuff read 157, which is
+    49 x 3 + 10 and a count of nothing at all. Each entry here is a real number
+    of real things, drawn on the row of the stage that moves it.
+
+    A person holding nothing gets an empty list. They can tap nothing, and a
+    number here would be a claim about work that is not theirs; the card still
+    says how big the job is, which is what they are there to read. */
+function jobLefts(g, stages) {
+  return heldStages(stages).map(k => ({ stage: k, label: stageLabel(k), left: stageLeft(g, k) }));
+}
+
+/** The same numbers added down the whole board - one per stage held, never one
+    across stages - so the header and the cards say the same thing and both
+    count down on the same tap.
+
+    It is given the whole board and never the searched one: somebody looking a
+    job number up must not make the day's work read smaller than it is. */
+function boardLefts(board, stages) {
+  return heldStages(stages).map(k => ({
+    stage: k, label: stageLabel(k),
+    left: (board || []).reduce((n, g) => n + (g ? stageLeft(g, k) : 0), 0) }));
 }
 
 /** The cards somebody typing in the tablet's search box is looking for: a job
@@ -963,7 +976,7 @@ const ST = {
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
-  jobLeftFor, boardLeftFor, applyTap, boardDiff, mergeDelta,
+  stageLeft, heldStages, jobLefts, boardLefts, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };

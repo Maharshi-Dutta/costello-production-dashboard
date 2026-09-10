@@ -253,18 +253,26 @@ guide: `docs/STATIONS.md`.
    (Title=name, Station, Stages comma list, PIN, Active); PIN pad when the
    row has one; a person may hold one or more stages; steppers for other
    stages are greyed and `tap()` refuses them too. One card per job, with the
-   job number, the customer, **how much of the job is left for the person
-   signed in** ("12 left", `jobLeftFor` = the job's total less that stage's
-   counter, summed over **each** stage they hold — so a 14-glass job is 14 to
-   the person who only cuts and 28 to the person who cuts and hotmelts, every
-   tap of either stage moves it by one, and two people at one tablet see two
-   different numbers) and the
-   three steppers (−, +, All / None) on the card itself — nothing to expand,
-   no bars, nothing to scroll inside — plus a search box in the header
-   (`boardFilter`, job number or customer) and, beside it, `#gtotal`: the same
-   sum over the whole board (`boardLeftFor`), never narrowed by the search and
-   hidden whenever the search box is. Both are derived on the device at every
-   draw and stored nowhere. Ten quiet minutes lock the
+   job number, the customer and the job's own glass count — `glassWords(total)`
+   = DG + TG, plus `· N tuff` where there is tuff — which is **the same for
+   everybody**, and the steppers (−, +, All / None) on the card itself. Since
+   2026-09-10 each stepper row the person **holds** carries its own
+   `ST.stageLeft(g, stage)` under the stage's name ("Cutting 20 left"): one
+   number per stage, **never summed** (an earlier build summed them and a real
+   job read 157 — 49 glasses × 3 stages + 10 tuff — which the owner rejected on
+   sight), tuff counted against `TuffTotal` and never against DG + TG. The
+   number sits in the label cell of the row whose buttons move it, so the card
+   is no taller with four numbers than with one; a row is either yours (a
+   number) or not (the words "not yours"). Two people holding the same stage
+   read the **same** number, because `stageLeft` never sees a person — nothing
+   enforces that and nothing can break it. Nothing to expand, no bars, nothing
+   to scroll inside — plus a search box in the header (`boardFilter`, job
+   number or customer) and, beside it, `#gtotal`: `ST.boardLefts`, the same
+   per-stage numbers summed down the board in the same words and the same order
+   ("Cutting 8 left · Tuff 11 left"), never narrowed by the search and hidden
+   whenever the search box is — and absent entirely for somebody who holds no
+   stages. All of it is derived on the device at every draw and stored nowhere.
+   Ten quiet minutes lock the
    tablet back to the picker; Switch person does the same. Every tap shows at
    once, is queued in `cw_stationq`, PATCHes only that stage's counter plus
    `<Stage>By/<Stage>At/DoneBy/DoneAt`, then POSTs one `Station log` line
@@ -670,8 +678,9 @@ of the three glass stages: `STAGES` / `STAGE_KEYS` still mean the three and
 `ALL_STAGES` / `ALL_STAGE_KEYS` are the four, so the job's `Total` is still
 DG + TG, `finished` (the gold card, the Finished group, the job row's
 `Glass 8/24` chip) is still the three, and the feeder never seeds `Tuff`. It
-*is* counted in `jobLeftFor`: eight glasses to cut plus eleven tuff is
-nineteen left for whoever holds both. The stepper is drawn only on jobs that
+gets a row and a number of its own (`stageLeft` against `TuffTotal`): eight
+glasses to cut and eleven tuff show as **two** numbers, "Cutting 8 left" and
+"Tuff 11 left", never the nineteen that adding them would have said. The stepper is drawn only on jobs that
 have tuff on them. **NOT TUFF gets no counter at all** — its colour is derived
 from the glass stages.
 

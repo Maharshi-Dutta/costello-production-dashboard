@@ -1769,6 +1769,26 @@ function glassOfficeStamp(job, type, log) {
     const t = Math.max(mine[type] || 0, mine["*"] || 0);
     if (t > best) best = t;
   }
+  /* AND the tick this office has made but not landed yet, which is the third
+     record and the one this used to miss. Both of the records above are
+     written by the WRITE - Dashboard Progress at the start of it, Dashboard
+     Log at the end - so between the click and the end of that write the office
+     HAS acted and nothing here said so. The floor then won by default, its
+     colour landed after the office's own (both go on the job's cpChain), and
+     because the cell was then the colour the floor wanted it was never written
+     again: an un-tick undone silently and for good. The owner's bug of
+     2026-09-10, and it only showed on un-ticking because marking done moves
+     the cell TOWARDS what the floor says, where there is nothing to plan.
+
+     The hold IS the office's action, stamped at the click by pend(), so this
+     does not change last-writer-wins: a floor tap made after the click still
+     carries the later stamp and still wins. Only the glass items' own holds
+     count - never a `gc` hold, which is this feature's own write. */
+  const held = PENDING[id] || PENDING[job];
+  if (held && held.cp && Object.prototype.hasOwnProperty.call(held.cp, "glass:" + type)) {
+    const t = ((held.t || {})["cp:glass:" + type]) || held.at || 0;
+    if (t > best) best = t;
+  }
   return best;
 }
 

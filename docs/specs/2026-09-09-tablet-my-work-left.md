@@ -1,7 +1,10 @@
 # The tablet counts down the work *you* have left
 
 **Date:** 2026-09-09
-**Status:** in progress
+**Status:** shipped 2026-09-09 (`06dff7c`) — **superseded 2026-09-10** by
+`2026-09-10-tablet-per-stage-counts.md`. The owner saw a job read **157**
+(49 glasses x 3 stages + 10 tuff) and rejected the summing. `jobLeftFor` and
+`boardLeftFor` no longer exist; do not build from SS5 of this file.
 **Supersedes:** the header total shipped in `2026-09-09-tablet-glass-total.md`
 (commit `3d26677`, build `20260909-1509`). That total was the floor's remaining
 glass, whole jobs at a time. This replaces it with a per-person countdown.
@@ -12,8 +15,8 @@ to confirm the reading back, and confirmed it, including the multi-stage rule.
 
 ## 1. What the owner asked for, in their own terms
 
-> "each job id has 3 stages cutting which is done by David, glazing and
-> hotmelting — it should show 14 for each of them. But for David, when he
+> "each job id has 3 stages cutting which is done by [the cutter], glazing and
+> hotmelting — it should show 14 for each of them. But for [the cutter], when he
 > clicks 1 out of 14 done it changes the total job for him which is 14 to 13.
 > And it would be separate for each person."
 
@@ -34,7 +37,7 @@ something from *them*:
 mine(job, stages) = total - min( counter[s] for s in stages )
 ```
 
-- One stage: `total - counter[stage]`. David cuts one of 14 → he sees 13.
+- One stage: `total - counter[stage]`. The cutter cuts one of 14 → he sees 13.
 - Two stages (say cut and hotmelt): a glass is through *his* part only when
   both are done on it, so `min` is right. Cut 3, hotmelt 1 → one glass is fully
   through his part → **13**. The owner chose one number for such a person, with
@@ -44,7 +47,7 @@ mine(job, stages) = total - min( counter[s] for s in stages )
   job's plain total — a person who cannot tap anything has all of it "left".
   They cannot change it either; the steppers are already greyed for them.
 
-**The counts are independent between people.** David cutting one does not
+**The counts are independent between people.** The cutter cutting one does not
 change what the glazing person sees. That falls out of the rule above — no code
 needs to enforce it.
 
@@ -146,7 +149,7 @@ say what you found either way.
    `min` (cut 3 / hotmelt 1 of 14 → 13); no stages → the job's total; a
    completed job → 0; unknown stage keys ignored; malformed counters never give
    `NaN` or a negative.
-2. Independence: David cutting one does not change what the glazing person's
+2. Independence: the cutter cutting one does not change what the glazing person's
    number shows for the same job.
 3. `boardLeftFor` over the owner's own example — 14 and 13 → 27, one cut tap →
    26 — asserted from the rule, not read off the implementation.

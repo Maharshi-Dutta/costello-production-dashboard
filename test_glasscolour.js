@@ -632,6 +632,91 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual(idx.R7001["*"], stampMs("10/09/2026 17:00"));
   pass("Dashboard Log lines count as the office's own stamp - the right job, the right item, and no other");
 
+  /* ================= 6b. an office tick that has not landed yet =============
+     THE OWNER'S BUG, 2026-09-10: "when i am marking all done it working fine
+     ... but when i am trying to remove the all done ... it refreshing back to
+     all golden".
+
+     Every record the contest above is decided on is written by the WRITE, not
+     by the click: Dashboard Progress at the start of it, Dashboard Log at the
+     end. Between the two - one round trip for a group, 800 ms of debounce plus
+     a round trip for one item - the office HAS acted and nothing the planner
+     can see says so, so the floor wins by default.
+
+     It is not symmetrical, which is exactly what the owner reported. Marking
+     glass DONE moves the cell towards what the floor already says, so there is
+     nothing for the writer to plan and no race to lose. UN-marking moves it
+     away, so the writer always has a plan, and its gold lands after the
+     office's white (both go on the job's own cpChain). The cell is then the
+     colour the floor wants, so `have === want` and it is never written again:
+     the un-tick is gone, silently and for good.                             */
+  const untickScene = () => {
+    const jj = scene(mkJob({ cp: { win: "", drs: "", glass:
+                       { dg: "done", tg: "done", tuff: "done", "not tuff": "done" }, prod: {} } }),
+      row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11,
+            DoneAt: new Date(Date.now() - 3600000).toISOString(), DoneBy: "Person A" }));
+    /* the office's own record of having marked it done, hours ago - the state
+       the owner is actually in when they come to un-tick it */
+    CP.cpSetProgress({ R7001: {
+      "glass:dg": { done: 4, total: 4, who: "the colleague", when: "2026-09-10 00:00" },
+      "glass:tg": { done: 4, total: 4, who: "the colleague", when: "2026-09-10 00:00" },
+      "glass:tuff": { done: 11, total: 11, who: "the colleague", when: "2026-09-10 00:00" },
+      "glass:not tuff": { done: 8, total: 8, who: "the colleague", when: "2026-09-10 00:00" } } });
+    ST.COLOUR_TYPES.forEach(t => { BOOK["Production"].fill[kk(7, COL[t])] = GOLD; });
+    return jj;
+  };
+
+  untickScene();
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "before the un-tick there is nothing to do: the sheet is gold and so is the floor");
+
+  /* the office clears the whole group, and the ten-second station poll lands
+     while that write is still in the air */
+  const untick = setGroupDone(byId("R7001"), "glass", false);   // deliberately not awaited
+  const raced = await glassColourRun();
+  await untick;
+  await settle(300);
+  assert.strictEqual(raced, 0,
+    "a poll landing while the office's un-tick is in the air must not plan the floor's gold over it");
+  assert.ok(!fills().some(c => c.color === GOLD),
+    "and no gold was written back: " + JSON.stringify(fills().map(c => c.addr + "=" + c.color)));
+  ST.COLOUR_TYPES.forEach(t => assert.strictEqual(sheetNow()[t], WHITE,
+    t + " stays as the office left it, not repainted gold behind them"));
+  pass("an un-tick still in the air is the office's action already: a poll cannot paint over it");
+
+  /* the same thing one item at a time, where the window is longer still: the
+     drawer's stepper debounces for 800 ms before it writes anything at all */
+  untickScene();
+  reset();
+  setItemProgress(byId("R7001"), "glass:dg", 0);
+  const racedItem = await glassColourRun();                     // inside the debounce
+  await settle(1400);
+  assert.strictEqual(racedItem, 0,
+    "the same during the stepper's 800 ms debounce, when nothing has been written at all yet");
+  assert.notStrictEqual(fillOn("AY7"), GOLD, "DG was not repainted gold under the office's hand");
+  assert.strictEqual(sheetNow().dg, WHITE, "it is white, which is what the office asked for");
+  pass("a per-item un-tick is safe through its debounce as well as through its write");
+
+  /* and the rule itself is untouched: a floor tap made AFTER the office's
+     click still wins, because the hold is stamped at the click and the
+     comparison is still last-writer-wins */
+  untickScene();
+  reset();
+  const untick2 = setGroupDone(byId("R7001"), "glass", false);
+  await settle(5);
+  global.__later = [row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11,
+                          DoneAt: new Date(Date.now() + 2000).toISOString() })];
+  A("STATION_ITEMS = __later");
+  const afterTap = await glassColourRun();
+  await untick2;
+  await settle(300);
+  assert.strictEqual(afterTap, 1,
+    "a floor tap made after the office clicked is still the later action and still wins");
+  pass("last-writer-wins is unchanged: the office's hold is dated at the click, not made unbeatable");
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  CP.cpSetProgress({});
+
   /* ================= 7. a cell this feature does not own ================= */
   global.__jx = mkJob({ cp: { win: "", drs: "", glass: { dg: "cut" }, prod: {} } });
   global.__items = [row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, DoneAt: isoAt(15, 0) })];

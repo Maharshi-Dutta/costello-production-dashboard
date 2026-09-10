@@ -16,9 +16,9 @@ two different points of view:
 - **The Master dashboard** (`index.html`) — used in the office. It shows
   every job, every section, dates, checkpoints, phases, alerts and exports.
 - **The Glass station** (`glass.html`) — used on a shared tablet on the glass
-  floor. It shows only job number, customer name, how much of each job is
-  left for **the person signed in**, and the three glass stages: Cutting,
-  Hotmelting, Glazing.
+  floor. It shows only job number, customer name, how much glass each job has,
+  and how much is left at each stage: Cutting, Hotmelting, Glazing, and
+  Toughening where a job has it.
 
 The Excel workbook on SharePoint stays the single source of truth for every
 job. The dashboard reads it and writes back to it only in the ways described
@@ -307,29 +307,39 @@ wrong PIN simply shakes and asks you to try again — there is no lockout.
 
 ### 4.2 The card
 
-Every job with glass appears as one card: job number, customer, and **how
-much of that job is left for you** — "14 left" — followed by three rows —
-Cutting, Hotmelting, Glazing — each with a **−**, a count, a **+**, and an
+Every job with glass appears as one card: job number, customer, and **how much
+glass the job has** — "14 glasses", or "8 glasses · 11 tuff" where a job has
+toughened glass on it. That figure is the job's own, and is the same for
+everybody. Under it are the stage rows — Cutting, Hotmelting, Glazing, and
+Toughening on jobs that have it — each with a **−**, a count, a **+**, and an
 **All** button (which becomes **None** once that stage is already at the
 total). Only the stage rows you personally hold are bright and tappable; the
 others show their numbers but are greyed out and cannot be tapped. There is
 nothing to expand and nothing to scroll inside a card.
 
-**"Left" means left for you, not left on the job.** If you do one stage,
-"14 left" is fourteen glasses still to do at your stage, and it drops by one
-each time you tap **+**. If you hold two stages, each one counts on its own:
-a fourteen-glass job starts at "28 left" — fourteen to cut and fourteen to
-hotmelt — and every tap of either stage takes one off. So the number always
-moves when you do something.
+**Each stage you do shows what is left at that stage**, on its own row, just
+above the buttons that change it. "Cutting 20 left" means twenty of that job's
+glasses still need cutting; tap **+** and it reads 19.
 
-Two people at the same tablet therefore see **different numbers on the same
-card**, because they have different work left on it. That is deliberate. The
-running total beside the search box at the top of the screen is the same
-thing added up across every job on the board: your own work, not the floor's.
+If you do two stages you see **two numbers**, one on each row — "Cutting 20
+left" and "Hotmelting 35 left". They are never added together: 20 and 35 are
+two different jobs of work, not 55 of anything.
+
+**Toughened glass has its own row and its own number**, counted separately from
+the glasses. A job reading "8 glasses · 11 tuff" has 8 to cut and 11 to
+toughen, and the two never mix.
+
+**These numbers belong to the job, not to you.** If you cut 20 of 40, the next
+person who cuts sees 20 left, because 20 is what is genuinely left to cut. Two
+people at the same tablet see the same numbers on the same rows.
+
+The running total beside the search box at the top adds those same numbers up
+across every job on the board, in the same words and the same order — so it
+always agrees with what the cards say.
 
 A card only turns **gold** and folds into the Finished group when the whole
 job is done by everyone, not when your part of it is. So a card can read
-"0 left" for you and still sit there in full colour, because somebody else
+"0 left" on your row and still sit there in full colour, because somebody else
 still has work on it.
 
 ![The tablet board, dark theme](img/guide-tablet-board.png)

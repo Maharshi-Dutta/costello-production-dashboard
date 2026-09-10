@@ -785,102 +785,143 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.boardFilter(null, "x"), []);
   pass("the search box matches a job number or a customer name, and nothing else about a job");
 
-  /* THE NUMBER THE TABLET SHOWS: how much of a job is left for the person
-     holding it, which is a different question from how big the job is and a
-     different question again from which cards are on screen */
+  /* THE NUMBERS THE TABLET SHOWS (2026-09-10, replacing the single summed one
+     the owner rejected on sight: a 49-glass job with 10 tuff read 157, which
+     is 49 x 3 + 10 and a count of nothing at all). One number per stage the
+     person holds, each of them the JOB's remaining work on that stage, nothing
+     ever added across stages, and tuff counted against its own quantity. */
   const j14 = ST.jobBoard([item({ Title: "R14", Job: "R14", GlassType: "GLASS", Total: 14, Seq: 1,
                                   Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0 }, "640")])[0];
-  assert.strictEqual(ST.jobLeftFor(j14, ["cut"]), 14, "fourteen to cut before anything is cut");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1 }), ["cut"]), 13,
-    "one of fourteen cut and it is thirteen - the owner's own words");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 14 }), ["cut"]), 0,
+
+  /* 1. one stage of one job: that stage's own quantity less its own counter */
+  assert.strictEqual(ST.stageLeft(j14, "cut"), 14, "fourteen to cut before anything is cut");
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j14, { cut: 1 }), "cut"), 13,
+    "one of fourteen cut and thirteen are left to cut");
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j14, { cut: 14 }), "cut"), 0,
     "and nought when every one of them is cut");
-  /* OWNER DECISION, 2026-09-09: somebody who holds two stages has two jobs of
-     work on every glass, and they are counted separately. The other reading -
-     the smallest of their counters, so the number stays a count of glasses -
-     lets them cut six and watch the number on the wall sit still because
-     hotmelt has not caught up, and the owner will not have that on a
-     workshop wall. */
-  assert.strictEqual(ST.jobLeftFor(j14, ["cut", "hotmelt"]), 28,
-    "fourteen to cut and fourteen to hotmelt is twenty-eight things left to do");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1 }), ["cut", "hotmelt"]), 27,
-    "one cut takes exactly one off");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 1, hotmelt: 1 }), ["cut", "hotmelt"]), 26,
-    "and one hotmelt takes exactly one more: EITHER stage moves it, which the smallest could not");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["cut", "hotmelt"]), 24,
-    "cut three and hotmelted one is four of the twenty-eight done, so twenty-four are left");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["hotmelt", "cut"]), 24,
-    "and the order the stages are listed in cannot change it");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 3, hotmelt: 1 }), ["cut", "cut"]), 11,
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j14, { cut: 14 }), "hotmelt"), 14,
+    "while hotmelting still has all fourteen: a stage is never moved by another stage");
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j14, { glazed: 6 }), "glazed"), 8);
+  assert.strictEqual(ST.stageLeft(j14, " CUT "), 14, "a stage typed with spaces and capitals is a stage");
+  assert.strictEqual(ST.stageLeft(j14, "toughening"), 0, "a word that is not a stage is not one");
+  assert.strictEqual(ST.stageLeft(null, "cut"), 0, "nothing it is handed throws");
+  assert.strictEqual(ST.stageLeft({ total: -4, cut: "" }, "cut"), 0);
+  assert.strictEqual(ST.stageLeft({ total: "abc", cut: 3 }, "cut"), 0);
+  assert.strictEqual(ST.stageLeft({ total: 4, cut: 99 }, "cut"), 0, "a count above the total is clamped");
+  assert.strictEqual(ST.stageLeft({ total: 4, cut: -9 }, "cut"), 4, "and one below nought is too");
+
+  /* TUFF COUNTS AGAINST TuffTotal, NEVER AGAINST DG + TG. This is half of what
+     the 157 got wrong: a job can be 8 glasses and 11 tuff at the same time. */
+  const j8t11 = ST.jobBoard([item({ Title: "R8", Job: "R8", GlassType: "GLASS", Total: 8, TuffTotal: 11,
+                                    Seq: 1, Active: "Yes", Cut: 0, Tuff: 0 }, "645")])[0];
+  assert.strictEqual(ST.stageLeft(j8t11, "tuff"), 11, "eleven tuff to count, not eight");
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j8t11, { tuff: 4 }), "tuff"), 7,
+    "four counted leaves seven, and never touches the eight glasses");
+  assert.strictEqual(ST.stageLeft(Object.assign({}, j8t11, { tuff: 4 }), "cut"), 8,
+    "which is still all eight to cut");
+  assert.strictEqual(ST.stageLeft(j14, "tuff"), 0,
+    "a job with no tuff on it has no tuff left to do - not fourteen");
+  assert.strictEqual(ST.stageLeft({ total: 8, tuffTotal: 11, tuff: 11 }, "tuff"), 0);
+  assert.strictEqual(ST.stageLeft({ total: 8, tuffTotal: 11, tuff: 99 }, "tuff"), 0,
+    "and tuff clamps to ELEVEN, so a bad row cannot read eight of eight");
+  pass("one stage of one job is its own quantity less its own counter, and tuff has its own quantity");
+
+  /* 2. THE OWNER'S TWO-STAGE CASE, EXACTLY: "two numbers - 20 left to cut,
+     35 left to hotmelt" on a job of 40 with 20 cut and 5 hotmelted */
+  const j40 = ST.jobBoard([item({ Title: "R40", Job: "R40", GlassType: "GLASS", Total: 40, Seq: 1,
+                                  Active: "Yes", Cut: 20, Hotmelt: 5, Glazed: 0 }, "646")])[0];
+  assert.deepStrictEqual(ST.jobLefts(j40, ["cut", "hotmelt"]),
+    [{ stage: "cut", label: "Cutting", left: 20 },
+     { stage: "hotmelt", label: "Hotmelting", left: 35 }],
+    "the owner's own words: two numbers, 20 left to cut and 35 left to hotmelt");
+  assert.strictEqual(ST.jobLefts(j40, ["cut", "hotmelt"]).length, 2, "two stages held is two numbers");
+  assert.deepStrictEqual(ST.jobLefts(j40, ["hotmelt", "cut"]).map(e => e.stage), ["cut", "hotmelt"],
+    "and the order they are drawn in is the board's, not the order the column was typed in");
+  assert.deepStrictEqual(ST.jobLefts(j40, ["cut", "cut"]).map(e => e.stage), ["cut"],
     "a stage named twice in the column is one stage held, not two");
-  assert.strictEqual(ST.jobLeftFor(j14, ["cut", "hotmelt", "glazed"]), 42,
-    "all three stages on a fourteen-glass job is forty-two");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 14, hotmelt: 14, glazed: 14 }),
-                                   ["cut", "hotmelt", "glazed"]), 0, "a finished job is nought for anybody");
-  /* somebody who holds no stage cannot move any of it: the whole job is still
-     to do, and nought would read as "done" */
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), []), 14,
-    "a person with no stages has the whole job left, whatever anybody else has done");
-  assert.strictEqual(ST.jobLeftFor(j14, null), 14);
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), ["tough", "toughening"]), 14,
+  assert.strictEqual(ST.jobLefts(j40, ["cut", "hotmelt"]).reduce((n, e) => n + e.left, 0), 55,
+    "nothing anywhere adds these together, and 55 is what such a sum would have said");
+
+  /* 3. one stage is one number; no stages is no number of their own */
+  assert.deepStrictEqual(ST.jobLefts(j40, ["cut"]), [{ stage: "cut", label: "Cutting", left: 20 }],
+    "somebody who only cuts: 40 with 20 cut is 20 left to cut, and that is the whole of it");
+  assert.deepStrictEqual(ST.jobLefts(j8t11, ["cut", "tuff"]),
+    [{ stage: "cut", label: "Cutting", left: 8 }, { stage: "tuff", label: "Tuff", left: 11 }],
+    "somebody who cuts and counts tuff sees eight and eleven - never nineteen");
+  assert.deepStrictEqual(ST.jobLefts(j14, ["cut", "hotmelt", "glazed", "tuff"]).map(e => e.left),
+    [14, 14, 14, 0], "all four stages held is all four numbers, each against its own quantity");
+  assert.deepStrictEqual(ST.jobLefts(j14, []), [],
+    "a person holding no stage has no number of their own: the card still says how big the job is");
+  assert.deepStrictEqual(ST.jobLefts(j14, null), []);
+  assert.deepStrictEqual(ST.jobLefts(j14, ["tough", "toughening"]), [],
     "and a word in the Stages column that is not a stage is not a stage they hold");
-  /* TUFF used to be one of those words. Since 2026-09-10 it is a real stage
-     with its own quantity, and this job has no tuff on it - so somebody who
-     only counts tuff has nothing left to do on it, which is not the same
-     answer as holding no stage at all. */
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), ["TUFF"]), 0);
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { tuffTotal: 11, tuff: 4 }), ["tuff"]), 7,
-    "and eleven tuff with four counted is seven left, never touching the fourteen glasses");
-  assert.strictEqual(ST.jobLeftFor(Object.assign({}, j14, { cut: 5 }), [" CUT "]), 9,
-    "while a real one typed with spaces and capitals still is");
-  assert.strictEqual(ST.jobLeftFor(null, ["cut"]), 0, "nothing it is handed throws");
-  assert.strictEqual(ST.jobLeftFor({ total: -4, cut: "" }, ["cut"]), 0);
-  assert.strictEqual(ST.jobLeftFor({ total: "abc", cut: 3 }, ["cut"]), 0);
-  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: 99 }, ["cut"]), 0, "a count above the total is clamped");
-  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: -9 }, ["cut"]), 4, "and one below nought is too");
-  assert.strictEqual(ST.jobLeftFor({ total: 4, cut: -9, hotmelt: 99, glazed: "" },
-                                   ["cut", "hotmelt", "glazed"]), 8,
-    "the clamp is per stage, so the worst a malformed row can say is total times stages held");
-  pass("a person's number on a job is the total less each of the stages they hold, added up");
+  assert.deepStrictEqual(ST.jobLefts(null, ["cut"]), [{ stage: "cut", label: "Cutting", left: 0 }],
+    "nothing it is handed throws");
+  assert.deepStrictEqual(ST.jobLefts({ total: 4, cut: -9, hotmelt: 99, glazed: "" },
+                                     ["cut", "hotmelt", "glazed"]).map(e => e.left), [4, 0, 4],
+    "the clamp is per stage, so the worst a malformed row can say is that stage's own total");
+  pass("the card's numbers are one per stage held, in the board's order, and nothing is summed");
 
-  /* the counts are separate for each person, which falls out of that rule
-     rather than being enforced anywhere */
+  /* 4. THE NUMBER IS THE JOB'S, NOT THE PERSON'S: two people who both cut read
+     the same thing off the same card - the owner's rule of 2026-09-10, that if
+     one person finishes 20 cuts out of 40 then 20 are left for the others. No
+     code enforces this; it falls out of a number that never knew who was
+     holding the tablet. */
+  assert.strictEqual(ST.jobLefts(j40, ["cut"])[0].left, ST.jobLefts(j40, ["cut", "glazed"])[0].left,
+    "the person who only cuts and the person who cuts and glazes read the same 20 to cut");
+  assert.strictEqual(ST.stageLeft(j40, "cut"), 20,
+    "and it is 20 for anybody at all, because 20 is what is left to cut on the job");
   const shared = Object.assign({}, j14, { cut: 1 });
-  assert.strictEqual(ST.jobLeftFor(shared, ["cut"]), 13, "the person cutting has counted one off");
-  assert.strictEqual(ST.jobLeftFor(shared, ["glazed"]), 14,
-    "and the person glazing still has all fourteen: one person's tap is not another's");
-  pass("what one person has left is not moved by what another person recorded");
+  assert.strictEqual(ST.stageLeft(shared, "cut"), 13, "one cut off leaves thirteen for whoever cuts next");
+  assert.strictEqual(ST.stageLeft(shared, "glazed"), 14,
+    "while glazing still has all fourteen: one stage's tap is not another stage's");
+  pass("two people holding the same stage read the same number: it is the job's work, not a tally");
 
-  /* THE HEADER: the owner's own example - 14 on one job, 13 on another, 27
-     between them, and one cut takes it to 26 */
-  const twoJobs = ST.jobBoard([
-    item({ Title: "R5035", Job: "R5035", Customer: "Customer One", GlassType: "GLASS",
-           Total: 14, Seq: 1, Active: "Yes" }, "641"),
-    item({ Title: "R5041", Job: "R5041", Customer: "Customer Two", GlassType: "GLASS",
-           Total: 13, Seq: 2, Active: "Yes" }, "642")]);
-  assert.strictEqual(ST.boardLeftFor(twoJobs, ["cut"]), 27, "fourteen and thirteen make twenty-seven");
-  const afterOne = twoJobs.map(g => g.job === "R5035" ? Object.assign({}, g, { cut: 1 }) : g);
-  assert.strictEqual(ST.boardLeftFor(afterOne, ["cut"]), 26, "and one glass cut makes it twenty-six");
-  assert.strictEqual(ST.boardLeftFor(afterOne, ["glazed"]), 27,
-    "while the person glazing still has all twenty-seven of it");
-  assert.strictEqual(ST.boardLeftFor(twoJobs, ["cut", "hotmelt"]), 54,
-    "and somebody who cuts and hotmelts both jobs has twice that: fifty-four");
-  assert.strictEqual(ST.boardLeftFor(afterOne, ["cut", "hotmelt"]), 53,
-    "one cut off one job takes one off it, wherever their other stage has got to");
-  assert.strictEqual(ST.boardLeftFor(board, ["cut"]), 3,
+  /* 5. THE HEADER: the same numbers added down the board, one per stage held.
+     The owner's own example - 5033 has TG 49 and no DG, 5035 has 14, and the
+     two of them make 63 - asserted from the rule and from glassTotal's DG+TG */
+  assert.strictEqual(ST.glassTotal({ glass: { TG: 49 } }), 49,
+    "TG 49 with no DG is a job of 49 glasses");
+  assert.strictEqual(ST.glassTotal({ glass: { DG: 9, TG: 5 } }), 14, "and DG plus TG where both are there");
+  const ownerBoard = ST.jobBoard([
+    item({ Title: "R5033", Job: "R5033", Customer: "Customer One", GlassType: "GLASS",
+           Total: 49, Seq: 1, Active: "Yes" }, "641"),
+    item({ Title: "R5035", Job: "R5035", Customer: "Customer Two", GlassType: "GLASS",
+           Total: 14, Seq: 2, Active: "Yes" }, "642")]);
+  assert.deepStrictEqual(ST.boardLefts(ownerBoard, ["cut"]),
+    [{ stage: "cut", label: "Cutting", left: 63 }],
+    "the owner's grand total: 49 glass on one job and 14 on the other make 63 to cut");
+  const afterOne = ownerBoard.map(g => g.job === "R5033" ? Object.assign({}, g, { cut: 1 }) : g);
+  assert.strictEqual(ST.boardLefts(afterOne, ["cut"])[0].left, 62, "and one cut takes exactly one off it");
+  assert.strictEqual(ST.boardLefts(afterOne, ["glazed"])[0].left, 63,
+    "while the person glazing still has all 63 of it to glaze");
+  assert.deepStrictEqual(ST.boardLefts(afterOne, ["cut", "hotmelt"]),
+    [{ stage: "cut", label: "Cutting", left: 62 }, { stage: "hotmelt", label: "Hotmelting", left: 63 }],
+    "two stages held is two figures in the header, never one figure of 125");
+  /* the header IS the cards added up, which is the whole point of it */
+  ["cut", "hotmelt", "glazed", "tuff"].forEach(k =>
+    assert.strictEqual(ST.boardLefts(afterOne, [k])[0].left,
+      afterOne.reduce((n, g) => n + ST.jobLefts(g, [k])[0].left, 0),
+      "the header's " + k + " is exactly the cards' " + k + " added up"));
+  assert.strictEqual(ST.boardLefts(board, ["cut"])[0].left, 3,
     "on the fixture board: one left to cut on R5303, two on R5304, none on the finished R5301");
-  assert.strictEqual(ST.boardLeftFor(board, []), 14,
-    "somebody who holds nothing sees the whole board's glass and can move none of it");
+  assert.deepStrictEqual(ST.boardLefts(board, []), [],
+    "somebody who holds nothing has no header number: there is nothing there for them to work off");
   const noGlass = ST.jobBoard([item({ Title: "R7", Job: "R7", GlassType: "GLASS", Total: 0, Seq: 1,
                                       Active: "Yes" }, "621")]);
-  assert.strictEqual(ST.boardLeftFor(noGlass, ["cut"]), 0, "a job with no glasses on it adds nothing");
-  assert.strictEqual(ST.boardLeftFor([], ["cut"]), 0);
-  assert.strictEqual(ST.boardLeftFor(null, ["cut"]), 0);
-  assert.strictEqual(ST.boardLeftFor([{ total: -4 }, { total: "" }, null], ["cut"]), 0,
+  assert.strictEqual(ST.boardLefts(noGlass, ["cut"])[0].left, 0, "a job with no glasses on it adds nothing");
+  assert.strictEqual(ST.boardLefts([], ["cut"])[0].left, 0);
+  assert.strictEqual(ST.boardLefts(null, ["cut"])[0].left, 0);
+  assert.strictEqual(ST.boardLefts([{ total: -4 }, { total: "" }, null], ["cut"])[0].left, 0,
     "nothing it is handed can make it negative or NaN");
   assert.strictEqual(ST.boardGlassTotal, undefined,
-    "and the floor-wide total it replaces is gone, not kept beside it to drift");
-  pass("the header is the same sum over the whole board: what this person has left today");
+    "and the floor-wide total it replaced first is gone, not kept beside it to drift");
+  /* THE SUMMED NUMBER IS GONE, not left beside the new one: a second answer to
+     the same question is how the two of them drift apart */
+  assert.strictEqual(ST.jobLeftFor, undefined,
+    "jobLeftFor, which summed a person's stages into the 157, is deleted");
+  assert.strictEqual(ST.boardLeftFor, undefined, "and so is the sum of it over the board");
+  pass("the header is those same numbers added down the board, and the summed one is gone");
 
   /* the wording: a number that counts down has to say so */
   assert.strictEqual(ST.leftWords(14), "14 left");
@@ -889,8 +930,47 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ST.leftWords(-3), "0 left");
   assert.strictEqual(ST.leftWords("x"), "0 left");
   assert.strictEqual(ST.glassWords(12), "12 glasses",
-    "and the office's own wording is untouched: there the number IS the size of the job");
-  pass("the tablet says \"14 left\" where the office says \"14 glasses\"");
+    "and the size of a job is still said in glasses, on the tablet's headline and the office's board");
+  pass("a stage's remaining work says \"20 left\"; the size of a job says \"14 glasses\"");
+
+  /* THE COLOURS ARE NOT TOUCHED BY ANY OF THIS (2026-09-10). glassColours is
+     what the office paints DG, TG, TUFF and NOT TUFF from, and it reads the
+     RAW counters through stageComplete - never stageLeft, never jobLefts. The
+     table below is the same fixtures and the same answers as before the card's
+     numbers changed, written out rather than computed, so a later hand that
+     rewires the colours through the derived numbers fails here. */
+  const colRec = f => ST.jobBoard([item(Object.assign(
+    { Title: "R91", Job: "R91", GlassType: "GLASS", Seq: 1, Active: "Yes" }, f), "910")])[0];
+  const COLOURFIX = [
+    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+     { dg: "", tg: "", tuff: "", "not tuff": "" }],
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+     { dg: "", tg: "", tuff: "", "not tuff": "" }],
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0 },
+     { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" }],
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 11 },
+     { dg: "yellow", tg: "yellow", tuff: "yellow", "not tuff": "yellow" }],
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11 },
+     { dg: "gold", tg: "gold", tuff: "gold", "not tuff": "gold" }],
+    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 8, Tuff: 0 },
+     { dg: "gold", tg: "gold", tuff: "gold", "not tuff": "gold" }],
+    [{ Total: 0, TuffTotal: 0, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+     { dg: "", tg: "", tuff: "", "not tuff": "" }]];
+  COLOURFIX.forEach((c, n) =>
+    assert.deepStrictEqual(ST.glassColours(colRec(c[0])), c[1],
+      "the colours of fixture " + n + " are exactly what they were before the numbers changed"));
+  /* the one case that tells the two readings apart: a job with no tuff on it
+     has NOTHING left to tuff (stageLeft says 0, and the card draws no tuff row
+     at all) - and its TUFF column must still take no colour, because nought of
+     nought was never finished by anybody */
+  const noTuff = colRec({ Total: 8, TuffTotal: 0, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0 });
+  assert.strictEqual(ST.stageLeft(noTuff, "tuff"), 0, "nothing left to tuff");
+  assert.strictEqual(ST.stageComplete(noTuff, "tuff"), false, "but nothing finished either");
+  assert.strictEqual(ST.glassColours(noTuff).tuff, "",
+    "so TUFF takes no colour: the colour rule reads the counters, not what is left");
+  assert.deepStrictEqual(ST.COLOUR_TYPES, ["dg", "tg", "tuff", "not tuff"],
+    "and the four columns it paints are the four it always painted");
+  pass("the glass colours are exactly as they were: they read the raw counters, never the new numbers");
 
   /* ================= 6. the tap ================= */
   const trow = { id: "1", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
@@ -2587,12 +2667,28 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(EL["#whois"].textContent, "Person A · Cutting", "and the header says so");
   pass("picking a name with no PIN goes straight in, and the header shows the name and the stages");
 
+  /* what a stepper row says is still to do, read off the row of the stage it
+     belongs to: the placement is the feature, so the test reads it that way */
+  const stepLeft = (html, label) => {
+    const m = String(html).match(new RegExp('<span class="stepl">' + label +
+      '<span class="stepleft tab">([^<]*)</span>'));
+    return m ? m[1] : null;
+  };
+
   let bh = boardHtml();
   assert.ok(bh.indexOf("R5303") > 0 && bh.indexOf("Customer One") > 0);
-  /* Person A holds cutting and nothing has been cut, so all six are theirs to
-     do. The card says what is left for them, not how big the job is. */
-  assert.ok(bh.indexOf("6 left") > 0, "one number on the card, and no kinds of glass");
-  assert.ok(bh.indexOf("6 glasses") < 0, "the office's wording is not what the floor is asked to read");
+  /* 2026-09-10: the headline says how big the job is, the same for everybody,
+     and what is left is one number per stage held, on that stage's own row.
+     The single headline number that summed the stages a person held is what
+     the owner rejected: it read 157 on a job of 49 glasses and 10 tuff. */
+  assert.ok(bh.indexOf("6 glasses") > 0, "the card says how big the job is, in glasses");
+  assert.strictEqual(stepLeft(bh, "Cutting"), "6 left",
+    "and Person A, who cuts, reads what is left to cut on the row that cuts it");
+  assert.strictEqual(stepLeft(bh, "Hotmelting"), null,
+    "with no number against a stage that is not theirs to work off");
+  assert.strictEqual(stepLeft(bh, "Glazing"), null);
+  assert.strictEqual((S("NODES['R5303'].innerHTML").match(/stepleft/g) || []).length, 1,
+    "one stage held is one such number on the card, and no total of anything anywhere");
   ["Cutting", "Hotmelting", "Glazing"].forEach(w => assert.ok(bh.indexOf(w) > 0));
   ["Cork", "eircode", "@", "Export", "Delete", "index.html",
    "DG", "TG", "TUFF", "ARCH", "ASTRAGAL", "FANCY"].forEach(w =>
@@ -2608,7 +2704,7 @@ const person = (name, stages, pin, active, station) =>
     "three stepper rows on the card, always drawn");
   ["data-toggle", "chev", "class=\"bars\"", "class=\"track\"", "class=\"chip\""].forEach(w =>
     assert.ok(bh.indexOf(w) < 0, "and no " + w + ": no expanding, no bars, no chips"));
-  pass("the card is job, customer, one number of glasses and three steppers - nothing else");
+  pass("the card is job, customer, how big the job is, and three steppers - nothing else");
 
   assert.ok(/data-stage="cut" data-act="1">\+<\/button>/.test(bh), "Person A may move cutting");
   assert.ok(/data-stage="hotmelt"[^>]*disabled aria-disabled="true"/.test(bh),
@@ -2930,62 +3026,79 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "clearing it brings them back");
   pass("the search box narrows the cards as it is typed, by job number or customer name");
 
-  /* THE NUMBER BESIDE THE BOX: it says what the person signed in has left to
-     do over the whole board, so what somebody types must never move it - a
-     smaller number would read as less work rather than as a narrower screen */
-  ITEMS[0].fields.Cut = 0;
+  /* THE NUMBERS BESIDE THE BOX: one per stage the person signed in holds, each
+     the same number added down the whole board, so what somebody types must
+     never move them - a smaller number would read as less work rather than as
+     a narrower screen */
+  ITEMS[0].fields.Cut = 0; ITEMS[0].fields.Hotmelt = 2; ITEMS[0].fields.Glazed = 0;
+  ITEMS[1].fields.Cut = 0; ITEMS[1].fields.Hotmelt = 0; ITEMS[1].fields.Glazed = 0;
   await S("readList()");
   reset();
   S("QUERY = ''; render();");
-  assert.strictEqual(REQ.length, 0, "drawing the number asks nobody anything");
+  assert.strictEqual(REQ.length, 0, "drawing the numbers asks nobody anything");
   assert.strictEqual(EL["#gtotal"].hidden, false, "it is up while the board is");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
-    "Person A cuts, and nothing is cut yet: six on one job and two on the other");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 8 left",
+    "Person A cuts, and nothing is cut yet: six on one job and two on the other, said as cutting");
   S("QUERY = '5310'; render();");
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "one card on screen");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 8 left",
     "and the number is still their whole day's, not the two glasses being looked at");
   S("QUERY = 'zzz'; render();");
   assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0, "nothing matches");
   assert.strictEqual(EL["#gtotal"].hidden, false, "the number is still there");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 left",
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 8 left",
     "and still the full one: an empty screen is not an empty day");
   assert.strictEqual(REQ.length, 0, "and none of that sent a single request");
   S("QUERY = ''; render();");
-  pass("the number beside the search box is the whole board's work, whatever is typed in the box");
+  pass("the numbers beside the search box are the whole board's work, whatever is typed in the box");
 
   /* AND IT IS THIS PERSON'S: switching to somebody holding other stages
      redraws every card with their numbers, not the last person's */
-  assert.strictEqual(S("NODES['R5303'].innerHTML").indexOf("6 left") > 0, true,
+  assert.strictEqual(stepLeft(S("NODES['R5303'].innerHTML"), "Cutting"), "6 left",
     "Person A cuts, and none of the six is cut");
   S("QUEUE = {}; LOGQ = {}; tap('900', 'cut', 4);");
-  assert.ok(S("NODES['R5303'].innerHTML").indexOf("2 left") > 0,
-    "four cut and two are left for them");
-  assert.strictEqual(EL["#gtotal"].textContent, "4 left", "two here and the two on the other job");
+  assert.strictEqual(stepLeft(S("NODES['R5303'].innerHTML"), "Cutting"), "2 left",
+    "four cut and two are left to cut on the job");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 4 left",
+    "two here and the two on the other job");
   await settle(80);
   reset();
   S("switchPerson()");
   assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0, "the picker comes back between them");
   S("pickPerson(PEOPLE.find(p => p.name === 'Person B'))");
-  assert.ok(S("NODES['R5303'].innerHTML").indexOf("10 left") > 0,
-    "Person B hotmelts AND glazes: two of six hotmelted and none glazed is four plus six, " +
-    "ten on this one job, where the person who only cuts had two");
-  assert.strictEqual(EL["#gtotal"].textContent, "14 left",
-    "and their whole board is fourteen, untouched by the four somebody else cut");
+  let bcard = S("NODES['R5303'].innerHTML");
+  /* THE OWNER'S TWO-NUMBER CASE ON A REAL CARD: Person B hotmelts AND glazes,
+     so they get two numbers, one on each row - never the ten that adding them
+     up would have said */
+  assert.strictEqual(stepLeft(bcard, "Hotmelting"), "4 left", "two of the six hotmelted leaves four");
+  assert.strictEqual(stepLeft(bcard, "Glazing"), "6 left", "and none of the six glazed leaves six");
+  assert.strictEqual((bcard.match(/stepleft/g) || []).length, 2, "two stages held is two numbers");
+  assert.ok(bcard.indexOf("10 left") < 0, "and nothing on the card adds them into one");
+  assert.ok(bcard.indexOf("6 glasses") > 0, "while the headline still says how big the job is");
+  assert.strictEqual(EL["#gtotal"].textContent, "Hotmelting 6 left · Glazing 8 left",
+    "and the header says the same two things over the whole board, untouched by the four " +
+    "somebody else cut");
   /* the same switch without the picker in between - which is what the people
      read does when the office edits somebody's Stages column while they are
      signed in - must move the cards too, or they keep the old stages' numbers */
   S("PERSON = PEOPLE.find(p => p.name === 'Person A'); render();");
-  assert.ok(S("NODES['R5303'].innerHTML").indexOf("2 left") > 0,
+  assert.strictEqual(stepLeft(S("NODES['R5303'].innerHTML"), "Cutting"), "2 left",
     "the cards follow the person even when no picker let the nodes go");
+  assert.strictEqual(stepLeft(S("NODES['R5303'].innerHTML"), "Hotmelting"), null,
+    "and the stage they no longer hold takes its number away with it");
   assert.ok(/data-stage="cut" data-act="1">\+<\/button>/.test(S("NODES['R5303'].innerHTML")),
     "and so do the steppers, which are drawn from the same person");
-  assert.strictEqual(EL["#gtotal"].textContent, "4 left");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 4 left");
   S("PERSON = PEOPLE.find(p => p.name === 'Person C'); render();");
-  assert.ok(S("NODES['R5303'].innerHTML").indexOf("6 left") > 0,
-    "a person holding no stage at all has the whole job left: nought would read as done");
-  assert.strictEqual(EL["#gtotal"].textContent, "8 left", "and the whole board with it");
-  assert.ok(/data-stage="cut"[^>]*disabled/.test(S("NODES['R5303'].innerHTML")),
+  const ccard = S("NODES['R5303'].innerHTML");
+  assert.strictEqual((ccard.match(/stepleft/g) || []).length, 0,
+    "a person holding no stage at all has no number of their own on the card");
+  assert.ok(ccard.indexOf("6 glasses") > 0,
+    "they are shown the job's own glass count, which is what they are there to read");
+  assert.strictEqual(EL["#gtotal"].hidden, true,
+    "and no pill in the header: there is nothing there for them to work off");
+  assert.strictEqual(EL["#gtotal"].textContent, "");
+  assert.ok(/data-stage="cut"[^>]*disabled/.test(ccard),
     "while they can still move none of it");
   assert.strictEqual(REQ.length, 0,
     "and not one request went out for any of it: the numbers are worked out on the device, " +
@@ -3007,18 +3120,22 @@ const person = (name, stages, pin, active, station) =>
   S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = '';");
   S("PERSON = { name: 'Person A', stages: ['cut', 'hotmelt', 'glazed'], pin: '' }; LAST_TAP = Date.now();");
   await S("readList()");
-  assert.strictEqual(EL["#gtotal"].textContent, "17 left",
-    "this person holds all three stages: two glazings left on one job and three times five on the other");
-  assert.ok(S("NODES['R5330'].innerHTML").indexOf("2 left") > 0,
-    "two glasses cut and hotmelted but not glazed are two glazings this person has left");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 5 left · Hotmelting 5 left · Glazing 7 left",
+    "this person holds all three stages, so the header is three figures: the five glasses of the " +
+    "second job to cut and to hotmelt, and those five plus the two still to glaze on the first");
+  assert.strictEqual(stepLeft(S("NODES['R5330'].innerHTML"), "Glazing"), "2 left",
+    "two glasses cut and hotmelted but not glazed are two still to glaze");
+  assert.strictEqual(stepLeft(S("NODES['R5330'].innerHTML"), "Cutting"), "0 left",
+    "with nothing left to cut on that job, on its own row, said in its own number");
   S("tap('970', 'glazed', 'all')");
-  assert.ok(S("NODES['R5330'].innerHTML").indexOf("0 left") > 0,
+  assert.strictEqual(stepLeft(S("NODES['R5330'].innerHTML"), "Glazing"), "0 left",
     "the card is at nought before the write has even left the tablet");
-  assert.strictEqual(EL["#gtotal"].textContent, "15 left",
-    "and the header with it, in the same draw");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 5 left · Hotmelting 5 left · Glazing 5 left",
+    "and the header moved by the same two in the same draw, and only on the stage that was tapped");
   await settle(80);
   S("render()");
-  assert.strictEqual(EL["#gtotal"].textContent, "15 left", "and they stay out once it has");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 5 left · Hotmelting 5 left · Glazing 5 left",
+    "and they stay out once it has");
   S("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
   pass("a tap counts the card and the header down together, before anything is sent");
 
@@ -3218,8 +3335,11 @@ const person = (name, stages, pin, active, station) =>
             gs.indexOf('id="gtotal"') < gs.indexOf('id="upd"'),
     "beside the box, before the updated line, so a narrow header wraps them together");
   assert.ok(/#gtotal \{[^}]*min-height:40px/.test(gs), "it is read, not tapped, so it takes 40px");
-  assert.ok(/#gtotal \{[^}]*flex:none/.test(gs),
-    "and it never squeezes the tap targets either side of it");
+  assert.ok(/#gtotal \{[^}]*flex:0 1 auto/.test(gs),
+    "so a pill carrying four stages' numbers wraps inside itself rather than running off " +
+    "the side of a tablet nobody can scroll back");
+  assert.ok(!/#gtotal \{[^}]*white-space:nowrap/.test(gs),
+    "which it cannot do while it is nowrap");
   assert.ok(/#gtotal \{[^}]*var\(--brand-2\)[^}]*var\(--brand-line\)/.test(gs) &&
             !/#gtotal \{[^}]*#[0-9a-f]{3}/i.test(gs),
     "in the header's own tokens, in both themes, with no new colour invented for it");
@@ -3258,7 +3378,7 @@ const person = (name, stages, pin, active, station) =>
   S("READY = false; PROBLEM = ''; PEOPLE_READ = false; render();");
   assert.ok(EL["#board"].innerHTML.indexOf("Reading the board") > 0);
   assert.strictEqual(EL["#gtotal"].hidden, EL["#search"].hidden,
-    "the total follows the search box exactly: both down over a message");
+    "the numbers go down with the search box: both down over a message");
   assert.strictEqual(EL["#gtotal"].hidden, true);
   assert.ok(EL["#board"].innerHTML.indexOf('id="again"') > 0,
     "Try again is offered even when the trouble has no name yet");
@@ -3474,11 +3594,22 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(trec.bars.cut.total, 8, "and the cutting bar against eight");
   assert.strictEqual(ST.applyTap(trec, "tuff", "all"), 11, "All on tuff is all eleven tuff");
   assert.strictEqual(ST.applyTap(trec, "cut", "all"), 8, "All on cutting is all eight glasses");
-  /* Person A holds cutting and tuff: eight glasses to cut plus eleven tuff to
-     count is nineteen things left on this job, not eight and not eleven */
-  assert.strictEqual(ST.jobLeftFor(trec, ["cut", "tuff"]), 19);
-  assert.strictEqual(ST.jobLeftFor(trec, ["cut"]), 8);
-  assert.strictEqual(ST.jobLeftFor(trec, ["tuff"]), 11);
+  /* Person A holds cutting and tuff: eight glasses to cut AND eleven tuff to
+     count - two numbers on two rows, never the nineteen that adding them up
+     would give, which is a count of nothing */
+  assert.deepStrictEqual(ST.jobLefts(trec, ["cut", "tuff"]),
+    [{ stage: "cut", label: "Cutting", left: 8 }, { stage: "tuff", label: "Tuff", left: 11 }]);
+  assert.strictEqual(ST.stageLeft(trec, "cut"), 8, "the glasses count against the eight");
+  assert.strictEqual(ST.stageLeft(trec, "tuff"), 11, "and the tuff against the eleven");
+  const tcard = S("NODES['R6001'].innerHTML");
+  assert.strictEqual(stepLeft(tcard, "Cutting"), "8 left", "on the card, on the cutting row");
+  assert.strictEqual(stepLeft(tcard, "Tuff"), "11 left", "and on the tuff row");
+  assert.ok(tcard.indexOf("19 left") < 0, "with nothing on the card adding them together");
+  assert.ok(tcard.indexOf("8 glasses · 11 tuff") > 0,
+    "and a headline that says what the job holds: eight glasses and eleven tuff, side by side");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 12 left · Tuff 11 left",
+    "the header keeps them apart too: the eight and the four of the other job to cut, " +
+    "and the eleven tuff on their own");
   pass("tuff has its own total: it never changes the job's glass number and never clamps to it");
 
   reset();

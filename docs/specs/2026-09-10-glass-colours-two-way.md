@@ -32,7 +32,7 @@ Two boundaries do **not** move:
 | column | yellow when | gold when |
 |---|---|---|
 | DG (AY), TG (AZ) | cutting **and** hotmelting complete | glazing complete |
-| TUFF (BA) | David's tuff count complete | glazing complete |
+| TUFF (BA) | the cutter's tuff count complete | glazing complete |
 | NOT TUFF (BB) | cutting **and** hotmelting complete | glazing complete |
 | arch, astragal, fancy, extra | **never written — office ticks these by hand, as today** (owner, 2026-09-10) |
 
@@ -93,10 +93,10 @@ The tablet learns this from a new list column, not by reading the workbook.
 
 ## 4. The TUFF counter
 
-TUFF becomes a fourth thing David counts on the tablet, with its own total from
+TUFF becomes a fourth thing the cutter counts on the tablet, with its own total from
 the sheet's TUFF column (11 in the owner's example). *"Tuff was a different
-department but same person operates it. David will update the status. It will
-be the same as the cutting component David already has"* (owner, 2026-09-10).
+department but same person operates it. The cutter will update the status. It will
+be the same as the cutting component the cutter already has"* (owner, 2026-09-10).
 
 - Its total is fed from the workbook's TUFF column, the same way the glass
   total is fed from DG + TG.
