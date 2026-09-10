@@ -166,7 +166,11 @@ writes `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`
   the wrong person. The per-stage `By`/`At` pairs are **not** written — they
   say who did that stage's work, and nobody did.
 - **No `Station log` line.** The clear is an office action and is recorded in
-  `Dashboard Log`, as `Floor glass counters`, like every other one.
+  `Dashboard Log`, as `Floor glass counters`, like every other one — and it is
+  read back as one: that line, and the `DoneAt` the clear writes, are both the
+  office's, so the colour writer counts them as an office action on the job.
+  Counting the `DoneAt` for the floor and the log line for nobody is what made
+  the office's own clear out-rank the office (`docs/REFERENCE.md` §18).
 - **A tap already queued on the tablet is decided on the stamps.** A queued tap
   holds an *absolute* number, so letting it through after a clear would put the
   whole count back, not lay one tap on top of it. `rebaseQueue` compares the

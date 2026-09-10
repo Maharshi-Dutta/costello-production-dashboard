@@ -1,7 +1,7 @@
 # An office un-tick clears the floor's counters
 
 **Date:** 2026-09-10
-**Status:** built 2026-09-10, all suites green — **not demoed, not committed**
+**Status:** shipped 2026-09-10 (c9bbee5); an un-tick repaint observed in production the same day is fixed in the working tree — see Amendment C. Not demoed, not committed.
 **Changes a standing rule.** See §2. Only the owner can grant this, and they
 did, on 2026-09-10.
 
@@ -392,3 +392,105 @@ hotmelted, 12 glazed". `ST.clearWords()` now produces those words once and both
 the question and the apology are built from it, so the office cannot be shown
 two descriptions of the same row. The `Dashboard Log` line reads from the same
 words to `nothing`.
+
+### C. Observed in production, 2026-09-10 — the office's stamp was per column
+
+**Status: fixed, all suites green. Shipped build c9bbee5 has the bug.**
+
+#### C1. What the owner saw, and what the reproduction showed
+
+After a per-row **Clear** on TG, the owner's console carried three
+`[glass] painting 1 job (N cells) of 1 from the floor's counters` lines. A
+stubbed-browser reproduction with the download lagged 36 s reproduced it in its
+"case C" — TG is the job's only DG/TG glass, the floor had tapped it, `DoneAt`
+set. The recorded plan was
+
+```
+[{type:"tuff", from:"gold", to:""}, {type:"not tuff", from:"gold", to:""}]
+floorAt      = the DoneAt clearFloorGlass itself wrote, 0.8 s after the click
+officeStamp  = { tg: <the click>, tuff: 0, "not tuff": 0 }
+```
+
+and the drawer's own TUFF (20 of 20) and NOT TUFF (29 of 29) — ticked by hand,
+in the office, and never mentioned by that click — went to nought about ten
+seconds later. This suite now reproduces that plan exactly before the fix.
+
+#### C2. Root cause, both halves
+
+**`glassOfficeStamp` was asked per column.** The office had touched only TG, so
+for `tuff` and `not tuff` it found no hold, no `Dashboard Progress` row and no
+`Dashboard Log` line, and returned a literal `0`. `0 >= floorAt` is false, so
+**the floor won by default on every column the office had not named in that one
+action** — including columns the office ticks by hand and the floor has no
+opinion about at all.
+
+**And the floor stamp it lost to was the office's own.** `clearFloorGlass`
+writes `DoneAt` on purpose, so `floorStamp` stays honest (§3, A5) — but
+`floorStamp` reads it as a **floor** action, while `glassLogStamps`
+*deliberately excluded* the `Floor glass counters` line that records the very
+same act as an **office** one (Amendment A5 argued for that exclusion; it was
+wrong). One half of the office's own clear was counted for the floor and the
+other half for nobody, so the office's clear out-ranked the office. In
+production the `DoneAt` lands about three seconds after the click, strictly
+later than the hold, so it beat even the column the office *had* touched; the
+stubbed run only tied by clock coincidence.
+
+**A third window, same cause.** The downloadable copy can carry the `Production`
+fill before it carries the `Dashboard Progress` and `Dashboard Log` rows. Once
+the cp hold is released (the file agrees the cell is white), every per-column
+source answers 0 for the column the office just cleared — and if this
+dashboard's copy of the floor's list is a few seconds stale and still shows the
+**full** counters against the fresh `DoneAt`, the writer paints the job **gold**
+over an un-tick just made. That is the gold the owner reports, and its
+dependence on two lags is the intermittency they describe.
+
+#### C3. The fix
+
+`glassOfficeJobStamp(j, log)` answers the newest thing the **office** has said
+about this job's glass, on **any** column: every glass item's hold (stamped at
+the click by `pend()`), every `Glass …`/`Glass: …` Log line for the job
+whichever column it named, the `Floor glass counters` line, every glass item's
+`Dashboard Progress` `When`, and `OFFICE_FLOOR_AT[job]` — this dashboard's own
+memory of the `DoneAt` it wrote, which is the only record of a clear until the
+Log line has been written and read back. `glassOfficeStamp` takes the max of
+that and the per-column sources it already had.
+
+Why per job is the right granularity, and not a fudge: **the office's control
+is per job.** A clear is a job-level act, the drawer's Clear button clears the
+job's glass, and the floor's row carries **one combined DG + TG number** with no
+per-type split in it at all (colours spec §8). An office action at time T on a
+job must not lose to a floor stamp on a column that action happened not to
+mention.
+
+`glassLogStamps` gains a `job` bucket — the newest of any office line for that
+job — and stops excluding `Floor glass counters`. Both halves of the clear are
+now counted as the office's, which is what the asymmetry was. The job stamp is
+computed once per job per pass (`byId` is a linear scan of every job on the
+sheet) and `OFFICE_FLOOR_AT[job]` is dropped once the floor has moved that row
+since, so the map cannot grow while a tab stays open.
+
+#### C4. Last-writer-wins is still last-writer-wins
+
+Test 4 pins it, and it is the reason the fix is not simply "the office always
+wins": a genuine floor tap two minutes after the clear carries a stamp later
+than every office record on the job, wins, and its colour is painted on every
+glass column the job has. That test **passes both before and after** the fix —
+deliberately, because a test that only passed afterwards would not prove the
+contest survived.
+
+#### C5. What the tests pin
+
+1. **Case C reproduced.** Office holds TG at nought; the floor's row is the
+   zeros `clearFloorGlass` wrote with its `DoneAt` 0.8 s after the click.
+   `glassColourRun()` plans **nothing**. Before the fix it planned exactly the
+   recorded two cells.
+2. **Production ordering.** `DoneAt` three seconds after the click, strictly
+   later, no tie to hide behind — the office still wins on TG, TUFF and NOT
+   TUFF.
+3. **The released-hold window**, both ways: with this dashboard's own memory of
+   the clear, and — after a reload, with that memory gone — on the
+   `Floor glass counters` Log line alone. Neither may paint gold.
+4. **A real floor tap after the clear wins.**
+
+Before the fix: 1, 2, 3a and 3b all plan a repaint; 4 already passes. After: all
+five as they should be.

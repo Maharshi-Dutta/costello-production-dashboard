@@ -376,7 +376,7 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
 | `test_station.js` | floor stations end to end (offline), incl. tuff, the lock, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 243 |
-| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins, idempotence, the cap, the backoff, fills only, and the office clear end to end | 57 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job), idempotence, the cap, the backoff, fills only, the office clear end to end, and the observed un-tick repaint | 61 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -833,6 +833,30 @@ forgetting it would leave the tablet gold — exactly the bug. `FLOORCLEAR_OWED`
 counts the refusals, one timer retries after 30 s, and after three attempts the
 office is told in a toast that names the numbers still on the tablet. The
 retry re-derives, so a job the office has re-ticked meanwhile is dropped.
+
+**The office's stamp is per JOB, and the clear's own `DoneAt` is the office's.**
+Fixed 2026-09-10 after the owner saw it in production: `glassOfficeStamp` was
+asked **per column**, so for every column the office had not named *in that
+action* it found no hold, no Progress row and no Log line and answered a
+literal `0` — and any floor stamp at all beat it. Pressing Clear on TG alone
+therefore painted out the TUFF and NOT TUFF the office had ticked by hand. And
+the floor stamp it lost to was one the office had itself just written:
+`clearFloorGlass`'s own `DoneAt`, a fraction of a second after the click, while
+`glassLogStamps` deliberately refused to count the `Floor glass counters` line
+that records the same act. One half of the office's own clear was counted for
+the floor and the other half for nobody.
+
+`glassOfficeJobStamp(j, log)` now answers **the newest thing the office has
+said about this job's glass, on any column**: every glass item's hold (stamped
+at the click by `pend()`), every `Glass …`/`Glass: …` Log line for the job
+whichever column it named, the `Floor glass counters` line, every glass item's
+Progress `When`, and `OFFICE_FLOOR_AT[job]` — this dashboard's own memory of
+the `DoneAt` it wrote, which is the only record of a clear until the Log line
+has been written and read back. `glassOfficeStamp` takes the max of that and
+its per-column sources. It is computed once per job per pass (`byId` is a
+linear scan) and `OFFICE_FLOOR_AT[job]` is dropped once the floor has moved
+that row since, so the map stays bounded. The rule is unchanged: a floor tap
+after the office's action still carries the later stamp and still wins.
 
 **Known gap.** `FLOORCLEAR_OK` lives in memory only, so **any clear interrupted
 before its workbook write lands leaves the floor's counters standing, with no

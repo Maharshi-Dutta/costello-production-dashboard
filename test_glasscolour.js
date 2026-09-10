@@ -188,6 +188,10 @@ const fills = () => CALLS.filter(c => c.kind === "fill");
 /* the backoff record is a module-level const object, so a test clears it the
    same way test_checkpoints.js ages a hold: by reaching in */
 const clearFail = () => A("Object.keys(GLASSC_FAIL).forEach(k => delete GLASSC_FAIL[k]); setGlassFoot();");
+/* the office's record of the clears IT made, which outlives one scene the way
+   PENDING and CHANGES do and has to be reset with them */
+const forgetClears = () => A("if (typeof OFFICE_FLOOR_AT !== 'undefined') " +
+  "Object.keys(OFFICE_FLOOR_AT).forEach(function (k) { delete OFFICE_FLOOR_AT[k]; });");
 /** pretend this job's last failure was `ms` ago, so a backoff can be waited
     out without waiting it out */
 const ageFail = (id, ms) => A("GLASSC_FAIL['" + id + "'].at -= " + ms);
@@ -232,6 +236,7 @@ function scene(job, listRow, opts) {
   A("PENDING = {}; savePending(); ALL = [__j]; PRODMAP = __m; CHANGES = []; state.sel = null;" +
     "STATION_ITEMS = __items; STATION_OK = true; BLOCKNAMES = [];");
   clearFail();
+  forgetClears();
   if (!opts || !opts.keepProgress) CP.cpSetProgress({});
   return byId(job.id);
 }
@@ -652,9 +657,13 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
     "{ at: '10/09/2026 18:00', who: 'x', job: 'R7001', what: 'Windows', from: '', to: '' }]");
   const idx = glassLogStamps();
   assert.deepStrictEqual(Object.keys(idx), ["R7001"], "one entry per job, upper-cased");
-  assert.deepStrictEqual(Object.keys(idx.R7001).sort(), ["*", "dg"],
-    "the column's own line under its own key, the whole-group line under a star, the windows line nowhere");
+  assert.deepStrictEqual(Object.keys(idx.R7001).sort(), ["*", "dg", "job"],
+    "the column's own line under its own key, the whole-group line under a star, " +
+    "the newest of ANY of them under job, and the windows line nowhere");
   assert.strictEqual(idx.R7001["*"], stampMs("10/09/2026 17:00"));
+  assert.strictEqual(idx.R7001.job, stampMs("10/09/2026 17:00"),
+    "the job stamp is the newest office action on this job's glass, whichever column it named");
+  assert.strictEqual(idx.R7001.dg, stampMs("10/09/2026 16:00"), "and the column keeps its own");
   pass("Dashboard Log lines count as the office's own stamp - the right job, the right item, and no other");
 
   /* ================= 6b. an office tick that has not landed yet =============
@@ -747,6 +756,7 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   global.__items = [row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, DoneAt: isoAt(15, 0) })];
   A("PENDING = {}; savePending(); ALL = [__jx]; STATION_ITEMS = __items; CHANGES = [];");
   CP.cpSetProgress({});
+  forgetClears();
   reset();
   assert.strictEqual(await glassColourRun(), 1, "the other three columns are painted");
   await settle();
@@ -1040,15 +1050,21 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   await settle();
   assert.strictEqual(CALLS.length, 0, "no second round of writes: the two agree the moment the clear lands");
   /* the clear IS logged, as an office action, in the office's own log (spec §3)
-     - and the wording is load-bearing: glassLogStamps() reads any entry
-     beginning "Glass " or "Glass:" as the office's stamp on a glass column, and
-     a record of what happened to the LIST must never become one of those. */
+     - and it is read back as ONE: an office stamp on the JOB. It has to be.
+     Its other half, the DoneAt it writes on the floor's row, is read by
+     floorStamp as a floor action; counting that half and not this one is what
+     let the office's own clear out-rank the office and paint out the columns
+     the click never mentioned. It is a job stamp and not a column one, because
+     a clear is about the whole job's glass and names no column at all. */
   assert.ok(A("CHANGES").some(c => c.what === "Floor glass counters" && c.job === "R7001"),
     "the clearing of the floor's counters is in Dashboard Log, like every other office action");
-  assert.strictEqual(A("(function(){ var keep = CHANGES; " +
+  const clearIdx = A("(function(){ var keep = CHANGES; " +
     "CHANGES = CHANGES.filter(function (c) { return c.what === 'Floor glass counters'; }); " +
-    "var r = Object.keys(glassLogStamps()).length; CHANGES = keep; return r; })()"), 0,
-    "and it is not read back as an office tick on a glass column, which would poison the contest");
+    "var r = JSON.stringify(glassLogStamps()); CHANGES = keep; return r; })()");
+  assert.deepStrictEqual(Object.keys(JSON.parse(clearIdx)), ["R7001"],
+    "read back on its own, the clear line is an office action on that job");
+  assert.deepStrictEqual(Object.keys(JSON.parse(clearIdx).R7001), ["job"],
+    "under the job, and under no single column - a clear names none");
   pass("after a clear the office, the workbook and the floor all say nothing is done - with no write to settle it");
 
   /* DECLINING WRITES NOTHING AT ALL - not even the workbook half */
@@ -1249,6 +1265,165 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
 
   Object.defineProperty(CW, "account", { configurable: true, get: () => null });
   delete global.confirm;
+
+
+  /* ================= 10c. the office's stamp is PER JOB =====================
+     OBSERVED IN PRODUCTION, 2026-09-10, and reproduced in a stubbed browser
+     with the download lagged 36 s ("case C"). The office pressed Clear on TG
+     alone. Three `[glass] painting 1 job` lines followed, and the drawer's own
+     TUFF (20 of 20) and NOT TUFF (29 of 29) - ticked by hand, in the office,
+     and never mentioned by that click - went to nought.
+
+     Why: glassOfficeStamp was asked PER COLUMN. For `tuff` and `not tuff` it
+     found no hold, no Dashboard Progress row and no Dashboard Log line, and
+     answered a literal 0, so any floor stamp at all beat it. And the floor
+     stamp it lost to was one THE OFFICE ITSELF HAD JUST WRITTEN:
+     clearFloorGlass's own DoneAt, a fraction of a second after the click -
+     while glassLogStamps deliberately refused to count the "Floor glass
+     counters" line that records the same act as an office action. One half of
+     the office's own clear was counted for the floor and the other half for
+     nobody.
+
+     The rule these tests pin: the office's control is per JOB - a clear is a
+     job-level act, and the floor's row is one combined number - so an office
+     action at time T on a job cannot lose to a floor stamp on a column the
+     office happened not to name. A genuine floor tap AFTER it still wins. */
+  /* Everything here is relative to NOW rather than to a fixed wall clock: a cp
+     hold older than PENDING_MS is dropped by applyPending, so a click stamped
+     in 2026 in a suite run at any other moment would not be a hold at all. T0
+     is the click; the clear's own write lands after it, as it does in
+     production. */
+  const T0 = Date.now() - 5000;
+  const isoMs = ms => new Date(ms).toISOString();
+  const two = n => (n < 10 ? "0" : "") + n;
+  /* what nowStamp() writes into Dashboard Progress: a minute, no seconds */
+  const minStamp = ms => { const d = new Date(ms);
+    return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) +
+           " " + two(d.getHours()) + ":" + two(d.getMinutes()); };
+  const CLICK = isoMs(T0);
+  const officeMin = minStamp(T0);                      // what nowStamp() would write
+  /* the office's own record of the clear, as clearFloorGlass keeps it. Guarded
+     so that this suite fails on the ASSERTION rather than on a missing name
+     when it is run against the build that has the bug. */
+  const rememberClear = at => A("if (typeof OFFICE_FLOOR_AT !== 'undefined') " +
+    "OFFICE_FLOOR_AT['R7001'] = " + JSON.stringify(at) + ";");
+  /* the job of the reproduction: TG is its only DG/TG glass, and TUFF and NOT
+     TUFF are ticked by hand in the office */
+  const caseCJob = () => mkJob({ glass: { tg: 49, tuff: 20, "not tuff": 29 },
+    cp: { win: "", drs: "", glass: { tg: "done", tuff: "done", "not tuff": "done" }, prod: {} } });
+  /* the row as clearFloorGlass leaves it: four noughts, and the DoneAt it
+     wrote itself */
+  const clearedRow = doneAt => row({ Total: 49, TuffTotal: 20,
+    Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: doneAt });
+  /* the office is holding TG at nought, stamped at the click, as pend() does */
+  const holdTg = () => {
+    A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+    A("PENDING['R7001'].t['cp:glass:tg'] = " + Date.parse(CLICK) +
+      "; PENDING['R7001'].at = " + Date.parse(CLICK) + "; savePending();");
+    A("ALL = applyPending(ALL, true);");
+  };
+
+  /* (1) CASE C, as recorded: the clear's DoneAt landed 0.8 s after the click,
+     the office still holds TG at nought, and TUFF and NOT TUFF - which that
+     click never mentioned - must not be touched. */
+  j = scene(caseCJob(), clearedRow(isoMs(T0 + 800)));
+  holdTg();
+  rememberClear(isoMs(T0 + 800));
+  reset();
+  console.log("DBGC plan", JSON.stringify(A("glassColourPlan(byId('R7001'))")),
+    "have", JSON.stringify(A("byId('R7001').cp.glass")),
+    "floorAt", A("stampMs(ST.floorStamp(stationForJob('R7001')))"),
+    "stamps", JSON.stringify(["tg","tuff","not tuff"].map(t => A("glassOfficeStamp('R7001','" + t + "')"))),
+    "click", Date.parse(CLICK));
+  assert.strictEqual(await glassColourRun(), 0,
+    "case C: the office cleared TG, so nothing of this job's glass is painted from the floor");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "not one cell is written");
+  assert.strictEqual(sheetNow().tuff, undefined, "TUFF is untouched");
+  assert.strictEqual(sheetNow()["not tuff"], undefined, "and so is NOT TUFF");
+  pass("case C: a per-row Clear on TG no longer wipes the TUFF and NOT TUFF the office ticked by hand");
+
+  /* (2) PRODUCTION ORDERING: the write really lands AFTER the click - three
+     seconds after it in the owner's console - so there is no tie to hide
+     behind. The office must still win on all three columns. */
+  j = scene(caseCJob(), clearedRow(isoMs(T0 + 3000)));
+  holdTg();
+  rememberClear(isoMs(T0 + 3000));
+  reset();
+  assert.ok(stampMs(isoMs(T0 + 3000)) > stampMs(CLICK),
+    "the DoneAt really is later than the click: this is not a tie");
+  assert.strictEqual(await glassColourRun(), 0,
+    "and the office's own write still counts as the office's, so the office wins");
+  await settle();
+  assert.strictEqual(CALLS.length, 0);
+  pass("the clear's own DoneAt is the office's action, not the floor's - even three seconds after the click");
+
+  /* (3) THE RELEASED-HOLD WINDOW, which is the route to the GOLD the owner
+     reported. The downloaded file has caught up on the Production fill (the
+     cell is white, so the cp hold is let go) but does not yet carry the
+     Dashboard Progress row or the Dashboard Log line for that clear; and this
+     dashboard's copy of the floor's list is a few seconds stale, still showing
+     the FULL counters against the fresh DoneAt. Every per-column source
+     answers nothing, the row looks finished, and without a job-level stamp the
+     writer paints the job GOLD - over an un-tick the office has just made. */
+  global.__jw = mkJob({ glass: { tg: 49, tuff: 20, "not tuff": 29 },
+    cp: { win: "", drs: "", glass: {}, prod: {} } });
+  j = scene(caseCJob(), row({ Total: 49, TuffTotal: 20,
+    Cut: 49, Hotmelt: 49, Glazed: 49, Tuff: 20,          // the stale read: still full
+    DoneBy: "the admin", DoneAt: isoMs(T0 + 3000) }));
+  A("PENDING = {}; savePending(); ALL = [__jw]; CHANGES = [];");   // the file agrees: white
+  CP.cpSetProgress({});                                            // no Progress row yet either
+  rememberClear(isoMs(T0 + 3000));
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "the office's own clear is remembered, so a stale full-count read cannot paint the job gold");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "no gold, no fill of any kind");
+  /* the same window after a reload, when the office's own memory of the clear
+     is gone and only the Dashboard Log line survives: it is an office action
+     on this job and must count as one. Built from scratch rather than carried
+     on from the case above, so that a write the previous state had already
+     made could not make this one look quiet. */
+  await settle(200);
+  j = scene(caseCJob(), row({ Total: 49, TuffTotal: 20,
+    Cut: 49, Hotmelt: 49, Glazed: 49, Tuff: 20,
+    DoneBy: "the admin", DoneAt: isoMs(T0 + 3000) }));
+  global.__ch = [{ at: isoMs(T0 + 3300), who: "the admin", job: "R7001",
+                   what: "Floor glass counters", from: "49 cut, 49 hotmelted, 49 glazed, 20 tuff",
+                   to: "nothing", src: "dashboard" }];
+  A("PENDING = {}; savePending(); ALL = [__jw]; CHANGES = __ch;");
+  CP.cpSetProgress({});
+  forgetClears();
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "and after a reload the log line alone still says the office did this");
+  await settle();
+  assert.strictEqual(CALLS.length, 0);
+  A("CHANGES = [];");
+  pass("the released-hold window cannot paint gold over a fresh un-tick, in this session or after a reload");
+
+  /* (4) AND LAST-WRITER-WINS IS STILL LAST-WRITER-WINS: a real floor tap after
+     the office's clear carries a later stamp than every office record on the
+     job, and its colour is painted. Without this the fix would simply be "the
+     office always wins", which is not the rule. */
+  j = scene(caseCJob(), row({ Total: 49, TuffTotal: 20,
+    Cut: 49, Hotmelt: 49, Glazed: 0, Tuff: 20,
+    DoneBy: "Person A", DoneAt: isoMs(T0 + 120000),     // a real tap, two minutes later
+    CutBy: "Person A", CutAt: isoMs(T0 + 120000) }));
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  CP.cpSetProgress({ R7001: {
+    "glass:tg": { done: 0, total: 49, who: "the admin", when: officeMin } } });
+  rememberClear(isoMs(T0 + 3000));
+  reset();
+  assert.strictEqual(await glassColourRun(), 1, "the floor tapped after the office: the floor wins");
+  await settle();
+  assert.deepStrictEqual(fills().map(c => [c.addr, c.color]).sort(),
+    [["AZ7", YELLOW], ["BA7", YELLOW], ["BB7", YELLOW]],
+    "and its yellow reaches every glass column this job has");
+  CP.cpSetProgress({});
+  forgetClears();
+  A("PENDING = {}; savePending();");
+  pass("a genuine floor tap after the office's clear still wins: the rule is last writer, not office first");
 
   /* ================= 11. the whole run, end to end ================= */
   const prodWrites = ALLREQ.filter(r => r.method !== "GET" && /worksheets\('Production'\)/.test(r.path));

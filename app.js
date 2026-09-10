@@ -1653,6 +1653,19 @@ async function setGroupDone(j, group, on) {
 const FLOORCLEAR_AGAIN_MS = 30000;
 const FLOORCLEAR_TRIES = 3;
 const FLOORCLEAR_OK = {};        // burst key -> the office was asked for this clear and said yes
+/* What the Dashboard Log calls a clear of the floor's counters. Said once
+   because glassLogStamps has to recognise it: it is an office action on the
+   job and counts as the office's stamp on every one of its glass columns. */
+const FLOORCLEAR_LOG = "Floor glass counters";
+/* The DoneAt this dashboard last wrote on a job's row when clearing it. The
+   clear stamps the floor's row so floorStamp stays honest (spec section 3),
+   which means the office's own write would otherwise read as a FLOOR action
+   newer than anything the office has - and the writer would paint the job's
+   other glass columns out from the counters this very write zeroed. So it is
+   kept, and glassOfficeJobStamp counts it as the office's. In memory only: the
+   Dashboard Log line is what carries it across a reload and to a second
+   dashboard. */
+const OFFICE_FLOOR_AT = {};
 const FLOORCLEAR_OWED = {};      // job -> how many times the write has been refused
 let floorClearT = null;
 
@@ -1756,6 +1769,11 @@ async function clearFloorGlass(job) {
     return false;
   }
   delete FLOORCLEAR_OWED[id];
+  /* the office has just moved this row, so remember WHEN before anything reads
+     it back: DoneAt is the office's own stamp here, not the floor's, and the
+     colour writer has to know that or it will paint this job's other glass
+     columns out from the counters this very write zeroed */
+  OFFICE_FLOOR_AT[id] = body.DoneAt;
   /* keep this dashboard's copy of the list in step at once, so the board, the
      rows and the drawer read nought without waiting for the ten-second poll -
      and so the colour writer plans from what the list now says. A NEW array,
@@ -1764,11 +1782,12 @@ async function clearFloorGlass(job) {
     ? { id: it.id, fields: Object.assign({}, it.fields || {}, body) } : it);
   redrawStation();
   /* an office action, in the office's own log, exactly as spec §3 says - and
-     NOT in the Station log, which stays the floor's alone. The wording matters
-     more than it looks: glassLogStamps() reads any entry beginning "Glass " or
-     "Glass:" as an office stamp on a glass column, and this must not become
-     one - it is a record of what happened to the LIST, not a tick on a cell. */
-  noteChange(id, "Floor glass counters", was, "nothing");
+     NOT in the Station log, which stays the floor's alone. glassLogStamps
+     reads this line as the office's stamp on this job's glass, and that is
+     what carries the clear across a reload and to a second dashboard: without
+     it the DoneAt written above reads as a floor action and the office's own
+     clear out-ranks the office. */
+  noteChange(id, FLOORCLEAR_LOG, was, "nothing");
   return true;
 }
 
@@ -1948,7 +1967,7 @@ function stampMs(v) {
     and for a cell somebody painted by hand in Excel: neither leaves a dated
     record anywhere, so neither can be shown to be the later action. See the
     honest limits in the spec. */
-function glassOfficeStamp(job, type, log) {
+function glassOfficeStamp(job, type, log, jobAt) {
   const id = String(job).toUpperCase();
   const row = typeof cpStored === "function" ? cpStored(id, "glass:" + type) : null;
   let best = row ? stampMs(row.when) : 0;
@@ -1958,6 +1977,27 @@ function glassOfficeStamp(job, type, log) {
     const t = Math.max(mine[type] || 0, mine["*"] || 0);
     if (t > best) best = t;
   }
+  /* AND the office's stamp on the JOB, whatever column it was made on. This is
+     the half that was missing, and it is what the owner saw on 2026-09-10.
+
+     Asked per column, this function answered a literal 0 for every column the
+     office had not named IN THAT ACTION - no hold, no Progress row, no Log
+     line - so any floor stamp at all beat it. The office pressed Clear on TG
+     alone and the writer promptly painted out the TUFF and NOT TUFF it had
+     ticked by hand, because for those two columns the office had never
+     "spoken". Worse, the floor stamp it lost to was one the office had itself
+     just written: clearFloorGlass's own DoneAt, a fraction of a second after
+     the click.
+
+     The office's control is per JOB. A clear is a job-level act - it is what
+     the drawer's Clear does - and the floor's row is one combined number with
+     no per-type split in it at all (the colours spec, section 8). So an office
+     action at time T on a job must not lose to a floor stamp on a column that
+     action happened not to mention. That is all this adds, and it changes
+     nothing about the contest itself: a floor tap made after T still carries
+     the later stamp and still wins. */
+  const at = jobAt == null ? glassOfficeJobStamp(byId(id) || byId(job), log) : jobAt;
+  if (at > best) best = at;
   /* AND the tick this office has made but not landed yet, which is the third
      record and the one this used to miss. Both of the records above are
      written by the WRITE - Dashboard Progress at the start of it, Dashboard
@@ -1981,6 +2021,53 @@ function glassOfficeStamp(job, type, log) {
   return best;
 }
 
+/** The newest thing the OFFICE has said about this job's glass, on any column,
+    in milliseconds - 0 when it never has. Four records, all of them already in
+    memory, so this costs no request:
+
+      - every glass item's hold, stamped at the click by pend(): the office has
+        acted the moment the button is pressed, long before either sheet knows
+        about it;
+      - every "Glass ..." and "Glass: ..." line of the Dashboard Log for this
+        job, whichever column it named;
+      - the "Floor glass counters" line, which records the office clearing the
+        floor's counters. It is an OFFICE action on this job and is counted as
+        one. The earlier build deliberately excluded it, which was exactly
+        backwards: the clear's other half - the DoneAt it writes on the floor's
+        row - was being counted FOR THE FLOOR, so the office's own act
+        out-ranked the office;
+      - every glass item's Dashboard Progress row.
+
+    Takes the job object rather than its id: byId is a linear scan of every job
+    on the sheet, and this is asked once per job per pass. */
+function glassOfficeJobStamp(j, log) {
+  if (!j || !j.id) return 0;
+  const id = String(j.id).toUpperCase();
+  let best = 0;
+  const held = PENDING[id] || PENDING[j.id];
+  if (held && held.cp) {
+    Object.keys(held.cp).forEach(k => {
+      if (k.indexOf("glass:") !== 0) return;          // never a `gc` hold: that is our own write
+      const t = ((held.t || {})["cp:" + k]) || held.at || 0;
+      if (t > best) best = t;
+    });
+  }
+  const mine = (log || glassLogStamps())[id];
+  if (mine && mine.job > best) best = mine.job;
+  if (typeof cpStored === "function") {
+    Object.keys(j.glass || {}).forEach(k => {
+      const row = cpStored(id, "glass:" + k);
+      const t = row ? stampMs(row.when) : 0;
+      if (t > best) best = t;
+    });
+  }
+  /* and the clear this dashboard made itself, which is the only record of it
+     until the Log line has been written and read back */
+  const own = stampMs(OFFICE_FLOOR_AT[id] || OFFICE_FLOOR_AT[j.id] || "");
+  if (own > best) best = own;
+  return best;
+}
+
 /** The Dashboard Log, indexed by job and glass type, in one pass.
     CHANGES can be four hundred lines and the writer asks about four columns of
     every job on the sheet, so asking it line by line would be the log walked
@@ -1994,15 +2081,29 @@ function glassLogStamps() {
     if (!c) continue;
     const what = String(c.what || "").toUpperCase();
     /* "GLASS DG" is one column; "GLASS: ALL DONE" and "GLASS: CLEARED" are the
-       whole group and count for every one of them */
+       whole group and count for every one of them; and "FLOOR GLASS COUNTERS"
+       is the office clearing the floor's own counters, which is an office
+       action on this job's glass like any other.
+
+       That last one used to be excluded here, deliberately and wrongly. The
+       reasoning was that the feature must not feed the contest with its own
+       writes - but the clear's OTHER half, the DoneAt it stamps on the floor's
+       row, was being read as a FLOOR action by floorStamp. Counting one side
+       and not the other is what let the office's own clear out-rank the
+       office. Both halves are the office's, and both are counted now. */
     const group = what.indexOf("GLASS:") === 0;
-    if (!group && what.indexOf("GLASS ") !== 0) continue;
+    const clear = what === FLOORCLEAR_LOG.toUpperCase();
+    if (!group && !clear && what.indexOf("GLASS ") !== 0) continue;
     const id = String(c.job || "").toUpperCase();
     if (!id) continue;
-    const key = group ? "*" : what.slice(6).toLowerCase();
     const t = stampMs(c.at);
     if (!t) continue;
     const m = out[id] || (out[id] = {});
+    /* every one of them counts for the JOB; only a column's own line counts
+       for that column */
+    if (t > (m.job || 0)) m.job = t;
+    if (clear) continue;
+    const key = group ? "*" : what.slice(6).toLowerCase();
     if (t > (m[key] || 0)) m[key] = t;
   }
   return out;
@@ -2024,6 +2125,14 @@ function glassColourPlan(j, log) {
   const floorAt = stampMs(ST.floorStamp(g));
   if (!floorAt) return null;                 // the floor has never tapped it: nothing of theirs to show
   const want = ST.glassColours(g);
+  /* worked out once for the job, not once per column: byId is a linear scan
+     and this is asked of every job on the sheet, six times a minute */
+  const jobAt = glassOfficeJobStamp(j, log);
+  /* and the memory of our own clear is let go once the floor has moved that
+     row since - it can decide nothing after that, and the map would otherwise
+     grow for as long as the tab is open */
+  const own = OFFICE_FLOOR_AT[j.id];
+  if (own && stampMs(own) < floorAt) delete OFFICE_FLOOR_AT[j.id];
   const out = [];
   ST.COLOUR_TYPES.forEach(type => {
     const col = PRODMAP.glass[type];
@@ -2041,7 +2150,7 @@ function glassColourPlan(j, log) {
        stamp is written to the minute, so it is already biased early - giving it
        the ties it would otherwise lose is the reading that is wrong less often.
        It is also the quiet answer: a tie resolves to no write at all. */
-    if (glassOfficeStamp(j.id, type, log) >= floorAt) return;
+    if (glassOfficeStamp(j.id, type, log, jobAt) >= floorAt) return;
     out.push({ type: type, col: col, from: have, to: want[type] });
   });
   return out.length ? out : null;
