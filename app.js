@@ -140,11 +140,104 @@ const pendEmpty = p => !("done" in p) && p.blk == null && p.phase == null &&
   !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length &&
   !Object.keys(p.gc || {}).length;
 
+/* ---- a hold is never let go into a copy that still disagrees with it -------
+   Owner's bug, observed 2026-09-10 with the mechanism. Un-tick a job's glass,
+   then REFRESH the page - which the owner does after an un-tick, because the
+   tablet looked locked, and not after a tick. `cw_pending` survives the reload
+   byte for byte, so the screen is correctly white. But:
+
+     · the 45 s reconcile timer died with the old page - it lives in memory -
+       and poll() only downloads when `lastModified` MOVES, which this
+       dashboard's own write was the last thing to do and the boot load has
+       already recorded. So nothing ever re-reads the file, and the page sits
+       on the stale gold parse with the hold as its only cover;
+     · and the hold's expiry was a pure clock test. The next time anything at
+       all called applyPending - a floor tap on a DIFFERENT job, through
+       glassColourRun - the three-minute-old hold was dropped and the gold
+       underneath was UNMASKED. Minutes after an un-tick, and it stayed until
+       something else happened to move lastModified.
+
+   So expiry no longer means "let go". It means "ask again":
+
+     · a hold kept because the parse still disagrees keeps a re-read armed;
+     · an EXPIRED hold whose parse still disagrees is kept, and a read is
+       demanded now rather than waited for;
+     · it is let go the moment the file agrees - and only then;
+     · after HOLD_GIVEUP fresh parses that still disagree it is let go anyway
+       and the office is told, in red, naming the job and the item: at that
+       point the write really may not have saved, and quietly showing a colour
+       we know is older than our own change is the one thing not to do.
+
+   What counts as "disagrees" is what a release would UNMASK, which is the
+   colour: the sheet carries only that. A held count whose colour the file
+   already shows expires quietly, exactly as before - otherwise an item whose
+   exact count the Dashboard Progress sheet cannot answer for would be held for
+   ever and warned about for nothing. */
+const HOLD_GIVEUP = 12;             // fresh parses still disagreeing: ~9 min at 45 s apart
+let holdForceAt = 0;                // when a read was last demanded for a hold
+/** Keep a re-read coming while a hold is waiting for the file. `soon` demands
+    one now - bounded to one a minute, because applyPending is called from
+    every render and a download per call would be a storm. */
+function reconcileForHolds(soon) {
+  if (soon) {
+    if (Date.now() - holdForceAt < 45000) { if (!reconcileT) scheduleReconcile(); return; }
+    holdForceAt = Date.now();
+    scheduleReconcile(0);
+    return;
+  }
+  if (!reconcileT) scheduleReconcile();
+}
+/** Would letting this checkpoint hold go change what the row SHOWS? The sheet
+    carries the colour and nothing else, so the colour is what a release can
+    unmask - and what this refuses to unmask while it is still wrong. */
+function cpHoldUnmasks(j, item, held) {
+  const total = cpTotal(j, item);
+  if (!(total > 0)) return false;
+  const st = itemState(j, item);
+  return !!st && cpStatusFor(held, total) !== st.status;
+}
+/** An expired hold the file still disagrees with. Answers whether to keep it.
+    Only a FRESH parse counts towards giving up: a parse is what could have
+    caught up, and applyPending is called far more often than the file is read. */
+function holdStuck(p, key, fresh) {
+  const n = p.n = p.n || {};
+  if (fresh) n[key] = (n[key] || 0) + 1;
+  if ((n[key] || 0) >= HOLD_GIVEUP) { delete n[key]; return false; }
+  reconcileForHolds(!fresh);
+  return true;
+}
+/** Said once, when a change is given up on. Never one per read. */
+function holdGaveUp(job, what) {
+  toast(job + ": the sheet still does not show your change to " + what +
+        " — it may not have saved. Check the sheet.", true);
+}
+/** A page that starts up holding something asks to be re-read, because after a
+    reload nothing else ever will: the reconcile timer is gone with the old
+    page and poll() only downloads when lastModified moves - which this
+    dashboard's own write was the last thing to do. Sooner when the hold is
+    already old, because that write went out before the reload. */
+function bootReconcile() {
+  let oldest = 0;
+  Object.keys(PENDING).forEach(id => {
+    const p = PENDING[id];
+    if (pendEmpty(p)) return;
+    const t = p.t || {};
+    const ages = Object.keys(t).map(k => t[k]).concat([p.at || 0]).filter(Boolean);
+    const a = ages.length ? Math.min.apply(null, ages) : p.at || 0;
+    if (!oldest || a < oldest) oldest = a;
+  });
+  if (!oldest) return;
+  scheduleReconcile(Date.now() - oldest > 30000 ? 5000 : 45000);
+}
+
 /** `fresh` = this is a newly parsed workbook, so a held count can be compared
     with what the file now says and let go once the two agree. */
 function applyPending(list, fresh) {
   const now = Date.now();
   let dropped = false;
+  /* the jobs this call can actually compare a hold against */
+  const seen = {};
+  (list || []).forEach(x => { const j = (x && x.raw) || x; if (j && j.id) seen[j.id] = 1; });
   Object.keys(PENDING).forEach(id => {
     const p = PENDING[id], t = p.t = p.t || {};
     const old = k => now - (t[k] || p.at || 0) > PENDING_MS;
@@ -152,8 +245,14 @@ function applyPending(list, fresh) {
     if (p.blk != null && old("blk")) { delete p.blk; delete t.blk; dropped = true; }
     if (p.phase != null && old("phase")) { delete p.phase; delete t.phase; dropped = true; }
     Object.keys(p.prods || {}).forEach(k => { if (old("prod:" + k)) { delete p.prods[k]; delete t["prod:" + k]; dropped = true; } });
-    Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
-    Object.keys(p.gc || {}).forEach(k => { if (old("gc:" + k)) { delete p.gc[k]; delete t["gc:" + k]; dropped = true; } });
+    /* cp and gc holds are settled against the parsed job below, where there is
+       something to compare them WITH. A hold on a job this call cannot see -
+       gone from the sheet, or a list that does not carry it - has nothing to
+       be compared against and still goes on the clock alone. */
+    if (!seen[id]) {
+      Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
+      Object.keys(p.gc || {}).forEach(k => { if (old("gc:" + k)) { delete p.gc[k]; delete t["gc:" + k]; dropped = true; } });
+    }
     if (pendEmpty(p)) { delete PENDING[id]; dropped = true; }
   });
   const out = list.map(x => {
@@ -170,14 +269,33 @@ function applyPending(list, fresh) {
       const set = PHASES_SET[String(j.id).toUpperCase()];
       if (p.phase < 0 ? !set : (set && set.phase === p.phase)) { delete p.phase; delete p.t.phase; dropped = true; }
     }
-    if (fresh && p.cp) Object.keys(p.cp).forEach(k => {
+    const stale = k => now - ((p.t || {})[k] || p.at || 0) > PENDING_MS;
+    const letCpGo = k => { delete p.cp[k]; delete p.t["cp:" + k];
+                           if (p.n) delete p.n["cp:" + k]; dropped = true; };
+    if (p.cp) Object.keys(p.cp).forEach(k => {
       const st = itemState(j, k);
-      if (st && st.done != null && st.done === p.cp[k]) { delete p.cp[k]; delete p.t["cp:" + k]; dropped = true; }
+      /* the file has caught up with this tick, to the count: let go */
+      if (fresh && st && st.done != null && st.done === p.cp[k]) { letCpGo(k); return; }
+      if (!stale("cp:" + k)) return;                    // still inside its three minutes
+      /* expired. If letting go would put back a colour we know is older than
+         our own change, it is NOT let go - the file is asked for again. */
+      if (!cpHoldUnmasks(j, k, p.cp[k])) { letCpGo(k); return; }
+      if (holdStuck(p, "cp:" + k, fresh)) return;
+      const label = typeof cpLabel === "function" ? cpLabel(k) : k;
+      letCpGo(k);
+      holdGaveUp(j.id, label);
     });
     /* the same rule for a glass colour: the file now shows what we painted, so
        stop holding it and let the sheet speak for itself again */
-    if (fresh && p.gc) Object.keys(p.gc).forEach(k => {
-      if (glassCellNow(j, k) === p.gc[k]) { delete p.gc[k]; delete p.t["gc:" + k]; dropped = true; }
+    const letGcGo = k => { delete p.gc[k]; delete p.t["gc:" + k];
+                           if (p.n) delete p.n["gc:" + k]; dropped = true; };
+    if (p.gc) Object.keys(p.gc).forEach(k => {
+      /* a gc hold IS a colour, so agreement and unmasking are the same test */
+      if (glassCellNow(j, k) === p.gc[k]) { letGcGo(k); return; }
+      if (!stale("gc:" + k)) return;
+      if (holdStuck(p, "gc:" + k, fresh)) return;
+      letGcGo(k);
+      holdGaveUp(j.id, "Glass " + String(k).toUpperCase());
     });
     if (pendEmpty(p)) { delete PENDING[j.id]; dropped = true; return j; }
     const c = Object.assign({}, j);
@@ -209,6 +327,14 @@ function applyPending(list, fresh) {
     return c;
   });
   if (dropped) savePending();
+  /* anything still held after a fresh parse is something the file has not
+     caught up with, so keep a re-read coming until it has. This is also the
+     answer to a download served OLDER than the one before it, which SharePoint
+     does: the hold stands and the next read is asked for. */
+  if (fresh && Object.keys(PENDING).some(id => {
+    const p = PENDING[id];
+    return Object.keys(p.cp || {}).length || Object.keys(p.gc || {}).length;
+  })) reconcileForHolds(false);
   if (list.blockNames) out.blockNames = list.blockNames;   // the grouped view reads them off the list
   return out;
 }
@@ -5182,6 +5308,7 @@ async function start() {
   }
   if (NOACCESS) return;            // load() met it and has already put the gate up
   cpReplayQueue();                 // taps this browser owed from a previous visit
+  bootReconcile();                 // a reload must not orphan a pending write
   setInterval(poll, 12000);
   setStationFoot(); setInterval(setStationFoot, 60000);   // "station feed: 3 min ago" keeps counting
   stationTick();                   // the floor's own two lists, kept current by delta

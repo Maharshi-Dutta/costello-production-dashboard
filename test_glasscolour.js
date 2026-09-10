@@ -254,6 +254,24 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
 (async () => {
   let n = 0; const pass = t => { n++; console.log("  ok  " + t); };
 
+  /* load() is stubbed for the whole run. It really does re-download and
+     re-parse the workbook, and this suite's fake Graph serves no file to
+     download - and since a hold that the file has not caught up with now asks
+     to be re-read (section 12), timers that call it fire in the middle of
+     other tests. What every test here is about is what the app DECIDES, so
+     what a re-read would do is not the point; that a re-read was ASKED FOR is,
+     and it is recorded. */
+  global.__loads = [];
+  A("load = async function (r) { __loads.push(String(r == null ? '' : r)); };");
+  const loadsAsked = () => global.__loads.length;
+  /* and the floor's ten-second poll is stopped for the same reason: this fake
+     serves the Glass station list's ITEMS from nowhere, so the poll can only
+     ever 404 and mark the list missing - at whatever moment its timer happens
+     to land, which made this suite's own results depend on the clock. The poll
+     is test_station.js' business; here the list is read out of memory. */
+  A("stationTick = function () {};" +
+    "if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+
   /* ================= 1. the colour rule, on its own ================= */
   const rec = o => ST.jobRecord([row(o)], "R7001");
   const cols = o => ST.glassColours(rec(o));
@@ -1608,6 +1626,161 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   pass("the window is one job's: an un-tick on one job never holds the floor's work off another");
   A("PENDING = {}; savePending(); CHANGES = [];");
   forgetClears();
+
+
+  /* ================= 12. a hold never expires into a stale copy ==============
+     OBSERVED, 2026-09-10, with the mechanism, and it is not the writer and not
+     a stamp. The owner un-ticks a job's glass, then REFRESHES the page (they
+     refresh after an un-tick because the tablet looked locked, and not after a
+     tick - which is the whole tick/un-tick asymmetry). Then:
+
+       · `cw_pending` survives the reload byte for byte, so the screen is
+         correctly white;
+       · but the 45 s reconcile timer died with the old page - it lives in
+         memory - and poll() only downloads when `lastModified` moves, which
+         this dashboard's own write was the last thing to do and the boot load
+         has already recorded. So the page sits for ever on the stale gold
+         parse with the hold as its only cover;
+       · and the hold's expiry is a pure clock test inside applyPending. The
+         next time anything at all calls it - a floor tap on a DIFFERENT job,
+         through glassColourRun - the three-minute-old hold is dropped and the
+         stale gold underneath is UNMASKED. Gold, minutes after an un-tick,
+         until something else happens to move lastModified.
+
+     The rule: a held change is protected until the downloaded file has
+     genuinely caught up, reload or no reload. A hold never expires into a copy
+     that still disagrees with it - it is kept, and a re-read is demanded,
+     until either the file agrees or we give up and say so out loud. */
+  const holdOff = () => A("if (reconcileT) { clearTimeout(reconcileT); reconcileT = null; }" +
+                          "holdForceAt = 0; busy = false;");
+  const armed = () => A("!!reconcileT");
+  const glassTg = () => (byId("R7001").cp.glass.tg || "");
+  /* the job as the stale download still has it: TG gold */
+  const staleGold = () => mkJob({ glass: { tg: 49 },
+    cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } });
+  /* and as the file reads once it has caught up with the un-tick */
+  const caughtUp = () => mkJob({ glass: { tg: 49 },
+    cp: { win: "", drs: "", glass: {}, prod: {} } });
+  /* age a hold by hand, the way the clock would */
+  const ageHold = ms => A("PENDING['R7001'].t['cp:glass:tg'] -= " + ms +
+                          "; PENDING['R7001'].at -= " + ms + "; savePending();");
+
+  /* (a) R1: the un-tick, then the reload. The boot load brings back a parse
+     that still says gold; the hold covers it, and a re-read must be armed -
+     because nothing else will ever ask for one. */
+  j = scene(staleGold(), null);
+  holdOff();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+  global.__stale = staleGold();
+  A("ALL = applyPending([__stale], true);");
+  assert.strictEqual(glassTg(), "", "the screen is white, as the office left it");
+  assert.ok(armed(), "and a re-read is armed: after a reload nothing else would ever ask for one");
+  /* the next re-read still lags: the hold stands and the reconcile stays armed */
+  holdOff();
+  A("ALL = applyPending([__stale], true);");
+  assert.strictEqual(glassTg(), "", "still white");
+  assert.ok(armed(), "and still asking to be read again");
+  /* and now the file catches up: the hold goes, and the row is white because
+     the SHEET says so */
+  holdOff();
+  global.__ok = caughtUp();
+  A("ALL = applyPending([__ok], true);");
+  assert.strictEqual(A("PENDING['R7001']"), undefined, "the hold is let go once the file agrees");
+  assert.strictEqual(glassTg(), "", "and the row is white on the sheet's own word");
+  assert.ok(!armed(), "with nothing left to re-read for");
+  pass("a hold that outlives a reload keeps asking for a re-read until the file has caught up");
+
+  /* (b) R8: the hold reaches three minutes while the download is STILL older
+     than the change. Something unrelated calls applyPending - a floor tap on
+     another job, through glassColourRun - and on the shipped build that is the
+     moment the gold comes back. It must not: an expired hold whose file still
+     disagrees is KEPT, and a read is demanded instead. */
+  holdOff();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+  A("ALL = applyPending([__stale], true);");
+  holdOff();
+  ageHold(200000);                                    // past PENDING_MS, and then some
+  A("ALL = applyPending(ALL);");                      // the unrelated call, not a fresh parse
+  assert.ok(A("PENDING['R7001'] && PENDING['R7001'].cp['glass:tg'] === 0"),
+    "the hold is NOT dropped: letting it go would unmask a gold we know is older than our own write");
+  assert.strictEqual(glassTg(), "", "so the row stays white");
+  assert.ok(armed(), "and a read is demanded at once, rather than waiting for something to happen");
+  /* the read comes back caught up: now, and only now, the hold goes */
+  holdOff();
+  A("ALL = applyPending([__ok], true);");
+  assert.strictEqual(A("PENDING['R7001']"), undefined, "the file agrees at last, so the hold is let go");
+  assert.strictEqual(glassTg(), "", "and the row is white on the sheet's own word");
+  pass("an expired hold is never dropped into a copy that still disagrees: it is kept and a read is demanded");
+
+  /* ... and it does not hold on for ever either. After enough fresh parses
+     that still disagree, the change is given up on and the office is TOLD -
+     because at that point the write really may not have saved. */
+  holdOff();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+  A("ALL = applyPending([__stale], true);");
+  ageHold(200000);
+  TOASTS.length = 0;
+  let kept = 0;
+  for (let i = 0; i < 20 && A("!!PENDING['R7001']"); i++) { holdOff(); A("ALL = applyPending([__stale], true);"); kept++; }
+  assert.ok(kept > 6 && kept < 16, "it is given up on after about a dozen reads, not two and not never");
+  assert.strictEqual(A("PENDING['R7001']"), undefined, "the hold is finally let go");
+  const warn = TOASTS.filter(t => t.err);
+  assert.strictEqual(warn.length, 1, "and exactly one red message is shown, not one per read");
+  assert.ok(warn[0].m.indexOf("R7001") >= 0 && /glass tg/i.test(warn[0].m),
+    "naming the job and the item: " + warn[0].m);
+  assert.ok(/may not have saved|check the sheet/i.test(warn[0].m),
+    "and saying plainly what it means");
+  pass("a change the sheet never catches up with is given up on out loud, naming the job and the item");
+
+  /* (c) TICKS ARE PROTECTED THE SAME WAY. The asymmetry the owner saw was in
+     when they refresh, not in the code, and nothing here knows the difference
+     between marking done and un-marking it. */
+  holdOff();
+  global.__white = caughtUp();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 49 } });");
+  A("ALL = applyPending([__white], true);");
+  assert.strictEqual(glassTg(), "done", "the office's gold is on the screen at once");
+  assert.ok(armed(), "and the stale white underneath is asking to be re-read");
+  holdOff();
+  ageHold(200000);
+  A("ALL = applyPending(ALL);");
+  assert.ok(A("!!PENDING['R7001']"), "an expired tick is kept exactly as an expired un-tick is");
+  assert.strictEqual(glassTg(), "done", "so a tick never flickers back to white either");
+  holdOff();
+  A("ALL = applyPending([__stale], true);");
+  assert.strictEqual(A("PENDING['R7001']"), undefined, "and the file agreeing is what lets it go");
+  assert.strictEqual(glassTg(), "done");
+  pass("a tick is protected exactly as an un-tick is: the asymmetry was in when the owner refreshes");
+
+  /* (d) THE QUARANTINE FOLLOWS THE HOLD. The writer stands down for a job
+     while the office's change on it is settling; if the hold is what is doing
+     the settling, an expired-but-kept hold must keep it standing down. */
+  holdOff();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+  A("ALL = applyPending([__stale], true);");
+  ageHold(200000);
+  A("ALL = applyPending(ALL);");
+  assert.ok(A("!!PENDING['R7001']"), "the hold is kept");
+  assert.strictEqual(A("officeSettling(byId('R7001'))"), true,
+    "and the writer is still standing down for that job, however old the hold is");
+  holdOff();
+  A("PENDING = {}; savePending(); ALL = [__ok]; CHANGES = [];");
+  pass("an expired-but-kept hold keeps the colour writer standing down: the quarantine follows the hold");
+
+  /* (e) AND A RELOAD ARMS THE RE-READ BY ITSELF, before any parse at all -
+     the case where the boot load fails, or the hold is on a job the sheet has
+     since lost. Nothing else in the page would ever ask. */
+  holdOff();
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 0 } });");
+  A("if (reconcileT) { clearTimeout(reconcileT); reconcileT = null; }");
+  A("bootReconcile();");
+  assert.ok(armed(), "a page that starts up holding something asks to be re-read");
+  holdOff();
+  A("PENDING = {}; savePending(); bootReconcile();");
+  assert.ok(!armed(), "a page holding nothing asks for nothing");
+  holdOff();
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  pass("a reload cannot orphan a pending write: a page that boots holding one asks for a re-read");
 
   /* ================= 11. the whole run, end to end ================= */
   const prodWrites = ALLREQ.filter(r => r.method !== "GET" && /worksheets\('Production'\)/.test(r.path));

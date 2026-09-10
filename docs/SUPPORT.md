@@ -249,6 +249,24 @@ floor's tap is the later action and it stands, by design. Clear it again if it
 was tapped in error — a clear leaves the job unlocked, so they can also just
 tap it back themselves.
 
+## "The sheet still does not show your change to … — it may not have saved"
+
+A change made here is held on screen until the downloaded copy of the workbook
+catches up with it — normally about 36 seconds. This red message means the
+dashboard has re-read the file about a dozen times over roughly ten minutes and
+it **still** shows the old value, so it has stopped holding the new one and is
+telling you rather than quietly putting the old colour back.
+
+It usually means the write did not land: the workbook was locked in desktop
+Excel, the sign-in lost its edit rights, or the browser lost the network at the
+wrong moment. **Open the sheet and look at the cell named in the message.** If
+it is not what you asked for, make the change again. If it *is* what you asked
+for, the message was the download lagging unusually badly and nothing is wrong.
+
+Until that message appears, a held change is never dropped into a copy that
+disagrees with it — including across a page refresh, which used to be the one
+way to see an old colour come back (`docs/REFERENCE.md` §18).
+
 ## Rolling back
 
 Two different kinds of rollback:

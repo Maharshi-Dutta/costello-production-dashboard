@@ -699,3 +699,132 @@ re-lock the owner saw did **not** come from this dashboard inside the hold
 window: it came from a feed whose master was reading gold with no hold to
 correct it — the display problem being investigated separately. The unlock in
 the clear's own write is what makes the card free regardless of that.
+
+### F. The un-tick gold, found: a hold expiring into a stale copy
+
+**Status: built, all suites green, not demoed, not committed. It is not the
+colour writer and not a stamp — those were three earlier suspects and all three
+were wrong.**
+
+#### F1. The mechanism, observed
+
+The owner un-ticks a job's glass and then **refreshes the page** — they refresh
+after an un-tick, because the tablet looked locked, and not after a tick. That
+is the whole tick/un-tick asymmetry: it is in when the page is reloaded, not in
+the code.
+
+`cw_pending` survives the reload byte for byte, so the screen is correctly
+white. But:
+
+- the 45 s reconcile timer **died with the old page** — `scheduleReconcile`
+  lives in memory — and `poll()` only downloads when `lastModified` **moves**,
+  which this dashboard's own write was the last thing to do and the boot load
+  has already recorded. Measured in the reproduction: after the reload, exactly
+  **one** `/content` download (the boot) and **none** for the next 215 s across
+  21 `lastModified` polls. The page sits on the stale gold parse with the hold
+  as its only cover;
+- and the hold's expiry was a **pure clock test** inside `applyPending`, which
+  nothing calls until a click, a job move or a floor tap. At t=190 s the floor
+  finished a **different** job → the station poll → `glassColourRun` → its own
+  `ALL = applyPending(ALL)` → the 196-second-old hold was dropped and the gold
+  underneath was **unmasked**. In production it stays gold until something else
+  happens to move `lastModified` — "gold after the refresh, stays over a
+  minute, then goes blank".
+
+So: a change was protected by a timer that a reload throws away, and released
+by a clock that never asks whether the file has caught up.
+
+#### F2. The rule now built
+
+**A held change is protected until the downloaded file has genuinely caught up,
+reload or no reload. A hold never expires into a copy that still disagrees.**
+
+1. **On boot**, a page that starts up holding anything arms a reconcile
+   (`bootReconcile`) — sooner (5 s) when the hold is already old, because that
+   write went out before the reload. Nothing else in the page would ever ask.
+2. **After every fresh parse**, anything still held is something the file has
+   not caught up with, so a re-read stays armed until it has.
+3. **Expiry no longer means "let go", it means "ask again".** An expired cp/gc
+   hold whose parse still disagrees is **kept**, and a read is demanded now
+   rather than waited for. It is let go the moment the file agrees — and only
+   then.
+4. **And it does not hold on for ever.** After `HOLD_GIVEUP` (12) fresh parses
+   that still disagree — about nine minutes at the 45 s cadence — the hold is
+   let go anyway and the office is told, once, in red, naming the job and the
+   item: *"the sheet still does not show your change to Glass TG — it may not
+   have saved. Check the sheet."* At that point the write really may not have
+   saved, and quietly showing a colour we know is older than our own change is
+   the one thing not to do.
+5. **The quarantine follows the hold.** `officeSettling` already returns true
+   while any `glass:` hold exists, whatever its age, so an expired-but-kept
+   hold keeps the colour writer standing down. Asserted rather than assumed.
+
+**What counts as "disagrees" is what a release would UNMASK — the colour.** The
+sheet carries the colour and nothing else, so a held count whose colour the
+file already shows expires quietly, exactly as before. Without that, an item
+whose exact count `Dashboard Progress` cannot answer for (a yellow cell with no
+stored count) would be held for ever and warned about for nothing. Release
+still requires the exact count on a fresh parse; only the *refusal to expire*
+is decided on the colour.
+
+A hold on a job the call cannot see — gone from the sheet, or a list that does
+not carry it — has nothing to be compared against and still goes on the clock
+alone, or it would leak for ever.
+
+The demanded read is bounded to **one a minute** (`holdForceAt`): `applyPending`
+is called from every render, and a download per call would be a storm.
+
+#### F3. Two behaviours deliberately changed, and one test rewritten
+
+`test_checkpoints.js` asserted that a three-minute-old hold is dropped whatever
+the file says — and in that very test the file still said `done` while the hold
+said 0, so the assertion was pinning the unmasking. It is rewritten: expiry is
+still **per item** (the property that mattered), but now into a file that
+agrees, with a companion check that an expired hold the sheet still contradicts
+is kept.
+
+#### F4. Not built: the non-monotonic download, and why
+
+SharePoint does serve an older copy than the one before it, and once a hold has
+been released nothing protects the item from a later, older parse. The defence
+suggested — remember, per released hold, the parse it agreed with and treat an
+older parse as stale for that item — needs a per-item notion of "newer" that
+the data does not provide: `lastModified` is **one stamp for the whole file**,
+and it is exactly the thing that is not monotonic. A wrong guess pins a stale
+value against a genuine later edit made in Excel, which is a worse failure than
+the one it prevents, and it would need its own store, its own eviction and its
+own way of being wrong.
+
+What is built helps for as long as a hold exists: a parse that disagrees keeps
+the hold and re-arms the read, so an older copy arriving inside the window is
+simply waited out. After release there is no cover. **Recorded as a known gap,
+for the owner to decide on** — the honest fix is a per-cell modified stamp,
+which the Graph API does not give us for a workbook cell.
+
+#### F5. What flipped
+
+| check | on 9aa6b96 | with the fix |
+|---|---|---|
+| a1 after a reload, a stale gold parse arms a re-read | FAIL (nothing armed) | PASS |
+| a2 and it keeps asking while the file still disagrees | FAIL | PASS |
+| b1 an expired hold on a still-stale parse is KEPT | FAIL (dropped) | PASS |
+| b2 so the row stays white instead of coming back gold | **FAIL — got "done"** | PASS ("") |
+| b3 given up on after ~a dozen reads, once, in red | FAIL (no warning ever) | PASS |
+| c a tick is protected exactly as an un-tick is | FAIL | PASS |
+| d the quarantine follows the hold | FAIL | PASS |
+| e a page that boots holding something asks for a re-read | did not exist | PASS |
+
+**b2 is the owner's bug, reproduced in a unit test**: on the shipped build the
+row reads `done` — gold — after an un-tick the office made three minutes
+earlier, with nothing but an unrelated job's floor tap to trigger it.
+
+#### F6. One harness change worth knowing about
+
+`test_glasscolour.js` now stubs `load()` and stops the floor's ten-second poll
+for the whole run. Both are real timers that this suite's fake Graph cannot
+serve — it holds no downloadable workbook and no list items — so they could
+only ever fail, at whatever moment their timers happened to land, and with a
+hold now asking to be re-read they landed often enough to make the suite's own
+results depend on the clock. What each test here is about is what the app
+**decides**; the poll is `test_station.js`' business and the download is the
+browser's.

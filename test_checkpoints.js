@@ -196,13 +196,32 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(held.cp.win, "");
   assert.deepStrictEqual(itemState(held, "win"), { done: 0, total: 10, status: "" });
   pass("held 0 / total re-colour to white / gold");
+  /* CHANGED 2026-09-10. A hold used to be dropped the moment it turned three
+     minutes old, whatever the file said - and dropping one the file still
+     disagrees with UNMASKS the older colour underneath, which is the owner's
+     un-tick gold. So expiry now means "let go if the file has caught up", and
+     what is tested here is still the thing that mattered: expiry is per ITEM,
+     and a new tick does not extend an old one. */
+  pend("R0001", { cp: { win: 10 } });                    // and the sheet says done, 10 of 10
   pend("R0001", { cp: { "glass:tg": 9 } });
   ageHold("R0001", "cp:win", 200000);                    // only the windows tick is old
   held = applyPending([j])[0];
-  assert.strictEqual(held.cpDone.win, undefined, "the old hold is gone");
+  assert.strictEqual(held.cpDone.win, undefined, "the old hold is gone: the file shows what it held");
   assert.strictEqual(held.cpDone["glass:tg"], 9, "the newer one is untouched");
   assert.deepStrictEqual(itemState(held, "win"), { done: 10, total: 10, status: "done" });
   pass("holds expire one item at a time: a new tick does not extend an old one");
+
+  /* ... but only into a file that agrees. An expired hold the sheet still
+     contradicts is KEPT, because letting it go would put the old colour back -
+     which is exactly what the owner saw minutes after an un-tick. */
+  pend("R0001", { cp: { win: 0 } });                     // un-ticked; the sheet still says done
+  ageHold("R0001", "cp:win", 200000);
+  held = applyPending([j])[0];
+  assert.strictEqual(held.cpDone.win, 0, "the expired hold is kept: the sheet has not caught up");
+  assert.strictEqual(held.cp.win, "", "so the cell goes on showing what the office asked for");
+  pend("R0001", { cp: { win: null } });                  // put it back for the tests below
+  assert.strictEqual(applyPending([j])[0].cpDone.win, undefined);
+  pass("an expired hold is not dropped into a file that still disagrees with it");
   pend("R0001", { cp: { "glass:tg": null } });
   assert.strictEqual(applyPending([j])[0].cpDone, undefined);
   pass("a null hold drops that item entirely");

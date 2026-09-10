@@ -369,14 +369,14 @@ and no body carried a phone, eircode, county, price or comment.
 |---|---|---|
 | `verify.js` | parser vs a Python reference extract (local files) | agree/disagree |
 | `test_move.js` | row-move protocol | 7 |
-| `test_checkpoints.js` | checkpoint logic and writes | 36 |
+| `test_checkpoints.js` | checkpoint logic and writes, incl. a hold that will not expire into a stale file | 37 |
 | `test_alerts.js` | subscriptions, admin gate, pending holds | 30 |
 | `test_export.js` | builders, no phone/eircode, logging | 53 |
 | `test_john.js` | the John print sheet, template and print notes | 31 |
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
 | `test_station.js` | floor stations end to end (offline), incl. tuff, the lock and its release by a clear, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 245 |
-| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, and the office-absolute guard | 65 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, the office-absolute guard, and a hold surviving a reload | 71 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -839,6 +839,31 @@ forgetting it would leave the tablet gold — exactly the bug. `FLOORCLEAR_OWED`
 counts the refusals, one timer retries after 30 s, and after three attempts the
 office is told in a toast that names the numbers still on the tablet. The
 retry re-derives, so a job the office has re-ticked meanwhile is dropped.
+
+**A hold never expires into a stale copy** (2026-09-10, and this was the
+un-tick gold — not the writer, not a stamp). The owner un-ticks, then
+**refreshes** (they refresh after an un-tick, not after a tick: the asymmetry
+is in that, not in the code). `cw_pending` survives the reload, so the screen is
+right — but the 45 s reconcile timer died with the old page, and `poll()` only
+downloads when `lastModified` *moves*, which this dashboard's own write was the
+last thing to do. Measured: one `/content` download after the reload and none
+for the next 215 s. The page then sits on the stale gold parse with the hold as
+its only cover, and the hold's expiry was a pure clock test — so the next
+`applyPending` from anywhere (a floor tap on **another** job, through
+`glassColourRun`) dropped it and **unmasked the gold**.
+
+Now: `bootReconcile()` arms a re-read for a page that starts up holding
+anything (5 s if the hold is already old); a fresh parse that still disagrees
+keeps one armed; and an expired cp/gc hold whose parse still disagrees is
+**kept**, with a read demanded at once (bounded to one a minute), until the
+file agrees. After `HOLD_GIVEUP` (12) fresh parses still disagreeing it is let
+go and the office is told once, in red, naming the job and the item. What
+counts as "disagrees" is the **colour** — what a release would unmask — so a
+held count whose colour the file already shows still expires quietly.
+`officeSettling` follows the hold, so the writer keeps standing down.
+**Known gap:** SharePoint can serve an older copy than the one before it, and
+after a hold is released nothing protects the item from that; the fix needs a
+per-cell modified stamp, which Graph does not give for a workbook cell.
 
 **The office is absolute: the writer stands down while an office change is
 settling.** The owner restated the rule on 2026-09-10 — *"the hierarchy is
