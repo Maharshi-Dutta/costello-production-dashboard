@@ -1503,6 +1503,11 @@ function setItemProgress(j, item, newDone) {
   if (want === cur && s.done != null) return;
   const col = cpColumn(item, PRODMAP);
   if (!col) { toast(cpLabel(item) + " is not a column on the Production sheet.", true); return; }
+  /* is this the tick that leaves the job's glass reading nothing done? If it
+     is, and the floor has really tapped this job, the office is asked before a
+     single thing is written - and a "no" writes nothing at all, not even the
+     workbook half. (An office clear reaches the floor, below.) */
+  if (!confirmFloorClear(j, glassCountsAfter(j, item, want), j.id + "|" + item)) { cpRefresh(j.id); return; }
   pend(j.id, { cp: { [item]: want } });
   cpRefresh(j.id);
   /* from = the count before this burst of taps started, not before this tap.
@@ -1530,6 +1535,10 @@ async function cpFlushItem(b) {
     }
     await cpWriteItem({ job: b.job, item: b.item, col: col, done: b.to, total: total,
                         from: b.from, who: b.who || whoAmI(), log: noteChange });
+    /* the workbook half landed: if this was a confirmed clear of the job's
+       glass, the floor's counters go back to nought too - and only THIS burst's
+       own clear, never another burst's on the same job */
+    floorClearAfterWrite(b.job, b.key);
     scheduleReconcile();                                  // reconcile once the file catches up
   } catch (e) {
     toast(friendly(e), true);
@@ -1552,6 +1561,12 @@ async function setGroupDone(j, group, on) {
   if (!items.length) return;
   const missing = items.filter(x => !cpColumn(x.key, PRODMAP));
   if (missing.length) { toast(cpLabel(missing[0].key) + " is not a column on the Production sheet.", true); return; }
+  /* "All glass done" toggled off leaves every glass item of the job reading
+     nothing done. Ask before that destroys work the floor has recorded, and
+     write nothing at all if the answer is no. */
+  if (!on && group === "glass" &&
+      !confirmFloorClear(j, glassCounts(j).map(c =>
+        ({ type: c.type, total: c.total, status: "", done: 0 })), j.id + "|" + group)) return;
   const before = {}, held = {};
   items.forEach(x => {
     const s = itemState(j, x.key);
@@ -1578,6 +1593,9 @@ async function setGroupDone(j, group, on) {
         before: items.map(x => ({ item: x.key, done: before[x.key], total: x.total }))
       });
     });
+    /* the workbook half landed: a confirmed clear of the glass now reaches the
+       floor's own counters as well, so both sides say the same thing */
+    floorClearAfterWrite(j.id, j.id + "|" + group);
     toast(j.id + " · " + what);
     scheduleReconcile();
   } catch (e) {
@@ -1589,6 +1607,177 @@ async function setGroupDone(j, group, on) {
     delete CPBUSY[j.id + "|" + group];
     cpRefresh(j.id);
   }
+}
+
+/* ---------- an office clear reaches the floor -------------------------------
+   Shipped 2026-09-10 (docs/specs/2026-09-10-office-clears-the-floor.md), and
+   it is the ONLY place in this file that writes one of the floor's own
+   counters. Read the boundary before changing anything here.
+
+   The bug it answers. Un-ticking a job's glass in the office cleared the
+   workbook correctly every time - the cell really did go white - but nothing
+   ever cleared the floor's counters, so the tablet stayed gold for ever and
+   the only way back was somebody tapping minus forty-nine times. The office
+   and the floor were left saying different things about the same job, which is
+   the one thing this whole feature set exists to prevent.
+
+   THE RULE, exactly (CLAUDE.md rule 3, second exception, owner 2026-09-10):
+   when the office CLEARS a job's glass checkpoints it may write that job's
+   `Glass station` row's Cut, Hotmelt, Glazed and Tuff to nought, plus
+   DoneBy/DoneAt. That is all. The office still never writes `Station people`,
+   never writes `Station log`, never writes a per-stage By/At, and never writes
+   a floor column for any other reason.
+
+   Four locks keep it that narrow, and they are independent of one another:
+
+     1. Two call sites, both on a clear branch: setItemProgress and
+        setGroupDone, and nowhere else in the file.
+     2. FLOORCLEAR_OK - the office was ASKED and said yes, keyed to the WRITE
+        that must land (job|item, or job|group) and not to the job, so no other
+        burst on the same job can spend it. Set only where the clear is
+        confirmed, consumed once, and nothing else writes to it. No token, no
+        write, ever.
+     3. clearFloorGlass re-derives the reason from the office's OWN record at
+        write time (officeGlassEmpty, through ST.officeSeed - the very function
+        that seeds a row) and from the floor's row (ST.floorWorkToClear). If
+        the office's glass no longer reads "nothing done", nothing is written.
+     4. The body can only be built by ST.officeClearFields - a name and a
+        time in, no parameter that could carry a counter or a per-stage stamp. Every
+        counter in it is a literal nought.
+
+   A row the floor has NEVER tapped is deliberately left alone: its counters
+   are the office's own seed echoed back and the feeder puts them right on its
+   next run (sliceHash carries the seed, so the run is the next load, not ten
+   minutes later). Writing DoneAt on such a row would mark it touched for ever
+   and switch its seeding off - a worse bug than the one being fixed. */
+const FLOORCLEAR_AGAIN_MS = 30000;
+const FLOORCLEAR_TRIES = 3;
+const FLOORCLEAR_OK = {};        // burst key -> the office was asked for this clear and said yes
+const FLOORCLEAR_OWED = {};      // job -> how many times the write has been refused
+let floorClearT = null;
+
+/** Does the office's own record now say that NOTHING of this job's glass is
+    done? Asked of DG and TG - the same glass the floor is given - through
+    ST.officeSeed, which is the function that seeds a row FROM that record, so
+    the two readings can never drift apart. */
+function officeGlassEmpty(j, counts) {
+  if (typeof ST === "undefined" || !j) return false;
+  /* ST.TOTAL_TYPES is upper case and the job's own glass keys are lower, so the
+     comparison goes through ST.jobKey - the same normaliser officeSeed itself
+     filters with. Getting this wrong is silent: the filter simply matches
+     nothing and the feature never fires. */
+  const mine = (counts || glassCounts(j)).filter(c => ST.TOTAL_TYPES.indexOf(ST.jobKey(c.type)) >= 0);
+  if (!mine.length) return false;                 // no DG and no TG: nothing the floor was ever given
+  const seed = ST.officeSeed({ total: ST.glassTotal(j) }, mine);
+  return !seed.cut && !seed.hotmelt && !seed.glazed;
+}
+/** This job's glass counts as they will read once one item is set to `want` -
+    the office's record as it is ABOUT to be, so the clear can be recognised
+    before anything is written. null when the item is not a glass item. */
+function glassCountsAfter(j, item, want) {
+  const p = String(item).split(":");
+  if (p[0] !== "glass") return null;
+  return glassCounts(j).map(c => String(c.type) !== p[1] ? c
+    : { type: c.type, total: c.total, status: cpStatusFor(want, c.total), done: want });
+}
+/** Is this write the moment the office's glass record goes from saying
+    something to saying nothing? That transition IS the clear. A tick made when
+    the record already said nothing is not one, and must not reach the floor -
+    otherwise clearing a hand-ticked ARCH on a job whose DG is blank would wipe
+    the floor's counters, which nobody asked for. */
+const officeClearsGlass = (j, after) => officeGlassEmpty(j, after) && !officeGlassEmpty(j);
+
+/** Ask before a clear destroys work the floor has really recorded, and
+    remember the answer. Returns false only when the office said no - and then
+    NOTHING is written, not even the workbook half.
+
+    Nothing is asked when the floor's row has no stamp on it: its counters are
+    only the office's own seed echoed back, so there is nothing to lose. */
+function confirmFloorClear(j, after, key) {
+  if (typeof ST === "undefined" || !j) return true;
+  if (!officeClearsGlass(j, after)) return true;              // not a clear of this job's glass
+  const g = stationForJob(j.id);
+  const say = g ? ST.clearWarning(g) : "";
+  if (say && typeof confirm === "function" && !confirm(say)) return false;
+  /* Said yes, or there was nothing to ask about: this job's floor counters may
+     be put back to nought once THIS write has landed. The key is the burst key
+     - job|item, or job|group - and not the job, because a job has several
+     bursts at once: un-tick the glass and tick Windows on the same job inside
+     the 800 ms debounce and the Windows write lands first. Keyed on the job,
+     that write would have spent the answer and cleared the floor BEFORE the
+     glass write landed - and if the glass write then failed, the floor would be
+     at nought with the sheet still gold, the mirror image of the bug this
+     feature exists to remove. */
+  FLOORCLEAR_OK[key] = 1;
+  return true;
+}
+
+/** Come back to a refused clear. ONE timer for all of them, the way the
+    feeder's and the colour writer's follow-ups are. */
+function floorClearAgain() {
+  if (floorClearT) return;
+  floorClearT = setTimeout(() => {
+    floorClearT = null;
+    Object.keys(FLOORCLEAR_OWED).forEach(id => { clearFloorGlass(id).catch(() => {}); });
+  }, FLOORCLEAR_AGAIN_MS);
+}
+
+/** Put one job's floor counters back to nought. The one write. */
+async function clearFloorGlass(job) {
+  const id = String(job);
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listPatch) return false;
+  const j = byId(id);
+  /* re-derived here and not taken on trust from the caller: if the office's
+     own record no longer says "nothing done" - somebody re-ticked it while the
+     workbook write was in the air - then this is not a clear any more and
+     nothing at all is written */
+  if (!j || !officeGlassEmpty(j)) { delete FLOORCLEAR_OWED[id]; return false; }
+  const g = stationForJob(id);
+  if (!g || !ST.floorWorkToClear(g)) { delete FLOORCLEAR_OWED[id]; return false; }
+  /* the same words the question used (ST.clearWords), so the apology for a
+     write that could not be made and the question that authorised it cannot
+     describe the same row differently */
+  const was = ST.clearWords(g);
+  const body = ST.officeClearFields(feedWho(), new Date().toISOString());
+  try {
+    if (STATION_OK !== true) throw new Error(STATION_WHY || "the floor's list is not readable");
+    const siteId = await CW.stationSite();
+    if (!siteId) throw new Error(STATION_SITE_MISSING);
+    await CW.listPatch(ST.STATION_LIST, g.id, body, { siteId: siteId, fields: ST.STATION_FIELDS });
+  } catch (e) {
+    const n = (FLOORCLEAR_OWED[id] || 0) + 1;
+    const why = (e && e.message) || String(e);
+    console.warn("[station] could not clear " + id + "'s floor counters (" + n + "): " + why);
+    if (n >= FLOORCLEAR_TRIES) {
+      delete FLOORCLEAR_OWED[id];
+      toast(id + ": the glass was cleared in the sheet, but the floor's counters could not be " +
+            "reset - the tablet still shows " + was + ". " + friendly(e), true);
+    } else { FLOORCLEAR_OWED[id] = n; floorClearAgain(); }
+    return false;
+  }
+  delete FLOORCLEAR_OWED[id];
+  /* keep this dashboard's copy of the list in step at once, so the board, the
+     rows and the drawer read nought without waiting for the ten-second poll -
+     and so the colour writer plans from what the list now says. A NEW array,
+     because stationRecords() caches on its identity. */
+  STATION_ITEMS = (STATION_ITEMS || []).map(it => String(it.id) === String(g.id)
+    ? { id: it.id, fields: Object.assign({}, it.fields || {}, body) } : it);
+  redrawStation();
+  /* an office action, in the office's own log, exactly as spec §3 says - and
+     NOT in the Station log, which stays the floor's alone. The wording matters
+     more than it looks: glassLogStamps() reads any entry beginning "Glass " or
+     "Glass:" as an office stamp on a glass column, and this must not become
+     one - it is a record of what happened to the LIST, not a tick on a cell. */
+  noteChange(id, "Floor glass counters", was, "nothing");
+  return true;
+}
+
+/** The workbook half of a clear has landed. If the office asked for this job's
+    glass to be cleared, and meant it, the floor's counters follow. */
+function floorClearAfterWrite(job, key) {
+  if (!FLOORCLEAR_OK[key]) return;
+  delete FLOORCLEAR_OK[key];
+  clearFloorGlass(job).catch(e => console.warn("[station] " + ((e && e.message) || e)));
 }
 
 /* Unsent taps must survive the tab closing, and be sent when it comes back. */

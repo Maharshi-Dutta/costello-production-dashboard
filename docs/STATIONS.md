@@ -58,16 +58,16 @@ iteration is deployed; the code tolerates them either way. Columns:
 | OfficeDone | text | feeder | `Yes` when the office has ticked this job's DG and TG off. The job is then **read-only on the tablet** (added 2026-09-10) |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |
-| Cut | number | station, **or the feeder while the floor has not touched the row** | glasses cut |
+| Cut | number | station; the feeder while the floor has not touched the row; **zeroed by an office clear** | glasses cut |
 | Hotmelt | number | station, same | glasses hotmelted |
 | Glazed | number | station, same | glasses glazed |
-| Tuff | number | **station only — never seeded** | tuff units counted, against `TuffTotal` (added 2026-09-10) |
+| Tuff | number | station; **never seeded**, but **zeroed by an office clear** | tuff units counted, against `TuffTotal` (added 2026-09-10) |
 | CutBy / CutAt | text | station only | who last moved the Cut counter, and when (ISO) |
 | HotmeltBy / HotmeltAt | text | station only | the same, for Hotmelting |
 | GlazedBy / GlazedAt | text | station only | the same, for Glazing |
 | TuffBy / TuffAt | text | station only | the same, for Tuff |
-| DoneBy | text | station only | the person's name from the last touch of any counter |
-| DoneAt | text | station only | ISO timestamp of that last touch |
+| DoneBy | text | station; **also an office clear** | the person's name from the last touch of any counter |
+| DoneAt | text | station; **also an office clear** | ISO timestamp of that last touch |
 
 The three **glass** stages are **Cutting, Hotmelting, Glazing**. (Toughening
 was in the first iteration and is gone; there is no `Toughened` column any
@@ -100,8 +100,8 @@ FANCY and EXTRA are not glass the floor cuts, hotmelts and glazes. A job whose
 only glass is one of those is never fed at all. One constant,
 `TOTAL_TYPES` in `station-core.js`, says which kinds count.
 
-**Seeding, the one exception to "the feeder never writes the floor's
-columns".** The office ticks a job's glass off in the workbook's own colours
+**Seeding, the first of the two exceptions to "the office never writes the
+floor's columns".** The office ticks a job's glass off in the workbook's own colours
 long before a tablet appears on the floor, and a job already finished in the
 office must not arrive on the tablet reading nothing done. So the feeder
 writes `Cut`, `Hotmelt` and `Glazed` — and only those three — on **a row it is
@@ -138,6 +138,49 @@ in order:
 
 It is `ST.officeSeed()`, a pure function, and `test_station.js` covers every
 rule. `Tuff` is not seeded by any of them.
+
+**An office clear, the second exception (owner, 2026-09-10 —
+`docs/specs/2026-09-10-office-clears-the-floor.md`).** Un-ticking a job's glass
+in the office cleared the workbook correctly but left the floor's counters
+standing, so the tablet stayed gold for ever and the only way back was somebody
+tapping `−` forty-nine times. So a clear now reaches the list: the office
+writes `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`
+— six fields, and nothing else, ever.
+
+- **When.** Only when the office's own record of the job's **DG and TG** goes
+  from saying something to saying nothing — the group **Clear**, or a per-item
+  clear that leaves no other glass ticked. Clearing DG while TG is still gold
+  is *not* a clear of the job's glass: the floor's row holds one combined
+  number and telling them nought would be a wrong instruction on a workshop
+  screen.
+- **Only on a row the floor has really tapped** (`DoneAt` set). On an untouched
+  row the counters are the office's own seed echoed back and the **feeder**
+  puts them right on its next run — and writing `DoneAt` there would mark the
+  row touched for ever and switch its seeding off.
+- **The office is asked first**, in plain words naming what will go (*"The
+  floor has recorded 49 cut, 49 hotmelted, 12 glazed on this job…"*). Answering
+  no writes **nothing at all**, not even the workbook half.
+- **`DoneBy`/`DoneAt` are written on purpose.** Last-writer-wins reads
+  `ST.floorStamp` off those fields; counters dropped to nought under a stale
+  stamp would read as old news and the tablet's "last touch" line would name
+  the wrong person. The per-stage `By`/`At` pairs are **not** written — they
+  say who did that stage's work, and nobody did.
+- **No `Station log` line.** The clear is an office action and is recorded in
+  `Dashboard Log`, as `Floor glass counters`, like every other one.
+- **A tap already queued on the tablet is decided on the stamps.** A queued tap
+  holds an *absolute* number, so letting it through after a clear would put the
+  whole count back, not lay one tap on top of it. `rebaseQueue` compares the
+  row's `DoneAt` with the tap's own time: a row moved *after* the tap was made
+  wins and the tap is dropped; a tap made after the clear applies on top of the
+  zeros. Nothing is marked BLOCKED either way — unlike the lock, a clear
+  *unlocks* the job (`OfficeDone` goes to `No`), so a dropped tap can simply be
+  tapped again.
+
+It is `ST.officeClearFields(who, at)` — a name and a time in, six fields out,
+every counter a literal nought, so the path cannot express anything else — with
+`ST.floorWorkToClear()` and `ST.clearWarning()` beside it. In `app.js` the
+whole of it is `clearFloorGlass()`, reached only from the two clear paths and
+only after the office has confirmed.
 
 Only job number, customer name and a number of glasses reach this list: no
 glass type, no phone number, no eircode, no county, no price, no comment, no

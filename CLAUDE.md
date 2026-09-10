@@ -63,16 +63,33 @@ the one that first wrote them down.
    the sheet's own TUFF quantity, and `OfficeDone`, the office's read-only
    lock on a job) and reads all three. The tablet, for its part, can never
    write `TuffTotal` or `OfficeDone`: `ST.floorOnly` drops both.
-   **One exception, agreed by the
-   owner on 2026-09-08 in the v3 spec's "Seeding" section and nowhere else:**
-   the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is *creating*, or on
-   a row whose `DoneAt` is empty, seeding them from the office's own glass
-   checkpoints so a job already ticked off in the office does not arrive on
-   the floor reading nothing done. It never writes a By, an At or the
-   last-touch pair, and once the floor's first tap has set `DoneAt` it never
-   writes a counter on that row again — a guard checked again with a one-item
-   read immediately before each such write, not only when the plan was made. Only the tablet (`station.js`) writes a
-   By, an At, a last touch or a log line.
+   There are **exactly two** exceptions, each granted by the owner in a dated
+   spec, each for a named case; a **third** is a new decision for the owner,
+   not a judgement call for a session.
+   - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
+     nowhere else): the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is
+     *creating*, or on a row whose `DoneAt` is empty, seeding them from the
+     office's own glass checkpoints so a job already ticked off in the office
+     does not arrive on the floor reading nothing done. It never writes a By,
+     an At or the last-touch pair, and once the floor's first tap has set
+     `DoneAt` it never writes a counter on that row again — a guard checked
+     again with a one-item read immediately before each such write, not only
+     when the plan was made. `Tuff` is **not** seeded.
+   - **An office clear** (owner, 2026-09-10,
+     `docs/specs/2026-09-10-office-clears-the-floor.md`): when the office
+     **clears a job's glass checkpoints** — the moment its own record of that
+     job's DG and TG goes from saying something to saying nothing — it writes
+     that job's row's `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus
+     `DoneBy`/`DoneAt`, and **nothing else**. Only on a row the floor has
+     really tapped (`DoneAt` set) and only with the office's answer to a
+     confirmation naming what will be destroyed; a row the floor never tapped
+     is left to the feeder. That is the whole exception. It is **not** a
+     general "the office writes the floor" path: no per-stage `By`/`At`, no
+     value but zero, no reconciliation pass, and never `Station people` or
+     `Station log`. The body can only be built by `ST.officeClearFields(who,
+     at)`, which takes a name and a time and so cannot carry a counter in.
+   Only the tablet (`station.js`) writes a By, an At, a last touch or a log
+   line.
 4. **No phone number and no eircode leave the app in any export, ever.**
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or

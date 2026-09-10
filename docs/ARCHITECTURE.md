@@ -159,9 +159,17 @@ none of the three.
   `ST.FLOOR_FIELDS`). Once a counter PATCH lands, one `Station log` line is
   queued and POSTed (`cw_stationlogq`) — never before, and never if the
   counter write never happened.
-- **Office reads by delta.** The master dashboard never writes `Glass
-  station`'s floor columns, and never writes `Station people` or `Station
-  log` at all. It reads all three (the people list once, for the log
+- **Office → the floor's counters, on a clear only.** Since 2026-09-10 the one
+  other time the office writes a floor column: when it **clears a job's glass
+  checkpoints**, `clearFloorGlass()` puts that row's `Cut`/`Hotmelt`/`Glazed`/
+  `Tuff` back to nought and stamps `DoneBy`/`DoneAt`, so the office, the
+  workbook and the floor all say the same thing. Only on a row the floor has
+  really tapped, only after the office has answered a question naming what will
+  be destroyed, and only through `ST.officeClearFields(who, at)`, which cannot
+  express any value but nought. See `docs/REFERENCE.md` §18.
+- **Office reads by delta.** Apart from that one clear, the master dashboard
+  never writes `Glass station`'s floor columns, and never writes `Station
+  people` or `Station log` at all. It reads all three (the people list once, for the log
   window's filters) and keeps the board, the drawer's timeline and the log
   window current with `listDelta()` — every 10 seconds while the station
   board, the log window, or a drawer for a job with glass is open

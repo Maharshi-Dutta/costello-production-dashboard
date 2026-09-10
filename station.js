@@ -284,9 +284,19 @@ function currentId(e) {
     clamped to the total, and its `from` moves with it so the log line still
     says what actually changed.
 
-    Only a rise re-bases. A counter that has gone DOWN in the list is somebody
-    correcting it on another tablet, and this tap is the newer statement of
-    what is on the bench. */
+    Only a rise re-bases. A counter that has gone DOWN in the list was moved by
+    somebody else - the office clearing the job, or a correction on another
+    tablet - and the queue holds an ABSOLUTE number, so sending it flat would
+    put the whole count back rather than lay this tap on top of it. Which of
+    the two statements is the true one is decided the way everything else about
+    this row is: whoever moved it LAST wins, on the stamps both sides write.
+    Every writer sets DoneAt when it moves a row - the floor on every tap, and
+    an office clear precisely so that this comparison stays honest - so a row
+    stamped AFTER this tap was made is the later word and the tap is dropped.
+    It is not stranded the way a tap that meets the office's LOCK is: nothing
+    is stopping the floor from tapping again, because a clear UNLOCKS the job.
+    A tie, or a stamp that will not parse, leaves the tap alone: the floor's own
+    statement is what this tablet is for. */
 function rebaseQueue() {
   let moved = false;
   Object.keys(QUEUE).forEach(k => {
@@ -296,7 +306,19 @@ function rebaseQueue() {
     const f = it.fields || {};
     const now = Number(f[ST.STAGE_FIELD[e.stage]]);
     const was = Number(e.from);
-    if (!isFinite(now) || !isFinite(was) || now <= was) return;
+    if (!isFinite(now) || !isFinite(was)) return;
+    if (now < was) {
+      const rowAt = Date.parse(String(f.DoneAt == null ? "" : f.DoneAt));
+      const tapAt = Date.parse(String(e.at || ""));
+      if (!isFinite(rowAt) || !isFinite(tapAt) || rowAt <= tapAt) return;
+      console.warn("[station] dropping a queued tap for " + e.job + ": " +
+        ST.stageLabel(e.stage) + " " + e.value + " was tapped at " + e.at +
+        ", and the row was moved after that (" + f.DoneAt + ") - tap it again if it is still right");
+      delete QUEUE[k];
+      moved = true;
+      return;
+    }
+    if (now <= was) return;
     const total = Math.max(0, Math.round(Number(f.Total) || 0));
     e.value = Math.max(0, Math.min(total, Math.round(now + (Number(e.value) - was))));
     e.from = Math.round(now);

@@ -100,6 +100,81 @@ const STATION_FIELDS = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], FLOOR
    nought on every row and only the floor ever moves it. */
 const SEED_FIELDS = ["Cut", "Hotmelt", "Glazed"];
 const FEEDER_WRITES = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], SEED_FIELDS);
+
+/* The SECOND exception, and the last one: an office CLEAR puts this job's
+   counters back to nought (owner, 2026-09-10,
+   docs/specs/2026-09-10-office-clears-the-floor.md).
+
+   Why it had to exist. Un-ticking a job's glass in the office cleared the
+   workbook correctly every time, but nothing cleared the floor's counters, so
+   the tablet stayed gold for ever and the only way back was somebody tapping
+   minus forty-nine times. The office, the workbook and the floor now say the
+   same thing after a clear, which is the whole of the feature.
+
+   It is ONE named case and nothing more. The office still never writes
+   `Station people`, never writes `Station log`, never writes a per-stage By or
+   At, and never writes a counter for any other reason - not to correct one,
+   not to "tidy up", not from a reconciliation pass. The proof that it cannot
+   is in the shape of officeClearFields below: it takes a name and a time, so
+   there is no argument it could carry a counter or a per-stage stamp IN. Every
+   counter it writes is a literal nought, written here, once. */
+const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt"];
+/** The whole body of an office clear: four noughts and the last-touch pair.
+
+    DoneBy/DoneAt are written, and not writing them would be the bug: the
+    last-writer-wins rule reads floorStamp off those fields (spec §3), so
+    counters dropped to nought under a stale stamp would look like old news and
+    the tablet's "last touch" line would name whoever tapped last rather than
+    whoever actually moved the row. The per-stage By/At pairs are NOT written -
+    they say who did that stage's WORK, and nobody did. */
+function officeClearFields(who, at) {
+  const out = {};
+  ALL_STAGE_KEYS.forEach(k => { out[STAGE_FIELD[k]] = 0; });
+  out.DoneBy = stTxt(who);
+  out.DoneAt = stTxt(at) || new Date().toISOString();
+  return out;
+}
+/** Is there anything on this row for an office clear to clear? Two things have
+    to be true, and both of them are about not writing for nothing:
+
+    the floor must really have tapped it (DoneAt), because on a row they never
+    touched the counters are the office's own seed echoed back and the FEEDER
+    already puts them right on its next run - writing DoneAt on such a row
+    would be worse than useless, because it would mark the row "touched" for
+    ever and switch its seeding off;
+
+    and at least one counter must be above nought, because writing four noughts
+    over four noughts tells nobody anything. */
+function floorWorkToClear(g) {
+  if (!g || !stTxt(g.doneAt).trim()) return false;
+  return ALL_STAGE_KEYS.some(k => Math.round(stNum(g[STAGE_ROW[k]], 0)) > 0);
+}
+/* the word each counter is said with when the office is asked to destroy it */
+const CLEAR_WORD = { cut: "cut", hotmelt: "hotmelted", glazed: "glazed", tuff: "tuff" };
+/** What is on this row, in the words a person reads: "49 cut, 49 hotmelted,
+    12 glazed". "" when there is nothing on it. ONE source for those words, so
+    the question asked before a clear and the apology made when one could not
+    be written cannot describe the same row differently. */
+function clearWords(g) {
+  if (!floorWorkToClear(g)) return "";
+  const parts = [];
+  ALL_STAGE_KEYS.forEach(k => {
+    const n = Math.round(stNum(g[STAGE_ROW[k]], 0));
+    if (n > 0) parts.push(n + " " + CLEAR_WORD[k]);
+  });
+  return parts.join(", ");
+}
+/** What the office is asked before a clear destroys work the floor has really
+    recorded - naming what will go, because it can be a whole afternoon of it,
+    from one click, on a job somebody is standing at. "" when there is nothing
+    to lose, and then nothing is asked at all. */
+function clearWarning(g) {
+  const words = clearWords(g);
+  if (!words) return "";
+  return "The floor has recorded " + words + " on this job. Clearing the " +
+         "glass here will set all of those back to zero. Clear it anyway?";
+}
+
 const PEOPLE_FIELDS = ["Title", "Station", "Stages", "PIN", "Active"];
 /* The office needs the names and the stages for the log window's filters, and
    has no business reading anybody's PIN: it asks for four of the five. */
@@ -972,6 +1047,7 @@ const ST = {
   COLOUR_TYPES, stageComplete, glassColours, floorStamp,
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
+  OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,

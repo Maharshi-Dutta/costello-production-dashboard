@@ -418,6 +418,64 @@ const person = (name, stages, pin, active, station) =>
       "the feeder can never write " + k + ": it says who did it, and the office did not"));
   pass("the feeder's whole vocabulary is the job facts plus the three counters, never a By or an At");
 
+  /* ---- the SECOND exception: an office clear puts the counters back ----
+     Owner, 2026-09-10 (docs/specs/2026-09-10-office-clears-the-floor.md). Six
+     fields, four of them a literal nought, and that is the whole of it. */
+  assert.deepStrictEqual(ST.OFFICE_CLEAR_FIELDS,
+    ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt"]);
+  const CLEARBODY = ST.officeClearFields("the admin", "2026-09-10T15:00:00.000Z");
+  assert.deepStrictEqual(Object.keys(CLEARBODY).sort(), ST.OFFICE_CLEAR_FIELDS.slice().sort(),
+    "an office clear names exactly those six fields - asserted as a key set, not a subset");
+  assert.deepStrictEqual(CLEARBODY,
+    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: "2026-09-10T15:00:00.000Z" });
+  ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "TuffBy", "TuffAt"]
+    .forEach(k => assert.ok(!(k in CLEARBODY),
+      "a clear never writes " + k + ": that says who did that stage's work, and nobody did"));
+  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "OfficeDone", "FedAt", "FedBy", "Title"]
+    .forEach(k => assert.ok(!(k in CLEARBODY), "and it is not a feed either: no " + k));
+  /* the shape of the function IS the guarantee: it takes a name and a time, so
+     there is no argument through which a counter could be smuggled in */
+  assert.strictEqual(ST.officeClearFields.length, 2, "who and when, and nothing else, go in");
+  ST.ALL_STAGE_KEYS.forEach(k => assert.strictEqual(CLEARBODY[ST.STAGE_FIELD[k]], 0,
+    ST.STAGE_FIELD[k] + " can only ever be nought on this path"));
+  assert.ok(ST.OFFICE_CLEAR_FIELDS.every(k => ST.FLOOR_FIELDS.indexOf(k) >= 0),
+    "every field of a clear is one of the floor's own - that is exactly why it needed the owner");
+  assert.ok(ST.OFFICE_CLEAR_FIELDS.indexOf("Tuff") >= 0 && ST.SEED_FIELDS.indexOf("Tuff") < 0,
+    "Tuff is cleared but never seeded: the two exceptions are separate and neither widens the other");
+  pass("an office clear is six fields, four literal noughts and the last touch - and cannot express anything else");
+
+  /* when there is anything to clear at all, and what the office is told first */
+  const clrRow = o => ST.jobRecord([item(Object.assign({ Title: "R5303", Job: "R5303",
+    Customer: "Customer One", GlassType: "GLASS", Total: 49, TuffTotal: 12, Seq: 1, Active: "Yes",
+    Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneAt: "", DoneBy: "" }, o), "800")], "R5303");
+  assert.strictEqual(ST.floorWorkToClear(clrRow({ Cut: 49 })), false,
+    "a row with no stamp on it was never tapped: its counters are the office's own seed");
+  assert.strictEqual(ST.floorWorkToClear(clrRow({ DoneAt: "2026-09-10T14:00:00.000Z" })), false,
+    "and a tapped row already at nought has nothing to put back");
+  assert.strictEqual(ST.floorWorkToClear(clrRow({ Cut: 49, DoneAt: "2026-09-10T14:00:00.000Z" })), true);
+  assert.strictEqual(ST.floorWorkToClear(clrRow({ Tuff: 3, DoneAt: "2026-09-10T14:00:00.000Z" })), true,
+    "the tuff count on its own is work somebody did, and counts");
+  assert.strictEqual(ST.floorWorkToClear(null), false);
+  assert.strictEqual(ST.clearWarning(clrRow({ Cut: 49 })), "",
+    "nothing is asked when there is nothing to lose");
+  assert.strictEqual(
+    ST.clearWarning(clrRow({ Cut: 49, Hotmelt: 49, Glazed: 12, DoneAt: "2026-09-10T14:00:00.000Z" })),
+    "The floor has recorded 49 cut, 49 hotmelted, 12 glazed on this job. Clearing the glass " +
+    "here will set all of those back to zero. Clear it anyway?",
+    "the words the owner asked for, naming what will go");
+  assert.ok(ST.clearWarning(clrRow({ Cut: 49, Tuff: 3, DoneAt: "2026-09-10T14:00:00.000Z" }))
+              .indexOf("49 cut, 3 tuff") > 0,
+    "a counter at nought is not named - only what will actually be destroyed");
+  /* ONE source for those words: the question asked before a clear and the
+     apology made when one could not be written must describe the same row the
+     same way, or the office reads two different numbers for one job */
+  const clrFull = clrRow({ Cut: 49, Hotmelt: 49, Glazed: 12, Tuff: 3, DoneAt: "2026-09-10T14:00:00.000Z" });
+  assert.strictEqual(ST.clearWords(clrFull), "49 cut, 49 hotmelted, 12 glazed, 3 tuff");
+  assert.ok(ST.clearWarning(clrFull).indexOf(ST.clearWords(clrFull)) > 0,
+    "the question is built from exactly those words");
+  assert.strictEqual(ST.clearWords(clrRow({ Cut: 49 })), "", "and there are none when there is nothing to lose");
+  pass("the office is asked, in plain words, only when the floor has really recorded something");
+
   ["Phone", "Eircode", "County", "Area", "Price", "Comment", "Notes", "Product", "Windows", "Doors"]
     .forEach(bad => ST.STATION_FIELDS.concat(ST.LOG_FIELDS, ST.PEOPLE_FIELDS).forEach(f =>
       assert.ok(f.toLowerCase().indexOf(bad.toLowerCase()) < 0, "no list may carry " + bad)));
@@ -3205,6 +3263,108 @@ const person = (name, stages, pin, active, station) =>
   S("if (retryT) { clearTimeout(retryT); retryT = null; }");
   pass("only a rise re-bases a waiting tap: a correction downwards leaves it saying what the floor said");
 
+  /* ---- a queued tap that meets the office's zeros ----
+     (docs/specs/2026-09-10-office-clears-the-floor.md §4.) The office clears a
+     job's glass; the row's four counters go to nought under a tap this tablet
+     still owes. rebaseQueue re-bases a tap whose row has RISEN, and a drop is
+     the opposite case - and it cannot simply be let through, because a queue
+     entry holds an ABSOLUTE number: a `+1` made against forty carries 41, so
+     sending it flat after a clear would leave the row at 41 cut, 0 hotmelted,
+     0 glazed - a state neither side asked for, and one the office reads as
+     "the un-tick did not stick".
+
+     So it is decided the way everything else about this row is: whoever moved
+     it LAST wins, on the stamps both sides write. Both cases are pinned below.
+     Nothing is BLOCKED either way: a clear UNLOCKS the job, so a dropped tap
+     can simply be tapped again - unlike a tap that meets the office's lock,
+     which nobody on the floor could ever correct. */
+  const mkRow = doneAt => [item({ Title: "R5321", Job: "R5321", Customer: "Customer Thirteen",
+    GlassType: "GLASS", Total: 49, TuffTotal: 12, Seq: 1, Active: "Yes", OfficeDone: "No",
+    Cut: 40, Hotmelt: 40, Glazed: 12, Tuff: 3,
+    DoneAt: doneAt, DoneBy: "Person A" }, "970")];
+
+  /* (a) THE OFFICE CLEARED AFTER THE TAP WAS MADE: the office acted last, so
+     the tap is dropped rather than resurrecting the whole count. The real
+     trigger is undramatic - the workshop wifi drops, the floor taps, the office
+     clears the job because something went wrong on it, the wifi comes back. */
+  ITEMS = mkRow(new Date(Date.now() - 120000).toISOString());
+  LOGITEMS = [];
+  S("QUEUE = {}; LOGQ = {}; BLOCKED = {}; TOKEN = null; QUERY = ''; DELTA_OFF = 0;");
+  S("PERSON = { name: 'Person A', stages: ['cut'], pin: '' }; LAST_TAP = Date.now();");
+  await S("readList()");
+  S("flushing = true; tap('970', 'cut', 1);");
+  assert.strictEqual(S("QUEUE['970|cut'].value"), 41, "one more glass cut, against a list saying forty");
+  assert.strictEqual(S("QUEUE['970|cut'].from"), 40);
+  /* the office clears the job a minute after that tap: exactly the body app.js
+     sends, stamped the way app.js stamps it */
+  Object.assign(ITEMS[0].fields,
+    ST.officeClearFields("the admin", new Date(Date.now() + 60000).toISOString()));
+  await S("readList()");
+  assert.strictEqual(S("Object.keys(QUEUE).length"), 0,
+    "the tap is dropped: the office moved the row after it was made, so the office's word is the later one");
+  assert.strictEqual(S("Object.keys(BLOCKED).length"), 0,
+    "and nothing is BLOCKED: a clear unlocks the job, so the floor can simply tap again");
+  assert.strictEqual(S("boardNow().find(b => b.job === 'R5321').cut"), 0,
+    "the card shows what the row really says, at once");
+  S("flushing = false;");
+  reset();
+  await S("flushQueue()");
+  await settle(80);
+  assert.strictEqual(writes().length, 0, "and nothing at all goes out: no counter, no log line");
+  assert.strictEqual(ITEMS[0].fields.Cut, 0, "the office's nought stands");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("a tap made BEFORE the office's clear is dropped, not sent flat: sending it would put the whole count back");
+
+  /* (b) THE FLOOR TAPPED AFTER THE CLEAR: the floor acted last, so the tap
+     applies on top of the zeros, which is what §4 recommends and what
+     last-writer-wins requires. */
+  ITEMS = mkRow(new Date(Date.now() - 120000).toISOString());
+  Object.assign(ITEMS[0].fields,
+    ST.officeClearFields("the admin", new Date(Date.now() - 60000).toISOString()));
+  LOGITEMS = [];
+  S("QUEUE = {}; LOGQ = {}; BLOCKED = {}; TOKEN = null; DELTA_OFF = 0;");
+  await S("readList()");
+  S("flushing = true; tap('970', 'cut', 1);");
+  assert.strictEqual(S("QUEUE['970|cut'].value"), 1,
+    "one glass cut, against the nought the office left - not forty-one");
+  assert.strictEqual(S("QUEUE['970|cut'].from"), 0, "so the log line will say what really changed");
+  await S("readList()");
+  assert.strictEqual(S("Object.keys(QUEUE).length"), 1,
+    "and it survives the next read: this tap is the later word");
+  S("flushing = false;");
+  reset();
+  await S("flushQueue()");
+  await settle(80);
+  const afterClear = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(afterClear.length, 1, "one write goes out");
+  assert.strictEqual(afterClear[0].body.Cut, 1, "carrying the floor's own number, on top of the zeros");
+  assert.ok(Object.keys(afterClear[0].body).every(k => ST.FLOOR_FIELDS.indexOf(k) >= 0),
+    "still the floor's own columns and nothing else");
+  assert.strictEqual(ITEMS[0].fields.Cut, 1);
+  assert.strictEqual(ITEMS[0].fields.Hotmelt, 0,
+    "and the stages nobody re-tapped stay where the office put them");
+  assert.strictEqual(ITEMS[0].fields.Glazed, 0);
+  assert.strictEqual(ITEMS[0].fields.Tuff, 0);
+  const clearLog = writes().find(w => w.method === "POST" && w.path.indexOf(LOG_ID) > 0);
+  assert.strictEqual(clearLog.body.fields.From + "->" + clearLog.body.fields.To, "0->1",
+    "and the log line reads from the office's nought, which is what the office could last see");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; } QUEUE = {}; LOGQ = {};");
+  pass("a tap made AFTER the office's clear applies on top of the zeros: the floor moved the row last");
+
+  /* the tie, and the unreadable stamp, both leave the tap alone - the floor's
+     own statement is what this tablet is for */
+  ITEMS = mkRow("not a date");
+  S("QUEUE = {}; LOGQ = {}; TOKEN = null; DELTA_OFF = 0;");
+  await S("readList()");
+  S("flushing = true; tap('970', 'cut', 1);");
+  ITEMS[0].fields.Cut = 0;
+  await S("readList()");
+  assert.strictEqual(S("Object.keys(QUEUE).length"), 1,
+    "a row whose stamp will not parse cannot be shown to be the later word, so the tap stands");
+  S("QUEUE = {}; LOGQ = {}; flushing = false;");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("a drop is decided on the stamps, and a stamp nothing can read never wins the argument");
+
   /* AMENDMENT 8: a row with no glasses on it has nothing to finish */
   const zeroStep = S("stepHtml({ id: '1', total: 0, cut: 0, hotmelt: 0, glazed: 0, by: {}, at: {} }, " +
                      "'cut', 'Cutting')");
@@ -3773,6 +3933,35 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(appSrc.indexOf("listAdd(ST.PEOPLE_LIST") < 0 && appSrc.indexOf("listPatch(ST.PEOPLE_LIST") < 0,
     "nor a row of the people list");
   pass("the office reads the log and the people list and has no code path that writes either");
+
+  /* The second exception's own boundary, read off the source: the office's ONE
+     write to a floor column has to be unreachable except from a clear, and the
+     cheapest proof of that is that there is one of everything. */
+  const countOf = (s, needle) => s.split(needle).length - 1;
+  assert.strictEqual(countOf(appSrc, "ST.officeClearFields("), 1,
+    "app.js builds a clear body in exactly one place");
+  assert.strictEqual(countOf(appSrc, "FLOORCLEAR_OK[key] = 1"), 1,
+    "and the office's permission for one is granted in exactly one place");
+  assert.strictEqual(countOf(appSrc, "delete FLOORCLEAR_OK["), 1,
+    "and consumed in exactly one, so it cannot be spent twice");
+  /* keyed to the WRITE that must land, never to the job: a job has several
+     bursts at once, and any of them landing would otherwise spend the answer */
+  assert.strictEqual(countOf(appSrc, "FLOORCLEAR_OK[j.id]"), 0,
+    "and it is never keyed on the job, which any other burst on that job could spend");
+  assert.strictEqual(countOf(appSrc, 'floorClearAfterWrite(b.job, b.key)'), 1,
+    "the item path spends only its own burst's answer");
+  assert.strictEqual(countOf(appSrc, 'floorClearAfterWrite(j.id, j.id + "|" + group)'), 1,
+    "and the group path only its own group's");
+  assert.strictEqual(countOf(appSrc, "confirmFloorClear("), 3,
+    "which is asked at the two clear paths and defined once - and nowhere else");
+  assert.strictEqual(countOf(appSrc, "floorClearAfterWrite("), 3,
+    "and acted on only after the two workbook writes it belongs to");
+  assert.strictEqual(countOf(appSrc, "CW.listPatch(ST.STATION_LIST"), 5,
+    "the office patches the Glass station list from five places: the feeder's four, and this");
+  ["officeClearFields", "OFFICE_CLEAR_FIELDS", "floorWorkToClear", "clearWarning", "FLOORCLEAR"]
+    .forEach(bad => assert.ok(stationSrc.indexOf(bad) < 0,
+      "and the tablet has no use for " + bad + ": clearing is the office's, from the office's own click"));
+  pass("the office's one write to a floor column is built in one place, permitted in one, and spent once");
 
   /* ================= 17. the whole run, end to end ================= */
   const touchedBook = ALLREQ.filter(r => /\/workbook|\/content|\/versions|createSession|\/drive|\/range\(|worksheets/.test(r.path));

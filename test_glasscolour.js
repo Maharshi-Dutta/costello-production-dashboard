@@ -77,7 +77,31 @@ function parseAddr(a) {
   throw new Error("bad address " + a);
 }
 const ok = body => ({ status: 200, body });
+
+/* ---- and the floor's own list, behind the same fake Graph ----
+   The colour writer reads the floor's rows out of memory and never asks
+   SharePoint for them, which is why this suite had no list at all until the
+   office learned to clear one (docs/specs/2026-09-10-office-clears-the-floor.md).
+   That clear is the ONE request the office makes to this list from here, so
+   the list is served rather than stubbed: what matters is the exact body that
+   goes on the wire, and the fact that nothing else ever does. */
+const FSITE = "example.sharepoint.test,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,ffffffff-0000-1111-2222-333333333333";
+const GLASS_LIST_ID = "list-glass-station";
+const LISTS_PATH = "/sites/" + FSITE + "/lists";
+const ITEMS_PATH = LISTS_PATH + "/" + GLASS_LIST_ID + "/items/";
+const LISTWRITES = [];                        // every write this suite sends to that list
+let FAIL_LIST = 0;                            // n list writes to refuse with a 403
+
 function route(method, path, body) {
+  if (path === LISTS_PATH + "?$select=id,displayName")
+    return ok({ value: [{ id: GLASS_LIST_ID, displayName: "Glass station" }] });
+  if (path.indexOf(ITEMS_PATH) === 0 && /\/fields$/.test(path)) {
+    const id = path.slice(ITEMS_PATH.length).replace(/\/fields$/, "");
+    if (method !== "PATCH") return { status: 405, body: { error: "no route " + method + " " + path } };
+    if (FAIL_LIST) { FAIL_LIST--; return { status: 403, body: { error: { code: "AccessDenied" } } }; }
+    LISTWRITES.push({ id: id, fields: body });
+    return ok({ id: id, fields: body });
+  }
   if (path === "/x/workbook/createSession") return ok({ id: "S1" });
   if (path === "/x/workbook/worksheets") return ok({ value: Object.keys(BOOK).map(n => ({ name: n })) });
   if (path === "/x/workbook/worksheets/add") { sh(body.name); CALLS.push({ method, sheet: body.name, kind: "addSheet" }); return ok({}); }
@@ -147,6 +171,7 @@ run("graph.js");
 global.CW = window.CW;
 CW._setToken(() => "t");
 CW._setFile({ base: "/x/workbook", content: "/x/content", meta: "/x" });
+CW._setStationSite(FSITE);                    // the floor's lists, already found
 run("checkpoints.js");
 global.CP = window.CP;
 run("station-core.js");
@@ -947,6 +972,283 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual((byId("R7001").cpDone || {})["glass:dg"], 2, "with its count");
   A("PENDING = {}; savePending();");
   pass("when both sides are holding one cell, the newer hold is drawn - the same rule as the writer's");
+
+  /* ================= 10b. an office clear reaches the floor =================
+     docs/specs/2026-09-10-office-clears-the-floor.md. The owner spent an
+     afternoon believing the un-tick was broken. It was not: the workbook was
+     cleared correctly every time. What was wrong is that the FLOOR's counters
+     were never cleared, so the tablet stayed gold for ever and the only way
+     back was somebody tapping minus forty-nine times.
+
+     So the assertions here are about all three saying the same thing
+     afterwards - the office, the workbook and the floor - and about the write
+     that makes the third one true being exactly six fields and reachable from
+     nothing but a clear. */
+  const ASKED = [];
+  let ANSWER = true;
+  global.confirm = m => { ASKED.push(String(m)); return ANSWER; };
+  const clearWrites = () => LISTWRITES.slice();
+  /* FedBy is never on this path, so the name is the one the feeder would use -
+     a display name, never an address (feedWho) */
+  Object.defineProperty(CW, "account", { configurable: true, get: () => ({ name: "the admin" }) });
+  const goldCp = { win: "", drs: "", glass: { dg: "done", tg: "done", tuff: "done", "not tuff": "done" }, prod: {} };
+  const tapped = o => row(Object.assign({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11,
+    DoneAt: isoAt(14, 0), DoneBy: "Person A",
+    CutBy: "Person A", CutAt: isoAt(13, 0), HotmeltBy: "Person A", HotmeltAt: isoAt(13, 30),
+    GlazedBy: "Person B", GlazedAt: isoAt(14, 0) }, o || {}));
+
+  j = scene(mkJob({ cp: goldCp }), tapped());
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = true;
+  reset();
+  await setGroupDone(j, "glass", false);
+  await settle(120);
+  assert.strictEqual(ASKED.length, 1, "the office is asked once, before anything is written");
+  assert.strictEqual(ASKED[0],
+    "The floor has recorded 8 cut, 8 hotmelted, 8 glazed, 11 tuff on this job. Clearing the " +
+    "glass here will set all of those back to zero. Clear it anyway?",
+    "and told exactly what will be destroyed");
+  assert.strictEqual(clearWrites().length, 1, "one write to the floor's list, and one only");
+  assert.strictEqual(clearWrites()[0].id, "700", "onto that job's own row");
+  assert.deepStrictEqual(clearWrites()[0].fields,
+    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin", DoneAt: clearWrites()[0].fields.DoneAt },
+    "the four counters at nought and the last touch - asserted as an exact key set");
+  assert.ok(/^\d{4}-\d\d-\d\dT.*Z$/.test(clearWrites()[0].fields.DoneAt),
+    "DoneAt is a real ISO stamp, so the floor's row does not read as old news");
+  pass("an office clear on a job the floor has tapped writes exactly the four noughts and the last touch");
+
+  ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "TuffBy", "TuffAt"]
+    .forEach(k => assert.ok(!(k in clearWrites()[0].fields),
+      "no " + k + ": that says who did that stage's work, and nobody did"));
+  ["Job", "Customer", "Total", "TuffTotal", "Seq", "Active", "OfficeDone", "FedAt", "FedBy"]
+    .forEach(k => assert.ok(!(k in clearWrites()[0].fields), "and no job fact either: no " + k));
+  assert.ok(!ALLREQ.some(r => /Station log|Station people|list-station/.test(r.path)),
+    "and not one request of any kind reached the Station log or the people list");
+  assert.strictEqual(A("Object.keys(FLOORCLEAR_OK).length"), 0, "the office's permission is spent once");
+  assert.strictEqual(A("Object.keys(FLOORCLEAR_OWED).length"), 0, "and nothing is left owed");
+  pass("no Station log line, no per-stage By or At, no job fact: the office wrote six fields and stopped");
+
+  /* THE POINT OF THE WHOLE FEATURE: all three now say the same thing */
+  assert.strictEqual(A("stationForJob('R7001').cut"), 0, "the floor's row reads nought");
+  assert.deepStrictEqual(ST.glassColours(A("stationForJob('R7001')")),
+    { dg: "", tg: "", tuff: "", "not tuff": "" }, "so the colour rule wants blank everywhere");
+  assert.strictEqual(A("stationForJob('R7001').finished"), false, "and the card is not gold any more");
+  assert.deepStrictEqual(sheetNow(), { dg: WHITE, tg: WHITE, tuff: WHITE, "not tuff": WHITE,
+    arch: undefined, astragal: undefined, fancy: undefined, extra: undefined },
+    "the workbook's own four are white, and the hand-ticked four were never touched");
+  reset();
+  assert.strictEqual(await glassColourRun(), 0, "and the colour writer has nothing left to do");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "no second round of writes: the two agree the moment the clear lands");
+  /* the clear IS logged, as an office action, in the office's own log (spec §3)
+     - and the wording is load-bearing: glassLogStamps() reads any entry
+     beginning "Glass " or "Glass:" as the office's stamp on a glass column, and
+     a record of what happened to the LIST must never become one of those. */
+  assert.ok(A("CHANGES").some(c => c.what === "Floor glass counters" && c.job === "R7001"),
+    "the clearing of the floor's counters is in Dashboard Log, like every other office action");
+  assert.strictEqual(A("(function(){ var keep = CHANGES; " +
+    "CHANGES = CHANGES.filter(function (c) { return c.what === 'Floor glass counters'; }); " +
+    "var r = Object.keys(glassLogStamps()).length; CHANGES = keep; return r; })()"), 0,
+    "and it is not read back as an office tick on a glass column, which would poison the contest");
+  pass("after a clear the office, the workbook and the floor all say nothing is done - with no write to settle it");
+
+  /* DECLINING WRITES NOTHING AT ALL - not even the workbook half */
+  j = scene(mkJob({ cp: goldCp }), tapped());
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = false;
+  reset();
+  await setGroupDone(j, "glass", false);
+  await settle(120);
+  assert.strictEqual(ASKED.length, 1, "the office is still asked");
+  assert.strictEqual(CALLS.length, 0, "and answering no writes nothing to the workbook at all");
+  assert.strictEqual(clearWrites().length, 0, "nor to the floor's list");
+  assert.strictEqual(A("Object.keys(PENDING).length"), 0, "nothing is even held on screen");
+  assert.strictEqual(byId("R7001").cp.glass.dg, "done", "the job is exactly as it was");
+  assert.strictEqual(A("Object.keys(FLOORCLEAR_OK).length"), 0,
+    "and no permission was left lying about for the next write to pick up");
+  pass("declining the question writes nothing anywhere: not the floor's counters, not the workbook, not a hold");
+
+  /* NOTHING IS ASKED, AND NOTHING IS WRITTEN, ON A ROW THE FLOOR NEVER TAPPED.
+     Its counters are the office's own seed echoed back and the feeder puts
+     them right on its next run - and writing DoneAt here would mark the row
+     touched for ever and switch its seeding off, which is a worse bug than the
+     one this fixes. */
+  j = scene(mkJob({ cp: goldCp }), row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 0, DoneAt: "", DoneBy: "" }));
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = true;
+  reset();
+  await setGroupDone(j, "glass", false);
+  await settle(120);
+  assert.strictEqual(ASKED.length, 0, "nothing is asked: there is nothing of the floor's to lose");
+  assert.strictEqual(clearWrites().length, 0, "and the office writes not one field of that row");
+  assert.strictEqual(A("stationForJob('R7001').doneAt"), "",
+    "the row is still untouched, so the feeder can still seed it - which is what will clear it");
+  assert.deepStrictEqual(ST.seedFields({ total: 8, seed: ST.officeSeed({ total: 8 },
+    [{ type: "dg", total: 4, status: "", done: 0 }, { type: "tg", total: 4, status: "", done: 0 }]) }),
+    { Cut: 0, Hotmelt: 0, Glazed: 0 }, "and the seed it will write is nought, nought, nought");
+  assert.ok(fills().length > 0, "while the workbook half went out exactly as before");
+  pass("a row the floor never tapped is left to the feeder: no question, no write, no stamp planted on it");
+
+  /* THE PER-ITEM CLEAR, on a job whose only glass is DG */
+  j = scene(mkJob({ glass: { dg: 8 }, cp: { win: "", drs: "", glass: { dg: "done" }, prod: {} } }),
+            tapped({ Total: 8, TuffTotal: 0, Tuff: 0 }));
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = true;
+  reset();
+  setItemProgress(j, "glass:dg", 0);
+  await settle(1400);
+  assert.strictEqual(ASKED.length, 1, "the per-item Clear asks too");
+  assert.ok(ASKED[0].indexOf("8 cut, 8 hotmelted, 8 glazed") > 0, "naming the same work");
+  assert.strictEqual(clearWrites().length, 1);
+  assert.deepStrictEqual(Object.keys(clearWrites()[0].fields).sort(),
+    ST.OFFICE_CLEAR_FIELDS.slice().sort(), "with the same six fields and no others");
+  assert.strictEqual(fillOn("AY7"), WHITE, "and the workbook cell went white, as it always did");
+  pass("the drawer's per-item Clear clears the floor as well, by the same one write");
+
+  /* ... but only when it leaves the job's glass reading NOTHING done. Clearing
+     DG on a job whose TG is still gold is not a clear of the job's glass: the
+     floor's row carries one combined DG + TG number, and telling them nought
+     while the office still says TG is finished would be a wrong instruction on
+     a workshop screen. */
+  j = scene(mkJob({ glass: { dg: 4, tg: 4 },
+                    cp: { win: "", drs: "", glass: { dg: "done", tg: "done" }, prod: {} } }),
+            tapped({ TuffTotal: 0, Tuff: 0 }));
+  LISTWRITES.length = 0; ASKED.length = 0;
+  reset();
+  setItemProgress(j, "glass:dg", 0);
+  await settle(1400);
+  assert.strictEqual(ASKED.length, 0, "no question, because nothing of the floor's is being destroyed");
+  assert.strictEqual(clearWrites().length, 0, "and no counter is touched");
+  assert.strictEqual(fillOn("AY7"), WHITE, "the office's own half is exactly what it was");
+  assert.strictEqual(A("stationForJob('R7001').cut"), 8, "the floor keeps its numbers");
+  pass("a per-item clear that leaves the job's other glass ticked is not a clear of the job's glass");
+
+  /* MARKING DONE IS UNTOUCHED: this is the un-tick path and nothing else */
+  j = scene(mkJob({ cp: { win: "", drs: "", glass: {}, prod: {} } }), tapped({ Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0 }));
+  LISTWRITES.length = 0; ASKED.length = 0;
+  reset();
+  await setGroupDone(j, "glass", true);
+  await settle(120);
+  assert.strictEqual(ASKED.length, 0, "marking done asks nobody anything");
+  assert.strictEqual(clearWrites().length, 0, "and writes not one field of the floor's list");
+  assert.deepStrictEqual(fills().map(c => [c.addr, c.color]).sort(),
+    [["AY7", GOLD], ["AZ7", GOLD], ["BA7", GOLD], ["BB7", GOLD]],
+    "it is the four fills it always was");
+  setItemProgress(j, "glass:dg", 2);
+  await settle(1400);
+  assert.strictEqual(ASKED.length, 0, "and a partial tick asks nothing either");
+  assert.strictEqual(clearWrites().length, 0);
+  pass("marking done, and ticking part of a job off, behave exactly as they did: this is the un-tick path only");
+
+  /* A REFUSED LIST WRITE. The workbook half has landed, so the counters must
+     not simply be forgotten - the tablet would stay gold, which is the bug. */
+  j = scene(mkJob({ cp: goldCp }), tapped());
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = true;
+  FAIL_LIST = 1;
+  reset();
+  await setGroupDone(j, "glass", false);
+  await settle(120);
+  assert.strictEqual(clearWrites().length, 0, "the write was refused");
+  assert.strictEqual(A("FLOORCLEAR_OWED['R7001']"), 1, "so it is owed");
+  assert.ok(A("!!floorClearT"), "and a follow-up is armed rather than the counters being forgotten");
+  assert.ok(fills().length > 0, "while the workbook half stands: the sheet really was cleared");
+  A("clearTimeout(floorClearT); floorClearT = null;");
+  reset();
+  assert.strictEqual(await clearFloorGlass("R7001"), true, "the follow-up gets it through");
+  assert.strictEqual(clearWrites().length, 1);
+  assert.strictEqual(A("Object.keys(FLOORCLEAR_OWED).length"), 0, "and nothing is owed afterwards");
+  pass("a refused clear is owed and retried, not lost - the one failure that would leave the tablet gold");
+
+  /* and it cannot be reached by asking for it: the reason is re-derived */
+  j = scene(mkJob({ cp: goldCp }), tapped());
+  LISTWRITES.length = 0;
+  assert.strictEqual(await clearFloorGlass("R7001"), false,
+    "a call with no clear behind it writes nothing: the office's record still says done");
+  assert.strictEqual(clearWrites().length, 0);
+  A("delete FLOORCLEAR_OWED['R7001'];");
+  pass("the write re-derives its own reason, so it is not reachable by calling it");
+
+
+  /* THE OFFICE'S ANSWER BELONGS TO ONE WRITE, NOT TO THE JOB. A job has
+     several checkpoint bursts at once - the burst key is job|item - and any of
+     them can land first. Keyed on the JOB, whichever landed first would spend
+     the answer, so an unrelated tick could clear the floor's counters BEFORE
+     the glass write had landed; and if the glass write then failed the floor
+     would be at nought with the sheet still gold, which is the mirror image of
+     the bug this feature exists to remove. Here the unrelated burst is
+     deliberately started FIRST, so it is the one that lands first. */
+  j = scene(mkJob({ glass: { dg: 8, tuff: 5 },
+                    cp: { win: "", drs: "", glass: { dg: "done" }, prod: {} } }),
+            tapped({ Total: 8, TuffTotal: 5, Tuff: 0 }));
+  LISTWRITES.length = 0; ASKED.length = 0; ANSWER = true;
+  reset();
+  const req0 = ALLREQ.length;
+  setItemProgress(j, "glass:tuff", 3);              // an unrelated burst, started first
+  assert.strictEqual(ASKED.length, 0, "a TUFF tick is not a clear of the job's glass: nothing is asked");
+  setItemProgress(byId("R7001"), "glass:dg", 0);    // and then the clear itself
+  assert.strictEqual(ASKED.length, 1, "the clear asks, once");
+  await settle(1600);
+  assert.strictEqual(clearWrites().length, 1, "one clear write, not two and not none");
+  assert.deepStrictEqual(Object.keys(clearWrites()[0].fields).sort(),
+    ST.OFFICE_CLEAR_FIELDS.slice().sort(), "and it is the clear's own six fields");
+  const seq = ALLREQ.slice(req0).map(r => r.path);
+  const iTuff = seq.findIndex(p => p.indexOf("BA7") >= 0);
+  const iGlass = seq.findIndex(p => p.indexOf("AY7") >= 0);
+  const iList = seq.findIndex(p => p.indexOf("/lists/") >= 0 && p.indexOf("/items/") >= 0);
+  assert.ok(iTuff >= 0 && iGlass >= 0 && iList >= 0, "all three writes really went out");
+  assert.ok(iTuff < iList, "the unrelated write landed first, as it was meant to");
+  assert.ok(iGlass < iList,
+    "and the floor's counters were not cleared until the GLASS write itself had landed");
+  assert.strictEqual(A("Object.keys(FLOORCLEAR_OK).length"), 0, "with no answer left over");
+  pass("the office's answer is spent by the write it was given for, never by another burst on the same job");
+
+  /* and the other half of the same fix: an answer left behind by a burst that
+     never fired is inert - only the very write it was given for can spend it */
+  j = scene(mkJob({ glass: { dg: 8, tuff: 5 },
+                    cp: { win: "", drs: "", glass: { dg: "done" }, prod: {} } }),
+            tapped({ Total: 8, TuffTotal: 5, Tuff: 0 }));
+  LISTWRITES.length = 0; ASKED.length = 0;
+  A("FLOORCLEAR_OK['R7001|glass:dg'] = 1;");       // left behind by a cancelled burst
+  reset();
+  setItemProgress(j, "glass:tuff", 2);
+  await settle(1400);
+  assert.strictEqual(clearWrites().length, 0,
+    "a TUFF write cannot spend an answer that was given about the job's DG");
+  assert.strictEqual(A("FLOORCLEAR_OK['R7001|glass:dg']"), 1, "which is still sitting there, unspent");
+  A("delete FLOORCLEAR_OK['R7001|glass:dg'];");
+  pass("a leftover answer is inert until the very write it was given for lands");
+
+  /* CLEAR IT, THEN THINK BETTER OF IT, INSIDE THE SAME MINUTE. Now an ordinary
+     workflow rather than a race, because the clear is a deliberate click and
+     re-ticking is the obvious next move. The office's stamps carry no seconds
+     (nowStamp), so they are read as covering their whole minute; the clear's
+     DoneAt is a full ISO stamp and is read exactly. A clear at 15:00:10 and a
+     re-tick recorded as 15:00 must therefore resolve to the OFFICE - otherwise
+     the colour writer paints the floor's blank straight back over the re-tick
+     and the office watches its own work undone. */
+  j = scene(mkJob({ glass: { dg: 4, tg: 4 },
+                    cp: { win: "", drs: "", glass: { dg: "done", tg: "done" }, prod: {} } }),
+            row({ Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0,
+                  DoneAt: isoAt(15, 0, 10), DoneBy: "the admin" }));
+  CP.cpSetProgress({ R7001: {
+    "glass:dg": { done: 4, total: 4, who: "the admin", when: officeAt(15, 0) },
+    "glass:tg": { done: 4, total: 4, who: "the admin", when: officeAt(15, 0) } } });
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "the office re-ticked inside the same minute, so the office is the later word");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "and not one cell is painted back out");
+  /* and it is not simply "the office always wins": a floor tap in the NEXT
+     minute takes the same cells back */
+  global.__items = [row({ Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0,
+                          DoneAt: isoAt(15, 1, 0), DoneBy: "Person A" })];
+  A("STATION_ITEMS = __items;");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1, "the next minute beats the office's whole-minute stamp");
+  await settle();
+  assert.deepStrictEqual(fills().map(c => c.addr).sort(), ["AY7", "AZ7"],
+    "and the floor's blank reaches the two glass columns it is about");
+  CP.cpSetProgress({});
+  pass("clear it, re-tick it inside the same minute, and the office keeps it - the minute a stamp covers decides it");
+
+  Object.defineProperty(CW, "account", { configurable: true, get: () => null });
+  delete global.confirm;
 
   /* ================= 11. the whole run, end to end ================= */
   const prodWrites = ALLREQ.filter(r => r.method !== "GET" && /worksheets\('Production'\)/.test(r.path));

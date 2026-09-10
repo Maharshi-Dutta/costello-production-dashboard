@@ -6,7 +6,7 @@ where, and which tests cover it. Read this before touching anything; read the
 spec in `docs/specs/` for the full brief of a feature. Names of people and
 addresses are placeholders throughout ("the admin", "the colleague").
 
-Last updated 2026-09-10 (glass colours into the Production sheet, the tuff counter, the office's lock).
+Last updated 2026-09-10 (glass colours into the Production sheet, the tuff counter, the office's lock, and an office clear reaching the floor's counters).
 
 ---
 
@@ -133,7 +133,8 @@ yellow part / gold done). Exact counts live in `Dashboard Progress`
 Excel colour wins over a stored count. Pure logic (`cpItems`, `itemState`,
 write ordering progress→fill→log, bursts and a replayable queue) is in
 `checkpoints.js`; the drawer UI is `cpSectionHtml`/`cpPatchSection`.
-Tests: `test_checkpoints.js`.
+**Clearing a job's glass also clears the floor's counters** since 2026-09-10 —
+see §18. Tests: `test_checkpoints.js`.
 
 ---
 
@@ -374,8 +375,8 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_john.js` | the John print sheet, template and print notes | 31 |
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
-| `test_station.js` | floor stations end to end (offline), incl. tuff, the lock and the seed | 235 |
-| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins, idempotence, the cap, the backoff, fills only | 41 |
+| `test_station.js` | floor stations end to end (offline), incl. tuff, the lock, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 243 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins, idempotence, the cap, the backoff, fills only, and the office clear end to end | 57 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -746,3 +747,100 @@ fill in column AY/AZ/BA/BB and never in BC-BF, and no sheet touched but
 Production and the dashboard's own two. `test_station.js` (235) adds the tuff
 counter, the lock, the dropped queued tap, the seed's new yellow rule, and
 proves over its own run that the tablet still touches no workbook.
+
+---
+
+## 18. An office clear reaches the floor's counters
+
+**Spec.** `docs/specs/2026-09-10-office-clears-the-floor.md`. Changes
+`CLAUDE.md` rule 3, by the owner, on 2026-09-10.
+
+**The bug.** The owner spent an afternoon on what looked like three faults and
+was one gap. Un-ticking a job's glass in the office cleared the **workbook**
+correctly every time — the cell really did go white — but nothing ever cleared
+the **floor's** counters. They stayed at 49/49/49, the tablet stayed gold for
+ever, and the only way back was somebody tapping `−` forty-nine times. Two
+earlier fixes in this area shipped and neither addressed it; the master
+dashboard showing gold for up to a minute afterwards is SharePoint's ~36 s
+download lag and is not this.
+
+**What happens now.** When the office **clears a job's glass checkpoints** —
+the group **Clear**, or a per-item clear that leaves no other DG/TG ticked —
+the office writes that job's `Glass station` row's `Cut`, `Hotmelt`, `Glazed`
+and `Tuff` to **zero**, plus `DoneBy`/`DoneAt`. Six fields, and nothing else.
+`DoneBy`/`DoneAt` are written on purpose: last-writer-wins reads
+`ST.floorStamp` off them, so zeros under a stale stamp would read as old news
+and the tablet's "last touch" line would name the wrong person. The per-stage
+`By`/`At` pairs are never written — they say who did that stage's work, and
+nobody did. No `Station log` line: it is an office action and goes in
+`Dashboard Log`, as `Floor glass counters`.
+
+**The trigger is a transition, not a state.** `officeGlassEmpty()` asks
+`ST.officeSeed` — the very function that seeds a row from the office's record —
+whether that record now says nothing of the job's DG and TG is done;
+`officeClearsGlass()` fires only when it *newly* says so. A tick made when the
+record already said nothing is not a clear, so clearing a hand-ticked ARCH on a
+job whose DG is blank cannot wipe the floor's counters. There is deliberately
+**no reconciliation pass**: a state-driven version of this would zero any row
+the office happens not to have ticked, including a job the floor is working on
+right now.
+
+**A row the floor never tapped is left alone.** Its counters are the office's
+own seed echoed back, and the **feeder** puts them right on its next run
+(`sliceHash` carries the seed, so that is the next load). Writing `DoneAt`
+there would mark the row touched for ever and switch its seeding off — a worse
+bug than the one being fixed. This is a deliberate narrowing of the brief,
+which wrote unconditionally.
+
+**The confirmation.** When the row has a floor stamp and any counter above
+nought, the office is asked first, naming what will go: *"The floor has
+recorded 49 cut, 49 hotmelted, 12 glazed on this job. Clearing the glass here
+will set all of those back to zero. Clear it anyway?"* (`ST.clearWarning`, a
+pure function). Answering **no writes nothing at all** — not the floor's
+counters and not the workbook half, because the question is asked before
+`pend()` and before the burst.
+
+**A queued tap that meets the zeros is decided on the stamps.** A queue entry
+holds an **absolute** number — a `+1` made against 40 carries 41 — so letting a
+drop through unchanged would not "apply the tap on top of the zeros", it would
+put the whole count back and leave the row at 41 cut, 0 hotmelted, 0 glazed.
+`rebaseQueue` therefore compares the row's `DoneAt` with the tap's own `at`,
+which is exactly what writing `DoneAt` on a clear is for: **a row stamped after
+the tap was made is the later word and the tap is dropped**; a tap made after
+the clear applies on top of the zeros. A tie, or a stamp that will not parse,
+leaves the tap alone. Nothing is `BLOCKED` either way — unlike the lock, a
+clear **unlocks** the job, so a dropped tap can simply be tapped again, which
+is why stranding it the way `dropBlocked()` does would be the wrong shape here.
+The real case this closes is undramatic: the workshop wifi drops, the floor
+taps, the office clears the job *because something went wrong on it*, the wifi
+returns — and without the stamp check the tablet would go back to 49 cut, which
+to the office is indistinguishable from "the un-tick didn't stick".
+
+**Why it cannot be reached any other way.** Four independent locks: two call
+sites, both on a clear branch; `FLOORCLEAR_OK`, the office's answer to the
+question, set in one place and spent once — and keyed to the **write** that
+must land (`job|item` or `job|group`), never to the job, because a job has
+several checkpoint bursts at once and any of them landing would otherwise spend
+the answer and clear the floor before the glass write had landed;
+`clearFloorGlass()` re-deriving the reason from the office's own record and the
+floor's row at write time rather than trusting the caller; and `ST.officeClearFields(who, at)` — a name and a
+time in, six fields out, every counter a literal nought — so the path has no
+argument through which a counter or a per-stage stamp could enter.
+`test_station.js` asserts the counts of each of those in the source.
+
+**A refused write is owed, not lost.** The workbook half has landed by then, so
+forgetting it would leave the tablet gold — exactly the bug. `FLOORCLEAR_OWED`
+counts the refusals, one timer retries after 30 s, and after three attempts the
+office is told in a toast that names the numbers still on the tablet. The
+retry re-derives, so a job the office has re-ticked meanwhile is dropped.
+
+**Known gap.** `FLOORCLEAR_OK` lives in memory only, so **any clear interrupted
+before its workbook write lands leaves the floor's counters standing, with no
+automatic recovery** — three ways: a per-item burst that never fired is
+replayed by `cpReplay` and clears the workbook only; one already in flight is
+marked `sent` before the await and is never replayed at all; and the **group**
+path has no queue and no replay of any kind, which is the owner's usual way of
+clearing a job. Persisting the answer was rejected — it would put a
+hand-editable token in `localStorage` on the one path that writes a floor
+column. The recovery, in `docs/SUPPORT.md`: tick the glass done again, then
+clear it again. Not forty-nine taps.

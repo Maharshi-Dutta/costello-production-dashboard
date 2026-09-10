@@ -216,6 +216,39 @@ happened longer ago than that will show "Nothing recorded on the floor for
 this job yet." even though the lines still exist in SharePoint. This is a
 display window, not data loss: nothing is ever removed from the list itself.
 
+## The office cleared a job's glass but the tablet still shows the old counts
+
+Clearing a job's glass in the office also puts the floor's counters back to
+nought (`docs/REFERENCE.md` §18). It is one write to the `Glass station` list,
+made **after** the workbook half has landed, and the office is asked to confirm
+it first. So if the tablet is still showing 49/49/12 afterwards, one of these
+happened:
+
+1. **The list write was refused.** The dashboard retries it twice, 30 seconds
+   apart, and then says so in a red message naming the job and the numbers
+   still on the tablet. If you saw that message, the sheet was cleared and the
+   floor was not — go to step 4.
+2. **The tablet has not polled yet.** It reads the list every 10 seconds while
+   somebody is using it. Give it a moment.
+3. **The clear was interrupted** — the tab was closed, the browser crashed, or
+   the machine slept in the second or two while the write was going out. There
+   is **no automatic recovery for this**, and it is worth knowing why: a
+   per-item tick that had not yet been sent is replayed on the next visit, but
+   that replay clears the **workbook only** — it does not know the office was
+   asked about the floor. A tick that was already in flight is not replayed at
+   all, deliberately, because nobody can tell whether it landed. And **"All
+   glass done" toggled off — the usual way to clear a job — has no replay of
+   any kind**: if the tab closes mid-write, nothing is retried.
+4. **The way back, in either case: tick the job's glass done again, then clear
+   it again.** The second clear sees the floor's counters still standing, asks
+   you to confirm, and puts them to nought. Nobody has to tap `−` forty-nine
+   times on the tablet, and nothing needs to be edited in SharePoint by hand.
+
+If the floor tapped the job **after** you cleared it, that is not this: the
+floor's tap is the later action and it stands, by design. Clear it again if it
+was tapped in error — a clear leaves the job unlocked, so they can also just
+tap it back themselves.
+
 ## Rolling back
 
 Two different kinds of rollback:
