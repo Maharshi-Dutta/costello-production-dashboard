@@ -58,6 +58,15 @@ everyone else's later edits aren't shadowed forever. The same pattern
 repeats for section moves (`PENDV` / `cw_pendv`), alerts (`PENDA` /
 `cw_penda`), and hand-set phases (`p.phase` inside `PENDING`).
 
+Since 2026-09-10 a glass colour written from the floor's counters is held the
+same way, under `p.gc` inside `PENDING`: the colour's own word (`gold` /
+`yellow` / `""`) per glass type, with its own timestamp. Two things need it —
+the cell must not flicker back to the 36-second-old file, and a *reversal*
+(gold walking back to yellow) is the case where a flicker would be most
+visible. Where a job's own drawer tick (`p.cp["glass:dg"]`) and a floor colour
+(`p.gc.dg`) are both held, the newer timestamp is drawn, which is the same
+last-writer-wins rule the writer itself applies. See `docs/REFERENCE.md` §17.
+
 ### Dashboard-owned sheets
 
 Created on first write, addressed only through a hard-coded constant so no
@@ -219,7 +228,7 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | kind of state | where |
 |---|---|
 | the job model itself | never stored — always re-derived from the downloaded workbook on each `load()` |
-| a person's own unconfirmed edit (checkpoint count, section move, alert, phase) | in memory + `localStorage`, for up to 180 s, until the downloaded file (or list) agrees — `cw_pending`, `cw_pendv`, `cw_penda`, and the `phase` field inside `cw_pending` |
+| a person's own unconfirmed edit (checkpoint count, section move, alert, phase, glass colour from the floor) | in memory + `localStorage`, for up to 180 s, until the downloaded file (or list) agrees — `cw_pending`, `cw_pendv`, `cw_penda`, and the `phase` and `gc` fields inside `cw_pending` |
 | exact checkpoint counts | `Dashboard Progress` sheet (Excel keeps only the cell colour) |
 | the audit trail | `Dashboard Log` sheet — every write anywhere in the app appends one line here |
 | custom groupings / saved views | `Dashboard Views` sheet |
@@ -233,6 +242,7 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | who moved which counter, and when | `Station log` SharePoint list, same site; written by the tablet, read by the master, never deleted from — shipped 2026-09-08 |
 | a queued/not-yet-sent checkpoint tap | `cw_cpqueue`, replayed on the next page load |
 | a queued/not-yet-sent station tap | `cw_stationq` (counters) and `cw_stationlogq` (the log lines they owe) — tablet only, shipped 2026-09-08 |
+| a queued tap the office's lock arrived under, so it was dropped rather than sent | `cw_stationblocked` — tablet only, drawn on the card in red until the office unlocks the job (2026-09-10) |
 | who is at the station tablet, and when they last tapped | `cw_person` — tablet only; the stages always come back from the list, never from storage |
 | when the master last fed the `Glass station` list, and the hash of what it sent | `cw_stationfeed` — read by `feedStation()` to decide whether a run can be skipped |
 | workbook and list ids, once resolved | `cw_fileref`, `cw_listids`, `cw_stationsite` |

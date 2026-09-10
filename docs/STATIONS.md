@@ -52,21 +52,47 @@ iteration is deployed; the code tolerates them either way. Columns:
 | Customer | text | feeder | customer name, max 70 chars |
 | GlassType | text | feeder | the literal `GLASS` on every row — the column is kept, nothing reads it |
 | Total | number | feeder | **glasses on the job = DG + TG** |
+| TuffTotal | number | feeder | tuff units on the job, off the sheet's own TUFF column. **Never added to `Total`** (added 2026-09-10) |
 | Seq | number | feeder | the job's position in the master list, so the floor sees the office's order |
 | Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards |
+| OfficeDone | text | feeder | `Yes` when the office has ticked this job's DG and TG off. The job is then **read-only on the tablet** (added 2026-09-10) |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |
 | Cut | number | station, **or the feeder while the floor has not touched the row** | glasses cut |
 | Hotmelt | number | station, same | glasses hotmelted |
 | Glazed | number | station, same | glasses glazed |
+| Tuff | number | **station only — never seeded** | tuff units counted, against `TuffTotal` (added 2026-09-10) |
 | CutBy / CutAt | text | station only | who last moved the Cut counter, and when (ISO) |
 | HotmeltBy / HotmeltAt | text | station only | the same, for Hotmelting |
 | GlazedBy / GlazedAt | text | station only | the same, for Glazing |
+| TuffBy / TuffAt | text | station only | the same, for Tuff |
 | DoneBy | text | station only | the person's name from the last touch of any counter |
 | DoneAt | text | station only | ISO timestamp of that last touch |
 
-The three stages are **Cutting, Hotmelting, Glazing**. (Toughening was in the
-first iteration and is gone; there is no `Toughened` column any more.)
+The three **glass** stages are **Cutting, Hotmelting, Glazing**. (Toughening
+was in the first iteration and is gone; there is no `Toughened` column any
+more.) **Tuff** is a fourth counter beside them, added 2026-09-10: a different
+department, the same person, its own quantity. It is deliberately *not* one of
+the three, and the difference shows in three places — it is not part of the
+job's `Total`, it does not decide whether a job is finished (the gold card,
+the Finished group, the job row's `Glass 8/24` chip are all still the three
+glass stages), and it is never seeded by the feeder. It *is* counted in the
+tablet's "N left": eight glasses to cut plus eleven tuff to count is nineteen
+things left for whoever holds both. In `station-core.js` the three are
+`STAGES` / `STAGE_KEYS` and the four are `ALL_STAGES` / `ALL_STAGE_KEYS`.
+
+**The lock (`OfficeDone`).** When the office has ticked every DG and TG item
+of a job off, the feeder writes `OfficeDone = "Yes"` and that job goes
+read-only on the tablet: every stepper on the card is greyed, `tap()` refuses
+them, and the card says *"the office has marked this job finished"*. There is
+no new control in the office for this — it is derived from the glass
+checkpoints the drawer has always had, so **un-ticking one of them unlocks the
+job**, and only the office can. ARCH, ASTRAGAL, FANCY and EXTRA are not asked:
+they are hand-ticked and describe work the floor never sees.
+A tap already sitting in the tablet's queue when the lock arrives is **dropped
+rather than sent** — the office acted later — but never quietly: it is written
+to the console and drawn on the card in red, naming the stage and the number
+that was lost, until the office unlocks the job.
 
 **Why DG + TG.** TUFF and NOT TUFF describe those same units — adding them
 would send the floor to cut sheets that do not exist — and ARCH, ASTRAGAL,
@@ -92,12 +118,26 @@ pairs and the last-touch pair are never the feeder's, seeded or not: they say
 who did the work, and the office did not.
 
 The seed is read from the glass checkpoints (`checkpoints.js`) by these rules,
-in order: every DG/TG item gold → all three counters at the total; otherwise
-any item gold or yellow → all three at the office's own done count (a gold
-item counting its whole quantity); otherwise any item green ("cut") → `Cut` at
-the total and the other two at nought; otherwise nought. It is
-`ST.officeSeed()`, a pure function, and `test_station.js` covers all four
-rules.
+in order:
+
+1. every DG/TG item **gold** → all three counters at the total;
+2. otherwise every DG/TG item at least **yellow** → `Cut` and `Hotmelt` at the
+   total and **`Glazed` at nought** (owner, 2026-09-10). Yellow on a glass cell
+   means "cut and hotmelted" since the glass-colours feature, so the row
+   round-trips back to yellow instead of being flattened to blank — which is
+   what used to happen, because a yellow item has no stored count. Glazed stays
+   at nought deliberately: yellow says glazing is *not* done, and seeding it
+   would make the cell read gold;
+3. otherwise **any** item gold or yellow → all three at the office's own done
+   count (a gold item counting its whole quantity). This is where a job with
+   one type yellow and another blank lands: the floor's row holds one combined
+   DG + TG number, so rule 2 would tell the floor that glass which still needs
+   cutting is cut;
+4. otherwise any item green ("cut") → `Cut` at the total, the other two nought;
+5. otherwise nought.
+
+It is `ST.officeSeed()`, a pure function, and `test_station.js` covers every
+rule. `Tuff` is not seeded by any of them.
 
 Only job number, customer name and a number of glasses reach this list: no
 glass type, no phone number, no eircode, no county, no price, no comment, no
@@ -277,9 +317,35 @@ Do these in order. Every name below is a placeholder — substitute your own.
    creating a duplicate row for the same job/type. `Station log` must NOT
    have it: every line there is a separate record of the same job.
 4. Fill in `Station people`: one row per person, `Station` = `Glass`,
-   `Stages` a comma-separated list of `cut`, `hotmelt`, `glazed`, `PIN` 4–6
-   digits or blank, `Active` = `Yes`. Read the PIN warning above before
-   relying on it for anything.
+   `Stages` a comma-separated list of `cut`, `hotmelt`, `glazed` and — since
+   2026-09-10 — `tuff`, `PIN` 4–6 digits or blank, `Active` = `Yes`. Read the
+   PIN warning above before relying on it for anything.
+
+### 3a. Adding the 2026-09-10 columns to a list that already exists
+
+The glass-colours feature needs five columns that the lists made in
+September 2026 do not have. They go on `Glass station` and nowhere else:
+
+| column | type |
+|---|---|
+| TuffTotal | Number |
+| OfficeDone | Single line of text |
+| Tuff | Number |
+| TuffBy | Single line of text |
+| TuffAt | Single line of text |
+
+Add them by hand in the list's settings, or run the column script the session
+wrote for this (it lives outside the repository, in the scratch area, like
+`make_station_lists.py`). Either way: **rehearse on a copy of the list first,
+and run it with the owner watching** (`CLAUDE.md` rule 7). Nothing needs
+back-filling — a blank `OfficeDone` reads as "not locked", a blank `Tuff` as
+nought, and the feeder fills `TuffTotal` in on its next run.
+
+Until the columns exist, both pages still work: the reads ask for fields that
+are not there and SharePoint simply does not return them, so no job gets a
+tuff stepper and no job is ever locked. The feeder's writes of the two office
+columns are what will fail, and they fail the way every refused feeder write
+already does — counted, reported in the footer, retried on the next run.
 
 ### 4. Grant the app's SharePoint permission (once, tenant-wide)
 

@@ -28,11 +28,22 @@ about what a feature "should" also do. They apply to every session, not just
 the one that first wrote them down.
 
 1. **The master `Production` sheet is only ever changed in two ways:**
-   sanctioned fills (single-cell colour writes — checkpoint colours, nothing
-   else) and whole-row section moves (`moveJobRow` in `graph.js`, which
-   re-finds the row by job number, copies it, and deletes the original — the
-   only structural write in the app). No feature may write a value, a new
-   row, a new sheet, or a colour anywhere else on `Production`, ever.
+   sanctioned fills (single-cell colour writes) and whole-row section moves
+   (`moveJobRow` in `graph.js`, which re-finds the row by job number, copies
+   it, and deletes the original — the only structural write in the app). No
+   feature may write a value, a new row, a new sheet, or a colour anywhere
+   else on `Production`, ever.
+   There are exactly **two** sanctioned reasons to make a fill, and the owner
+   gave each of them in a dated spec:
+   - **checkpoint colours** — the office ticking work off in the drawer
+     (`docs/specs/2026-09-04-checkpoints.md`);
+   - **glass colours from the floor** — the office dashboard painting DG, TG,
+     TUFF and NOT TUFF from what the floor has recorded on the tablet
+     (`docs/specs/2026-09-10-glass-colours-two-way.md`, owner 2026-09-10:
+     *"the production sheet is main doc, don't edit that as in text; by colour
+     is ok"*). ARCH, ASTRAGAL, FANCY and EXTRA stay hand-ticked and are never
+     written by that feature. Adding a **third** reason is a new decision for
+     the owner, not a judgement call for a session.
 2. **No other sheet on the workbook is touched** except the dashboard's own
    sheets, created and owned by the dashboard: `Dashboard Log`,
    `Dashboard Views`, `Dashboard Progress`, `Dashboard Alerts`. `Dashboard
@@ -47,8 +58,12 @@ the one that first wrote them down.
    feature says which one, plainly, and does nothing. **The office
    (`app.js`) never writes `Station people` or `Station log`, and never
    writes the floor's own columns of `Glass station`** (`Cut`, `Hotmelt`,
-   `Glazed` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds that
-   list's job-fact columns and reads all three. **One exception, agreed by the
+   `Glazed`, `Tuff` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds
+   that list's job-fact columns (which since 2026-09-10 include `TuffTotal`,
+   the sheet's own TUFF quantity, and `OfficeDone`, the office's read-only
+   lock on a job) and reads all three. The tablet, for its part, can never
+   write `TuffTotal` or `OfficeDone`: `ST.floorOnly` drops both.
+   **One exception, agreed by the
    owner on 2026-09-08 in the v3 spec's "Seeding" section and nowhere else:**
    the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is *creating*, or on
    a row whose `DoneAt` is empty, seeding them from the office's own glass
@@ -111,6 +126,7 @@ node test_phases.js
 node test_phases_list.js
 node automation/test_digest.js
 node test_station.js
+node test_glasscolour.js
 
 node verify.js   # dev-only cross-check, see below
 ```

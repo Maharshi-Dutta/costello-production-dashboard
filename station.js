@@ -165,6 +165,62 @@ function saveQueue() {
   try { localStorage.setItem(LOGQ_KEY, JSON.stringify(LOGQ)); } catch (e) {}
 }
 
+/* ---- the office's lock ------------------------------------------------------
+   The office can mark a job's glass finished, and that job then goes read-only
+   here: the steppers grey out and tap() refuses them, the same way a stage
+   somebody does not hold is already refused. Only the office can take it off
+   again. The tablet learns it from the OfficeDone column and from nothing else
+   - it still cannot see the workbook.
+
+   The awkward case is a tap already sitting in the queue when the lock arrives:
+   the wifi was out, or the write is still in the air. Sending it would put the
+   floor's number over a job the office has just called finished, and on a
+   locked row nobody on the floor could correct it afterwards. The office acted
+   later, so by the same last-writer-wins rule the office keeps this one and the
+   tap is dropped - but never quietly. It is moved here, said on the card in
+   red, and written to the console; it clears when the office unlocks the job. */
+const BLOCKED_KEY = "cw_stationblocked";
+let BLOCKED = {};
+try { BLOCKED = JSON.parse(localStorage.getItem(BLOCKED_KEY) || "{}"); } catch (e) { BLOCKED = {}; }
+const saveBlocked = () => { try { localStorage.setItem(BLOCKED_KEY, JSON.stringify(BLOCKED)); } catch (e) {} };
+const lockedItem = it => String(((it && it.fields) || {}).OfficeDone == null
+  ? "" : it.fields.OfficeDone).trim().toLowerCase() === "yes";
+const blockedFor = job => BLOCKED[String(job).trim().toUpperCase()] || null;
+
+/** Take out of the queue anything the office has locked under it, and clear the
+    notice for anything the office has unlocked. Called after every read of the
+    list and again before every flush, because the lock can arrive in either. */
+function dropBlocked() {
+  let changed = false;
+  const lock = {};                       // item id -> is it locked
+  const byJob = {};                      // job number -> is it locked
+  ITEMS.forEach(it => {
+    const on = lockedItem(it);
+    lock[String(it.id)] = on;
+    const job = ST.jobKey((it.fields || {}).Job || (it.fields || {}).Title);
+    if (job) byJob[job] = on;
+  });
+  Object.keys(QUEUE).forEach(k => {
+    const e = QUEUE[k];
+    if (!e || !lock[String(e.id)]) return;
+    const job = ST.jobKey(e.job);
+    const note = BLOCKED[job] || { job: job, stages: [], at: "" };
+    note.stages = note.stages.filter(s => s.stage !== e.stage)
+                    .concat([{ stage: e.stage, value: e.value }]);
+    note.at = e.at;
+    BLOCKED[job] = note;
+    delete QUEUE[k];
+    changed = true;
+    console.warn("[station] " + job + " was marked complete by the office while a tap was " +
+                 "still owed on it: " + ST.stageLabel(e.stage) + " " + e.value + " was not saved");
+  });
+  Object.keys(BLOCKED).forEach(job => {
+    if (byJob[job] === false) { delete BLOCKED[job]; changed = true; }
+  });
+  if (changed) { saveQueue(); saveBlocked(); }
+  return changed;
+}
+
 /* Who and when belong to the moment of the tap, not to the moment the write
    happens to leave: a tap made by the morning shift and sent after a reload
    three hours later was still theirs, at the time they made it. */
@@ -281,6 +337,10 @@ async function flushQueue() {
      the whole of the answer: guessing one would send the tablet at the
      workbook, which is the one thing it must never do. */
   if (!READY || !SITEID) { armRetry(); return; }
+  /* again here, not only after a read: the lock can have arrived in the poll
+     that ran while this queue was waiting for its five seconds */
+  dropBlocked();
+  if (!Object.keys(QUEUE).length && !Object.keys(LOGQ).length) { render(); return; }
   flushing = true;
   const tried = {};
   let wrote = false;
@@ -459,6 +519,7 @@ async function readList() {
     }
     ITEMS = items; READY = true; PROBLEM = ""; SOFT = ""; LASTREAD = Date.now();
     rebaseQueue();                      // the list may have moved under a waiting tap
+    dropBlocked();                      // ... and the office may have locked one of them
     render();
     flushQueue();                       // anything still owed goes now, not in five seconds
     return true;
@@ -494,6 +555,7 @@ async function pollList() {
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
     rebaseQueue();
+    dropBlocked();
     render();
     flushQueue();
     return true;
@@ -517,6 +579,10 @@ function tap(id, stage, delta) {
   if (!PERSON || !ST.canStage(PERSON, stage)) return;
   const row = boardNow().find(g => g.id === id);
   if (!row) return;
+  /* the office has marked this job's glass finished. Only the office can undo
+     that, so there is nothing the floor can do here but see it. Same belt and
+     braces as the stage check above: the buttons are drawn disabled too. */
+  if (row.officeDone) return;
   const job = row.job;
   /* somebody is working the screen, whether or not the number could move:
      a stepper already at the total is still a hand on the tablet */
@@ -560,16 +626,22 @@ const agoWords = at => {
    being able to move somebody else's part of it. */
 function stepHtml(g, stage, label) {
   const v = g[ST.STAGE_ROW[stage]];
-  const mine = ST.canStage(PERSON, stage);
+  /* each stage against its own quantity: cutting, hotmelting and glazing count
+     the job's glasses, tuff counts the sheet's own TUFF number */
+  const total = Math.max(0, Math.round(Number(g[ST.STAGE_TOTAL_ROW[stage]]) || 0));
+  /* the office's lock is not about who is holding the tablet, so it greys every
+     stepper on the card rather than the ones a person does not hold */
+  const mine = ST.canStage(PERSON, stage) && !g.officeDone;
   const off = mine ? "" : ' disabled aria-disabled="true"';
   const b = (t, act, cls, dead) => '<button class="' + cls + '" data-id="' + esc(g.id) + '" data-stage="' + stage +
     '" data-act="' + act + '"' + (dead ? ' disabled aria-disabled="true"' : off) + '>' + t + '</button>';
-  const full = g.total > 0 && v >= g.total;
+  const full = total > 0 && v >= total;
   /* a row with no glasses on it has nothing to finish: All would set it to
      nought and read None a moment later, which says the opposite of the truth */
-  const none = !(g.total > 0);
+  const none = !(total > 0);
   return '<div class="step' + (mine ? "" : " locked") + '">' +
-    '<span class="stepl">' + esc(label) + (mine ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
+    '<span class="stepl">' + esc(label) +
+      (g.officeDone ? "" : mine ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") +
       '<span class="stepn tab' + (full ? " full" : "") + '">' + v + '</span>' + b("+", "1", "sbtn") +
       b(none || !full ? "All" : "None", full ? "none" : "all", "sall", none) + '</span>' +
@@ -585,12 +657,21 @@ function stepHtml(g, stage, label) {
     paintBoard has to notice PERSON moving on its own - see pState(). */
 function cardInner(g) {
   const owed = owedFor(g.id), bad = badFor(g.id);
+  const lost = blockedFor(g.job);
+  /* Tuff only on the jobs that have any: a "Tuff 0" stepper on every card is a
+     fourth row of nothing on a screen somebody reads with a sheet of glass in
+     their other hand. */
+  const stages = ST.ALL_STAGES.filter(s => s[0] !== ST.TUFF_STAGE || g.tuffTotal > 0);
   return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
       '<span class="cnum tab">' + esc(ST.leftWords(ST.jobLeftFor(g, PERSON && PERSON.stages))) + '</span>' +
     '</div>' +
-    '<div class="steps">' + ST.STAGES.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
+    '<div class="steps">' + stages.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
+    (g.officeDone ? '<div class="officedone">the office has marked this job finished</div>' : "") +
+    (lost ? '<div class="unsaved">' + esc(lost.stages.map(s =>
+        ST.stageLabel(s.stage) + " " + s.value).join(", ")) +
+        ' was not saved — the office marked this job finished first</div>' : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
          : owed ? '<div class="saving">saving…</div>' : "");
 }
@@ -673,7 +754,9 @@ let WIRED = false;
    just failed to save therefore has to be named here, or the red line never
    appears on a board whose numbers did not move. */
 function qState(g) {
-  return (owedFor(g.id) ? "o" : "") + (badFor(g.id) ? "b" : "");
+  const lost = blockedFor(g.job);
+  return (owedFor(g.id) ? "o" : "") + (badFor(g.id) ? "b" : "") +
+         (lost ? "!" + lost.stages.map(s => s.stage + s.value).join(",") : "");
 }
 
 /* The person is not in the list either, and every card is drawn from them

@@ -1359,7 +1359,7 @@ function stationSiteMoves() { return stationSiteGen; }
 
 window.CW = {
   initAuth, signIn, signOut, token, findFile, openSession, lastModified,
-  downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1,
+  downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1, serialised,
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
   ensureProgressSheet, saveProgress, saveProgressMany, PROGRESS_SHEET, batchWrite,

@@ -6,7 +6,7 @@ where, and which tests cover it. Read this before touching anything; read the
 spec in `docs/specs/` for the full brief of a feature. Names of people and
 addresses are placeholders throughout ("the admin", "the colleague").
 
-Last updated 2026-09-09 (row colour code, section select, the John print sheet).
+Last updated 2026-09-10 (glass colours into the Production sheet, the tuff counter, the office's lock).
 
 ---
 
@@ -323,7 +323,14 @@ items) instead of O(rows × items), measured 11–16 ms → 0.71 ms per render.
 existing shared `stationReadIfNeeded()`, once per session. Spec:
 `docs/specs/2026-09-09-glass-chip-on-job-row.md`.
 
-**Tests.** `test_station.js` (215 checks) proves, over the whole run, that no
+**Since 2026-09-10.** The floor's counters now reach the `Production` sheet's
+four glass columns as fills, painted by the office dashboard; there is a
+fourth counter (tuff) with its own total; and the office can make a job
+read-only on the tablet. See §17 — and note that `STAGE_KEYS` still means the
+three glass stages everywhere in this section, with the four in
+`ALL_STAGE_KEYS`.
+
+**Tests.** `test_station.js` (235 checks) proves, over the whole run, that no
 request touched the workbook, no DELETE was sent, every floor PATCH is a
 subset of the floor columns, every feeder write is inside `ST.FEEDER_WRITES`
 (the job facts plus the three counters, never a By, an At or the last touch),
@@ -355,10 +362,12 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_move.js` | row-move protocol | 7 |
 | `test_checkpoints.js` | checkpoint logic and writes | 36 |
 | `test_alerts.js` | subscriptions, admin gate, pending holds | 30 |
-| `test_export.js` | builders, no phone/eircode, logging | 45 |
+| `test_export.js` | builders, no phone/eircode, logging | 53 |
+| `test_john.js` | the John print sheet, template and print notes | 31 |
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
-| `test_station.js` | floor stations end to end (offline) | 158 |
+| `test_station.js` | floor stations end to end (offline), incl. tuff, the lock and the seed | 235 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins, idempotence, the cap, the backoff, fills only | 41 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -521,3 +530,210 @@ note; a job missing from that sheet; one consent dialog for three changed
 notes; printing `NSTATE.ids` after the job list changed underneath; the
 cleared failure mark; and a sweep of every request the run makes) and the John
 sections of `test_export.js`.
+
+---
+
+## 17. Glass colours: the floor's work reaches the Production sheet
+
+Built 2026-09-10. Spec: `docs/specs/2026-09-10-glass-colours-two-way.md`,
+including its long "Amendments after review" section, which records the one
+gap in the brief and the twelve decisions taken while building it. **This is
+the first feature in which something done on the floor changes the master
+sheet**, so read the boundaries before touching any of it.
+
+**What.** When the floor finishes cutting and hotmelting a job, its DG, TG and
+NOT TUFF cells go **yellow** in the workbook; when glazing is done all four
+glass cells (TUFF included) go **gold**. It walks back down as well as up —
+gold to yellow to blank — mirroring whatever the floor now says. TUFF's yellow
+comes from its own new counter rather than from cutting and hotmelting.
+**ARCH, ASTRAGAL, FANCY and EXTRA are never written by this feature**, in
+either direction: the office ticks those by hand, as it always has.
+
+**Who writes it.** The **office dashboard** (`app.js`), never the tablet. The
+tablet has no access to the workbook at all and that is the actual security
+boundary; this is the feeder in reverse — the office watches the floor's list
+and paints the cells.
+
+**What reaches Production.** A single-cell **fill**, and nothing else, ever:
+no value, no row, no formula, no number format, no other sheet. Not even a
+`Dashboard Progress` row or a `Dashboard Log` line — the first would be an
+invented per-type count (the floor counts one combined DG + TG number) and the
+second would become the office's own stamp on the next pass and poison the
+last-writer-wins comparison below.
+
+**Where the code is.**
+
+- `station-core.js` — the pure half: `glassColours(record)` returns
+  `gold` / `yellow` / `""` per column; `floorStamp(record)` is the newest ISO
+  stamp on the floor's row; `COLOUR_TYPES` is the four columns; `stageComplete`
+  is "this counter has reached its own total, and there is a total".
+- `app.js` — `glassColourPlan(j)` (what to write, or null), `glassColourWrite`
+  (the write), `glassColourRun()` (one pass over every job), `stampMs`,
+  `glassOfficeStamp`, and the `gc` branch of `pend` / `applyPending`.
+
+**How, in five parts.**
+
+1. **When it runs, and how much it may do at once.** After every `load()`,
+   once the feed has brought the list up to date, and after every station poll
+   that actually moved something (10 s while somebody is looking at the floor,
+   60 s otherwise). It is a walk of the jobs in memory and **not one request**
+   when there is nothing to do, which is what lets it be called six times a
+   minute.
+
+   It is also **capped**, for the same reason the feeder is and with the same
+   numbers: `GLASS_MAX = 60` cells per pass, three writes in flight
+   (`stationSend`, the feeder's own lane runner), and one follow-up armed 30 s
+   later when the cap cuts a pass short (`glassColourAgain` — exactly one
+   timer, never one per job). Rehearsed against the owner's real file: 141 fed
+   rows, and switching the feature on after the floor has worked a week with no
+   office dashboard open would otherwise plan **362 cell fills in one burst**.
+   Day one is about six cells, so this bites on a catch-up, which is precisely
+   when nobody is watching. A job is never split across two passes: half a
+   job's colours would be a lie on screen for thirty seconds and the other half
+   would only be re-planned anyway.
+2. **Idempotence, which is the whole reason it is safe to call that often.**
+   The desired colour is compared with what the sheet is already showing —
+   `j.cp.glass[type]`, i.e. the *held* colour while a write is in the air and
+   the *downloaded* colour once the file has caught up — and a cell that
+   already says it is not written. Ten turns of the poll after a write send
+   zero requests (`test_glasscolour.js` asserts exactly that). A cell carrying
+   a colour this feature does not own (the sheet's own Cut green) is left
+   alone in both directions.
+3. **Last writer wins.** The floor's stamp is `DoneAt` (and the per-stage
+   `At`s) on the `Glass station` row — the newest **by parsed time**, skipping
+   anything unreadable, because every one of those columns is hand-editable in
+   SharePoint and a text maximum let `CutAt: "zzz"` win, answer a time nothing
+   could read, and switch the feature off for that job in silence. The office's
+   is the newest of the job's glass `Dashboard Progress` rows (`Who`/`When`,
+   read through `cpStored`) and the `Dashboard Log` lines for that job's glass
+   items (already in memory as `CHANGES`) — so the comparison costs **no extra
+   read**.
+
+   Three formats meet in `stampMs`, and it returns **the latest instant a
+   stamp can be describing**, not the instant it literally names. That
+   distinction is the whole of it: `nowStamp()` writes no seconds, so an office
+   tick at 15:00:40 is recorded as `15:00`, and read literally a floor tap at
+   15:00:20 looked like the later action and painted the office's own tick back
+   out. A stamp that names only a minute therefore covers that minute
+   (`+59_999 ms`); one that carries seconds is taken exactly. It also makes the
+   answer stable across the round trip — `noteChange` puts a full-second entry
+   in `CHANGES` and `load()` later replaces it with the Log sheet's
+   minute-precision copy, and both readings now answer the same side, where
+   before the dashboard quietly changed its mind half a minute later.
+
+   **A tie goes to the office** (a tie is therefore no write at all). **No
+   floor stamp means never written** — an untapped row's counters are the
+   office's own seed echoed back. **No office stamp means the floor wins**,
+   which is the honest limit: a colour painted by hand in Excel leaves no dated
+   record and will be walked back; ticking it in the drawer gives it a stamp
+   and it wins.
+4. **The hold.** Every write is held in `PENDING` under a new `gc` key — the
+   colour's own word per glass type, with its own timestamp — and let go the
+   moment the downloaded file agrees, exactly as a checkpoint tick is. Without
+   it the next refresh would read the 36-second-old file and the cell would
+   flicker. A **reversal** is held the same way, which is what stops gold
+   becoming yellow and then flickering back to gold. Both sides can hold one
+   cell at once (the office ticked in the drawer, a floor tap arrived two
+   seconds later): the newer hold is what is drawn, by comparing
+   `t["gc:<type>"]` with `t["cp:glass:<type>"]` — the same rule as the
+   writer's. A refused write drops its own hold rather than showing a colour
+   the sheet does not have.
+5. **Ordering.** Each job's write runs on that job's existing checkpoint chain
+   (`CP.cpChain`), so an office tick and a floor colour for the same job can
+   never interleave, and the fills themselves go through
+   `CW.serialised("Production", ...)` (now exported from `graph.js`) with the
+   row re-found by job number immediately before writing. `serialised()` is a
+   promise chain inside **one tab** and can say nothing about a second
+   dashboard on another desk — what makes that safe is the idempotence test
+   and last-writer-wins, not the chain. Two passes cannot overlap either
+   (`glassRunning`); the second arms the follow-up rather than giving up, so a
+   long catch-up still finishes.
+6. **When the workbook refuses.** A failed write drops its own holds — what the
+   sheet still says *is* the old colour — and then **backs off**, because
+   without one it would go out again on the next poll, and `stationPoll`
+   answers "moved" every ten seconds while the floor is tapping. That is a
+   write storm against the live workbook, and the trigger is ordinary: somebody
+   opens the file exclusively in desktop Excel mid-shift. Each job counts its
+   own failures and waits 1 minute, then 5, then 15
+   (`GLASS_BACKOFF_MS`); after `GLASS_FAIL_MAX` (5) it is given up on until the
+   page is reloaded. A success clears the record. All of it is surfaced in the
+   footer the way the station feed's own failures already are — *"glass colours
+   not saved"*, with the count, the reason and what happens next in the
+   tooltip — because a workbook refusing a write is not something to leave in a
+   console nobody has open.
+
+**The TUFF counter (`Glass station`, `station-core.js`, `station.js`).** A
+fourth thing the same person counts on the tablet, with its own quantity off
+the sheet's TUFF column. New columns: `Tuff`, `TuffBy`, `TuffAt` (the floor's)
+and `TuffTotal` (a job fact, fed like `Total`). It is deliberately **not** one
+of the three glass stages: `STAGES` / `STAGE_KEYS` still mean the three and
+`ALL_STAGES` / `ALL_STAGE_KEYS` are the four, so the job's `Total` is still
+DG + TG, `finished` (the gold card, the Finished group, the job row's
+`Glass 8/24` chip) is still the three, and the feeder never seeds `Tuff`. It
+*is* counted in `jobLeftFor`: eight glasses to cut plus eleven tuff is
+nineteen left for whoever holds both. The stepper is drawn only on jobs that
+have tuff on them. **NOT TUFF gets no counter at all** — its colour is derived
+from the glass stages.
+
+**The office's own yellow (`ST.officeSeed`, owner 2026-09-10).** A yellow glass
+cell now *means* "cut and hotmelted", so the seed reads it that way: when
+**every** one of a job's DG and TG items is at least yellow, the floor's row
+starts with `Cut` and `Hotmelt` at the total and **`Glazed` at nought**, and
+the cell round-trips to yellow instead of being flattened to blank. It had to
+be fixed — a yellow item has no stored count, so the row used to seed at
+nought and the first tap on that job painted the office's own mark out. It was
+found on the single yellow glass cell in the owner's whole workbook. Glazed
+staying at nought is the point: yellow says glazing is *not* done, and seeding
+it would make the cell read gold. A gold item is untouched and still
+round-trips to gold. **Every, not some**: the floor's row holds one combined
+DG + TG number and there is nowhere to put a per-type split, so a job with DG
+yellow and TG blank keeps the office's own count instead — seeding it to the
+total would tell the floor that glass which still needs cutting is cut, and a
+wrong instruction on the workshop screen is worse than a lost colour on a
+report. That job can still lose its yellow once the floor taps; it is a known
+limit, recorded in the spec's Amendment B5. None of this widens rule 3's
+seeding exception — it changes how the three counters are *derived*, not which
+columns may be seeded, and `Tuff` is still never seeded.
+
+**The lock (`OfficeDone`).** When the office has ticked every DG and TG item
+of a job off, the feeder writes `OfficeDone = "Yes"` and the job goes
+read-only on the tablet: every stepper greyed, `tap()` refusing, and a line on
+the card saying why. No new control in the office — it is derived from the
+glass checkpoints the drawer has always had, so un-ticking one unlocks it, and
+only the office can. The drawer's Glass station section says so, so the office
+knows why the floor cannot move it. A tap already queued on the tablet when
+the lock arrives is **dropped rather than sent** (the office acted later) but
+never quietly: `dropBlocked()` moves it to a `BLOCKED` note in `localStorage`,
+warns to the console and draws it on the card in red — "Cutting 5 was not
+saved — the office marked this job finished first" — until the office unlocks
+the job. No log line is written, because the counter never landed. The check
+runs after every read of the list **and** again at the top of `flushQueue`,
+because the lock can arrive in the poll that ran while the queue was waiting.
+
+**Honest limits, told to the owner.** Colours only move while an office
+dashboard is open (the floor working on a Saturday means the sheet catches up
+on Monday). A mis-tap on the floor now reaches the master sheet — reversible
+by tapping back, or by the office ticking over it, but no longer contained to
+the tablet. Yellow is a new convention: one cell in the live sheet used it
+before this. And a colour set by hand in Excel rather than in the dashboard
+will always lose the last-writer contest, because it leaves no dated record.
+
+**Tests.** `test_glasscolour.js` (41 checks): the rule per column in both
+directions and all the way back to blank; gold requiring glazing with no
+exception; `floorStamp` skipping a stamp that will not parse rather than
+letting it win; the stamp formats **and the minute a seconds-less stamp
+covers**, including the boundary and the round trip that used to change its
+mind; last-writer-wins both ways, the same-minute case, and each side with no
+stamp at all; the Log as the office's stamp (right job, right item);
+idempotence over ten polls; the hold, its release and a reversal without a
+flicker; an untapped row and a job marked ready both left alone; the office's
+yellow surviving the seed round trip (and the mixed job that cannot); a
+refused write, the growing backoff, giving up, the footer's words, and one
+success clearing it; the 60-cell cap, exactly one follow-up, the remainder
+going out on later passes and no job split; two passes unable to overlap; the
+drawer's own ticks unchanged; and over the whole run — every write to
+Production a single-cell fill whose body is a colour and nothing else, every
+fill in column AY/AZ/BA/BB and never in BC-BF, and no sheet touched but
+Production and the dashboard's own two. `test_station.js` (235) adds the tuff
+counter, the lock, the dropped queued tap, the seed's new yellow rule, and
+proves over its own run that the tablet still touches no workbook.

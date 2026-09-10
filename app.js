@@ -77,6 +77,19 @@ const PENDING_MS = 180000;
    change would disappear the moment you pressed F5. */
 try { PENDING = JSON.parse(localStorage.getItem("cw_pending") || "{}"); } catch (e) { PENDING = {}; }
 const savePending = () => { try { localStorage.setItem("cw_pending", JSON.stringify(PENDING)); } catch (e) {} };
+/* The two vocabularies for one cell, and the translation between them. The
+   parser reads a fill and says "done" / "process" / "cut" / nothing; the glass
+   colour feature (§ glass colours, below) decides "gold" / "yellow" / "" and
+   writes the hex. A colour this feature does not own - the sheet's own Cut
+   green - has no word here at all, which is exactly how the writer knows to
+   leave that cell alone. */
+const GLASS_COLOUR_WORD = { done: "gold", process: "yellow", "": "" };
+const GLASS_WORD_CP = { gold: "done", yellow: "process", "": "" };
+/** What the Production sheet is showing for one of the four glass columns,
+    in the colour feature's own words - undefined when it is a colour this
+    feature has no business touching. */
+const glassCellNow = (j, type) => GLASS_COLOUR_WORD[((j.cp || {}).glass || {})[type] || ""];
+
 /* Each held thing carries its own timestamp: ticking a checkpoint must not
    extend the hold on an unrelated change made two minutes earlier. */
 function pend(id, patch) {
@@ -88,6 +101,7 @@ function pend(id, patch) {
   if (p.blk != null && !t.blk) t.blk = was;
   Object.keys(p.prods || {}).forEach(k => { if (!t["prod:" + k]) t["prod:" + k] = was; });
   Object.keys(p.cp || {}).forEach(k => { if (!t["cp:" + k]) t["cp:" + k] = was; });
+  Object.keys(p.gc || {}).forEach(k => { if (!t["gc:" + k]) t["gc:" + k] = was; });
   p.at = now;
   if ("done" in patch) { p.done = patch.done; t.done = now; }
   if (patch.prod) { p.prods[patch.prod.name] = patch.prod.status; t["prod:" + patch.prod.name] = now; }
@@ -100,6 +114,19 @@ function pend(id, patch) {
       else { p.cp[k] = patch.cp[k]; t["cp:" + k] = now; }
     }
   }
+  /* A glass colour the floor's work has just put into the sheet, held the same
+     way and for the same reason as a checkpoint tick: the downloaded file is
+     about 36 s behind the API, and without the hold the next refresh would
+     read the old colour back and the cell would flicker gold, blank, gold. The
+     value is the colour's own word ("gold" / "yellow" / ""); null drops the
+     hold, which is what a failed write does. */
+  if (patch.gc) {
+    p.gc = p.gc || {};
+    for (const k in patch.gc) {
+      if (patch.gc[k] == null) { delete p.gc[k]; delete t["gc:" + k]; }
+      else { p.gc[k] = patch.gc[k]; t["gc:" + k] = now; }
+    }
+  }
   if ("blk" in patch) { if (patch.blk == null) { delete p.blk; delete t.blk; } else { p.blk = patch.blk; t.blk = now; } }
   /* A hand-set phase, held while the SharePoint list catches up. 0-6 is a
      phase; -1 means "held as cleared" - the item has just been deleted and a
@@ -110,7 +137,8 @@ function pend(id, patch) {
 }
 const blkCat = b => b === 0 ? "secondhand" : b === 1 ? "wonttake" : b === 2 ? "collect" : "active";
 const pendEmpty = p => !("done" in p) && p.blk == null && p.phase == null &&
-  !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length;
+  !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length &&
+  !Object.keys(p.gc || {}).length;
 
 /** `fresh` = this is a newly parsed workbook, so a held count can be compared
     with what the file now says and let go once the two agree. */
@@ -125,6 +153,7 @@ function applyPending(list, fresh) {
     if (p.phase != null && old("phase")) { delete p.phase; delete t.phase; dropped = true; }
     Object.keys(p.prods || {}).forEach(k => { if (old("prod:" + k)) { delete p.prods[k]; delete t["prod:" + k]; dropped = true; } });
     Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
+    Object.keys(p.gc || {}).forEach(k => { if (old("gc:" + k)) { delete p.gc[k]; delete t["gc:" + k]; dropped = true; } });
     if (pendEmpty(p)) { delete PENDING[id]; dropped = true; }
   });
   const out = list.map(x => {
@@ -145,11 +174,34 @@ function applyPending(list, fresh) {
       const st = itemState(j, k);
       if (st && st.done != null && st.done === p.cp[k]) { delete p.cp[k]; delete p.t["cp:" + k]; dropped = true; }
     });
+    /* the same rule for a glass colour: the file now shows what we painted, so
+       stop holding it and let the sheet speak for itself again */
+    if (fresh && p.gc) Object.keys(p.gc).forEach(k => {
+      if (glassCellNow(j, k) === p.gc[k]) { delete p.gc[k]; delete p.t["gc:" + k]; dropped = true; }
+    });
     if (pendEmpty(p)) { delete PENDING[j.id]; dropped = true; return j; }
     const c = Object.assign({}, j);
     c.raw = j;
     if ("done" in p) c.done = p.done;
     if (p.cp && Object.keys(p.cp).length) { c.cp = cpWithHeld(j, p.cp); c.cpDone = Object.assign({}, p.cp); }
+    /* Both sides can be holding the same cell at once: the office ticked DG in
+       the drawer at 14:00:00 and a floor tap reached this dashboard two seconds
+       later, and both writes are still in the air. The newer of the two holds
+       is the one shown - which is the same last-writer-wins rule the writer
+       itself applies, applied to the two things this browser has not yet seen
+       land. Never edited in place: `c.cp` can still be the parsed job's own
+       object, and `x.raw` has to keep saying exactly what the file said. */
+    if (p.gc && Object.keys(p.gc).length) {
+      const glass = Object.assign({}, (c.cp || {}).glass);
+      Object.keys(p.gc).forEach(k => {
+        if ((p.t["cp:glass:" + k] || 0) > (p.t["gc:" + k] || 0)) return;
+        glass[k] = GLASS_WORD_CP[p.gc[k]];
+        /* the count the office's own tick was holding is no longer what this
+           cell is about, so the drawer must not go on showing it */
+        if (c.cpDone) delete c.cpDone["glass:" + k];
+      });
+      c.cp = Object.assign({}, c.cp, { glass: glass });
+    }
     if (p.blk != null) { c.blk = p.blk; c.cat = blkCat(p.blk); }   // moved in Excel; file still catching up
     c.prods = j.prods.map(y => Object.prototype.hasOwnProperty.call(p.prods, y.n)
       ? Object.assign({}, y, { st: p.prods[y.n] ? [p.prods[y.n]] : [] }) : y);
@@ -821,7 +873,14 @@ async function stationPoll() {
     let moved = await stationDelta("items", siteId);
     if (STATION_LOG_OK === true && (await stationDelta("log", siteId))) moved = true;
     STATION_ERR = "";
-    if (moved) redrawStation();
+    if (moved) {
+      redrawStation();
+      /* a tap on the floor is what this feature exists to carry into the sheet,
+         and this is the ten-second clock that hears about it. Not awaited: the
+         poll must be back for its next turn whatever the workbook is doing, and
+         the write reports its own failures. */
+      glassColourRun().catch(e => console.warn("[glass] " + ((e && e.message) || e)));
+    }
     return moved;
   } catch (e) {
     stationTrouble(e);
@@ -936,6 +995,10 @@ function setStationFoot() {
   const el = $("#stationfeed"); if (!el) return;
   const wrap = $("#stationfeedwrap");
   const show = t => { el.textContent = t; if (wrap) wrap.hidden = !t; };
+  /* first, because it is the more serious of the two: a feed that will not
+     write means the floor's board goes stale, while this means the WORKBOOK is
+     refusing a write and somebody has to know rather than read it in a console */
+  if (GLASS_COLOUR_ERR) { show("glass colours not saved"); el.title = GLASS_COLOUR_ERR; return; }
   if (STATION_FEED_ERR) { show("station feed failed"); el.title = STATION_FEED_ERR; return; }
   if (!STATION_FEED.at) { show(""); el.title = ""; return; }
   show("station feed: " + agoWords(STATION_FEED.at));
@@ -1315,7 +1378,13 @@ async function load(reason, force) {
     /* the floor's list, brought up to date from the sheet we have just read.
        Deliberately last, deliberately not awaited for the render above, and
        deliberately unable to fail loudly: the dashboard is finished by here. */
-    feedStation().then(stationAfterFeed, () => {});
+    /* and then, from the list the feed has just brought up to date, whatever
+       the floor has finished since this dashboard last looked, painted into
+       the four glass columns. Last, after the feed, because the feed is what
+       puts STATION_ITEMS in front of it. */
+    feedStation().then(stationAfterFeed, () => {})
+      .then(() => glassColourRun(), () => {})
+      .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
   } catch (e) {
     /* A station account signing in here has no access to the workbook at all.
        That is not a fault to retry: it is the wrong page for them, and saying
@@ -1532,6 +1601,357 @@ function cpReplayQueue() {
   const n = cpReplay(cpFlushItem, whoAmI());
   if (n) toast(n === 1 ? "Sending a checkpoint from earlier" : "Sending " + n + " checkpoints from earlier");
   return n;
+}
+
+/* ---------- glass colours: the floor's work reaches the Production sheet ----
+   Shipped 2026-09-10 (docs/specs/2026-09-10-glass-colours-two-way.md). This is
+   the first feature in which something done on the floor changes the master
+   sheet, so read the boundaries before changing anything here.
+
+   The tablet still never touches the workbook - it cannot, and that is the
+   real security boundary. THIS dashboard does every write: it watches the
+   floor's list, works out what the four glass columns should be showing, and
+   paints those cells. The feeder in reverse.
+
+   Only a FILL is ever written, and only into DG, TG, TUFF and NOT TUFF of the
+   job's own row on Production. Never a value, never a row, never a formula,
+   never another sheet, and never ARCH, ASTRAGAL, FANCY or EXTRA, which the
+   office ticks by hand (owner, 2026-09-10: "the production sheet is main doc,
+   don't edit that as in text; by colour is ok").
+
+   Four things keep it from being a nuisance:
+
+     · A cell that is already the right colour is not written. The office polls
+       the floor's list every ten seconds; without that test this would be a
+       write storm against the workbook rather than a feature.
+     · A job the floor has never tapped is never written at all. Its counters
+       are the office's own seed echoed back (ST.officeSeed), and painting the
+       sheet from them would be this dashboard arguing with itself.
+     · Whoever acted last wins - the floor's stamp on the list row against the
+       office's own stamp in Dashboard Progress and Dashboard Log. Neither side
+       is overwritten by an older action, which is both halves of what the
+       owner asked for.
+     · Every write is held in PENDING until the download agrees, exactly as a
+       checkpoint tick is, because the downloaded file lags the API by ~36 s.
+
+   White, not "no fill", for a cell that should be showing nothing: the
+   Production cells carry an explicit white fill, and clearing one leaves a
+   hole that looks nothing like the rows around it. The parser reads white and
+   no-fill as the same nothing, so a cell that already has neither colour is
+   left alone rather than painted white for the sake of it.                  */
+const GLASS_PROD_SHEET = "Production";
+const GLASS_HEX = { gold: GOLD_HEX, yellow: YELLOW_HEX, "": WHITE_HEX };
+const GLASSC_BUSY = {};        // job -> a colour write for it is in the air
+/* Cells per run, and three at a time - the same numbers and the same shape as
+   the feeder's STATION_FEED_MAX / STATION_FEED_LANES, deliberately, because it
+   is the same problem: switching this feature on after the floor has worked for
+   a week with no office dashboard open plans a colour for every job at once.
+   Rehearsed against the owner's real file: 141 fed rows, up to 362 cell fills
+   in one burst if nothing caps it. A run cut short by the cap comes back in
+   half a minute, like the feeder's own follow-up, and the rest goes then. */
+const GLASS_MAX = 60;
+const GLASS_AGAIN_MS = 30000;
+let glassAgainT = null;
+let glassRunning = false;
+/** Come back for the rest. ONE timer, never one per job - the feeder had
+    exactly that bug and fixed it the same way. */
+function glassColourAgain() {
+  if (glassAgainT) return;
+  glassAgainT = setTimeout(() => {
+    glassAgainT = null;
+    glassColourRun().catch(e => console.warn("[glass] " + ((e && e.message) || e)));
+  }, GLASS_AGAIN_MS);
+}
+
+/* A write the workbook keeps refusing must not be sent again every ten seconds.
+   Everything comparable in this file already has a brake - stationDelta marks a
+   refusing list off for five minutes, the feeder has stationFeedAgain, the
+   checkpoint queue bounds its own replays - and this writes to the WORKBOOK, so
+   it is the one that can least afford not to. The trigger is real and
+   undramatic: somebody opens the file exclusively in desktop Excel, or a token
+   loses its write scope, in the middle of a shift while the floor keeps tapping.
+
+   So each job counts its own failures and waits longer each time, and after
+   GLASS_FAIL_MAX it is given up on until the page is reloaded. A success clears
+   the record. Either way the footer says so, because a workbook refusing a
+   write is not something to leave in a console nobody has open. */
+const GLASS_BACKOFF_MS = [60000, 300000, 900000];        // 1 min, then 5, then 15
+const GLASS_FAIL_MAX = 5;
+const GLASSC_FAIL = {};        // job -> { n, at, why }
+let GLASS_COLOUR_ERR = "";
+/** Is this job serving a backoff, or given up on? */
+function glassWaiting(id) {
+  const f = GLASSC_FAIL[id];
+  if (!f) return false;
+  if (f.n >= GLASS_FAIL_MAX) return true;
+  return Date.now() - f.at < GLASS_BACKOFF_MS[Math.min(f.n - 1, GLASS_BACKOFF_MS.length - 1)];
+}
+/** What the footer says about it. One line, with the detail in the tooltip -
+    the same arrangement the station feed's own word already uses. */
+function setGlassFoot() {
+  const bad = Object.keys(GLASSC_FAIL);
+  if (!bad.length) { GLASS_COLOUR_ERR = ""; setStationFoot(); return; }
+  const stopped = bad.filter(id => GLASSC_FAIL[id].n >= GLASS_FAIL_MAX).length;
+  const why = GLASSC_FAIL[bad[0]].why || "";
+  GLASS_COLOUR_ERR =
+    bad.length + " job" + (bad.length > 1 ? "s" : "") + " could not have " +
+    (bad.length > 1 ? "their" : "its") + " glass colours written to the Production sheet" +
+    (stopped ? " — " + stopped + " of them given up on until this page is reloaded"
+             : " — trying again shortly") +
+    (why ? ". Last reason: " + why : "") +
+    " Nothing else about the sheet is affected.";
+  setStationFoot();
+}
+
+/** A stamp from any of the three places this app keeps one, as **the latest
+    instant it can be describing**, in milliseconds - or 0 when there is
+    nothing readable there.
+
+    Three formats meet here and getting this wrong would silently decide every
+    contest the wrong way round. The floor writes a full ISO stamp in UTC
+    (`new Date().toISOString()`). Dashboard Progress and Dashboard Log write
+    `nowStamp()` - "2026-09-10 14:03", the office's own local time with no zone
+    on it - and the Log is read back out of the workbook as "10/09/2026 14:03".
+    The last two are LOCAL times and are built as local dates here; Date.parse
+    is left to handle the ISO one, where the Z means what it says. Doing this
+    by Date.parse alone would work in one browser and be an hour out in
+    another, all summer.
+
+    THE SECONDS, which is the whole reason this returns "the latest instant"
+    rather than "the instant". `nowStamp()` has no seconds in it, so an office
+    tick made at 15:00:40 is written down as 15:00 - up to 59 seconds EARLY. A
+    floor tap at 15:00:20 would then read as the later action and paint the
+    office's own tick back out, which is the one thing the owner forbade. So a
+    stamp that only names a minute is taken to cover that whole minute and
+    anything inside it loses to it. It is the same reading as ties going to the
+    office (spec Amendment A3), applied to the precision the sheets actually
+    have.
+
+    It also makes the answer STABLE across a round trip, which the minute-early
+    reading did not. `noteChange` puts a full-second entry in CHANGES, so the
+    tab that made a tick used to win - until `load()` dropped that local entry
+    in favour of the Log sheet's minute-precision copy of the same line, and
+    the dashboard quietly changed its mind and repainted. Now both readings of
+    the same tick answer the same side. */
+const STAMP_MINUTE_MS = 59999;         // ... so 15:00 means "any time before 15:01"
+function stampMs(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return 0;
+  let m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() +
+                (m[6] === undefined ? STAMP_MINUTE_MS : 0);
+  m = /^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2})$/.exec(s);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]).getTime() + STAMP_MINUTE_MS;
+  const t = Date.parse(s);
+  return isFinite(t) ? t : 0;
+}
+
+/** When the office last said something about one glass type of one job, in
+    milliseconds - 0 when it never has.
+
+    Two records, both already in memory after load(), so this costs no request:
+    the Dashboard Progress row the drawer writes for every tick (`Who`/`When`,
+    read back through cpStored), and the Dashboard Log lines, which arrive as
+    CHANGES. A whole-group write logs "Glass: all done" or "Glass: cleared" and
+    counts for every type; a single tick logs the item's own name.
+
+    0 is the honest answer for an office tick made before this feature existed,
+    and for a cell somebody painted by hand in Excel: neither leaves a dated
+    record anywhere, so neither can be shown to be the later action. See the
+    honest limits in the spec. */
+function glassOfficeStamp(job, type, log) {
+  const id = String(job).toUpperCase();
+  const row = typeof cpStored === "function" ? cpStored(id, "glass:" + type) : null;
+  let best = row ? stampMs(row.when) : 0;
+  const mine = (log || glassLogStamps())[id];
+  if (mine) {
+    /* the item's own line, and any whole-group line, which is about all four */
+    const t = Math.max(mine[type] || 0, mine["*"] || 0);
+    if (t > best) best = t;
+  }
+  return best;
+}
+
+/** The Dashboard Log, indexed by job and glass type, in one pass.
+    CHANGES can be four hundred lines and the writer asks about four columns of
+    every job on the sheet, so asking it line by line would be the log walked
+    a couple of thousand times per run. Built once per run and handed down;
+    a caller with nothing to hand gets a fresh one, so the function above is
+    still usable on its own. */
+function glassLogStamps() {
+  const out = {};
+  for (let i = 0; i < CHANGES.length; i++) {
+    const c = CHANGES[i];
+    if (!c) continue;
+    const what = String(c.what || "").toUpperCase();
+    /* "GLASS DG" is one column; "GLASS: ALL DONE" and "GLASS: CLEARED" are the
+       whole group and count for every one of them */
+    const group = what.indexOf("GLASS:") === 0;
+    if (!group && what.indexOf("GLASS ") !== 0) continue;
+    const id = String(c.job || "").toUpperCase();
+    if (!id) continue;
+    const key = group ? "*" : what.slice(6).toLowerCase();
+    const t = stampMs(c.at);
+    if (!t) continue;
+    const m = out[id] || (out[id] = {});
+    if (t > (m[key] || 0)) m[key] = t;
+  }
+  return out;
+}
+
+/** What this job's four glass cells should be repainted to, or null when there
+    is nothing to do - which is the answer nearly every time this is asked.
+
+    Read it as a series of reasons to write nothing, because that is what it
+    mostly is: the job is finished, the floor has never touched it, the column
+    is not on this sheet, the job has none of that glass, the cell already
+    says it, the cell is a colour this feature does not own, or the office
+    spoke more recently than the floor did. */
+function glassColourPlan(j, log) {
+  if (!j || j.done) return null;             // a gold row is finished work: leave it whole
+  if (!PRODMAP || !PRODMAP.glass || typeof ST === "undefined") return null;
+  const g = stationForJob(j.id);
+  if (!g) return null;                       // never fed to the floor
+  const floorAt = stampMs(ST.floorStamp(g));
+  if (!floorAt) return null;                 // the floor has never tapped it: nothing of theirs to show
+  const want = ST.glassColours(g);
+  const out = [];
+  ST.COLOUR_TYPES.forEach(type => {
+    const col = PRODMAP.glass[type];
+    if (!col) return;                        // not a column on this sheet at all
+    if (!((j.glass || {})[type] > 0)) return;   // the job has none of this glass
+    const have = glassCellNow(j, type);
+    /* undefined means the cell is carrying something else - the sheet's own Cut
+       green, or a colour somebody painted for a reason of their own. This
+       feature owns gold, yellow and nothing; it does not paint over anything
+       it cannot recognise, in either direction. */
+    if (have === undefined) return;
+    if (have === want[type]) return;         // already right: never rewrite a cell
+    /* last writer wins, and a tie goes to the office. Two reasons: the owner's
+       "the master dashboard should not be overridden", and the office's own
+       stamp is written to the minute, so it is already biased early - giving it
+       the ties it would otherwise lose is the reading that is wrong less often.
+       It is also the quiet answer: a tie resolves to no write at all. */
+    if (glassOfficeStamp(j.id, type, log) >= floorAt) return;
+    out.push({ type: type, col: col, from: have, to: want[type] });
+  });
+  return out.length ? out : null;
+}
+
+/** Paint one job's cells. On the job's own checkpoint chain, so an office tick
+    and a floor colour for the same job can never interleave, and inside
+    serialised() for the sheet, so two of these cannot either. */
+async function glassColourWrite(job, plan) {
+  try {
+    await CW.serialised(GLASS_PROD_SHEET, async () => {
+      /* re-found immediately before writing, like every other fill in this app:
+         rows move, and a remembered row number eventually paints somebody
+         else's job */
+      const row = await CW.rowForJob(GLASS_PROD_SHEET, job);
+      const f = await CW.findFile();
+      const S = f.base + "/worksheets('" + GLASS_PROD_SHEET + "')";
+      await CW.batchWrite(plan.map(p => ({
+        method: "PATCH",
+        url: S + "/range(address='" + CW.A1(p.col) + row + "')/format/fill",
+        body: { color: GLASS_HEX[p.to] }
+      })));
+    });
+    delete GLASSC_FAIL[job];                 // it works again: forget the backoff
+    setGlassFoot();
+    scheduleReconcile();                     // read the file back once it has caught up
+  } catch (e) {
+    /* let the holds go rather than putting an old colour back: what the sheet
+       still says IS the old colour, and holding a guess over it for three
+       minutes would be this dashboard telling the office something untrue */
+    const back = {};
+    plan.forEach(p => { back[p.type] = null; });
+    pend(job, { gc: back });
+    ALL = applyPending(ALL);
+    if (!rowsInUse()) quietRows();
+    if (state.sel === job && $("#dhost")) renderDrawer();
+    const why = (e && e.message) || String(e);
+    const f = GLASSC_FAIL[job] || { n: 0 };
+    f.n++; f.at = Date.now(); f.why = why;
+    GLASSC_FAIL[job] = f;
+    setGlassFoot();
+    console.warn("[glass] could not colour " + job + " (" + f.n + " time" + (f.n > 1 ? "s" : "") +
+                 "): " + why);
+    /* thrown on so the run that dispatched this can count it: the footer needs
+       to know how the whole pass went, not only that one job is unhappy */
+    throw e;
+  } finally {
+    delete GLASSC_BUSY[job];
+  }
+}
+
+/** Look at every job once and paint whatever the floor has moved on.
+
+    Run after every load and after every station poll that actually moved
+    something. Cheap when there is nothing to do: it is a walk of the jobs in
+    memory and not one request, which is what lets it be called six times a
+    minute.
+
+    Bounded when there is a great deal to do: at most GLASS_MAX cells go out in
+    one pass, three writes at a time, and a pass the cap cut short arms one
+    follow-up for the rest. A job is never split across two passes - half a
+    job's colours would be a lie on screen for thirty seconds and the other
+    half would only be re-planned anyway.
+
+    Returns how many JOBS were sent, so a caller (and a test) can see the cap
+    working. */
+async function glassColourRun() {
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.serialised) return 0;
+  if (STATION_OK !== true || !PRODMAP || !ALL.length) return 0;
+  /* a pass is already in the air. Arming the follow-up rather than simply
+     returning is what guarantees the rest of a big catch-up still goes out. */
+  if (glassRunning) { glassColourAgain(); return 0; }
+  const all = [];
+  const log = glassLogStamps();              // one pass over the log, not one per column
+  for (let i = 0; i < ALL.length; i++) {
+    const j = ALL[i];
+    if (GLASSC_BUSY[j.id]) continue;         // one write per job in the air at a time
+    if (glassWaiting(j.id)) continue;        // this one is serving a backoff, or given up on
+    const plan = glassColourPlan(j, log);
+    if (plan) all.push({ id: j.id, plan: plan });
+  }
+  if (!all.length) return 0;
+  /* the cap counts CELLS, because a cell fill is what reaches the workbook -
+     one job is one batched request carrying up to four of them */
+  const todo = [];
+  let cells = 0;
+  for (let i = 0; i < all.length; i++) {
+    if (todo.length && cells + all[i].plan.length > GLASS_MAX) break;
+    cells += all[i].plan.length;
+    todo.push(all[i]);
+  }
+  const whole = todo.length === all.length;
+  /* held before a single request leaves, and all of them before anything is
+     redrawn: the screen must show what it is about to write, not flicker
+     through the states it is writing */
+  todo.forEach(x => {
+    GLASSC_BUSY[x.id] = 1;
+    const held = {};
+    x.plan.forEach(p => { held[p.type] = p.to; });
+    pend(x.id, { gc: held });
+  });
+  ALL = applyPending(ALL);
+  if (!rowsInUse()) quietRows();
+  if (state.sel && $("#dhost")) renderDrawer();
+  console.log("[glass] painting " + todo.length + " job" + (todo.length > 1 ? "s" : "") +
+              " (" + cells + " cell" + (cells > 1 ? "s" : "") + ") of " + all.length +
+              " from the floor's counters");
+  glassRunning = true;
+  try {
+    /* stationSend is the feeder's own three-lane runner: it finishes what it
+       can, counts what it lost and keeps the first message. Each job still goes
+       through its own checkpoint chain inside that, so an office tick and a
+       floor colour for one job can never interleave. */
+    const r = await stationSend(todo.map(x => () => cpChain(x.id, () => glassColourWrite(x.id, x.plan))));
+    if (!whole || r.failed) glassColourAgain();
+  } finally {
+    glassRunning = false;
+  }
+  return todo.length;
 }
 
 /* ---------- job alerts ----------------------------------------------------
@@ -3028,6 +3448,9 @@ function glassChip(j) {
   if (!ST.glassTotal(j)) return "";
   const g = stationForJob(j.id);
   if (!g || !g.total) return "";
+  /* the THREE glass stages, deliberately, not the four. Tuff counts a different
+     quantity, so adding it would make the denominator mean nothing: "8/24" is
+     eight glasses through three stages, which is what the chip has always said. */
   const done = ST.STAGE_KEYS.reduce((n, k) => n + g[ST.STAGE_ROW[k]], 0);
   const steps = g.total * ST.STAGE_KEYS.length;
   const each = ST.STAGES.map(s => s[1].toLowerCase() + " " + g[ST.STAGE_ROW[s[0]]]).join(", ");
@@ -3142,9 +3565,16 @@ function stationSectionHtml(j) {
   const why = g.active
     ? "Recorded by the floor on the Glass station page" + (g.fedAt ? ", fed " + agoWords(g.fedAt) : "")
     : "Finished on the floor \u2014 this job is no longer on their board.";
+  /* why the floor cannot move it, said here rather than left as a mystery: the
+     office's own glass ticks are what locked it, and un-ticking one unlocks it */
+  const lock = g.officeDone
+    ? '<div class="cphint">This job’s glass is ticked off here, so it is read-only on the ' +
+      'tablet. Un-tick one of the glass checkpoints above to let the floor move it again.</div>'
+    : "";
   return head +
     (STATION_ERR ? '<div class="cphint" style="color:var(--urgent)">' + esc(STATION_ERR) + '</div>' : "") +
-    '<div class="stbars">' + ST.STAGES.map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+    '<div class="stbars">' + stStages(g).map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+    lock +
     stationTimelineHtml(j.id) +
     '<div class="cphint">' + esc(why) + ' Nothing in the Excel file is involved.</div></div>';
 }
@@ -3185,6 +3615,12 @@ function stLogRowHtml(r) {
     '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>';
 }
 
+/** The stages worth drawing for one record. Tuff is a fourth counter against a
+    quantity most jobs do not have, and a "Tuff 0 of 0" line on every card would
+    be four hundred rows of nothing: it appears only on the jobs that have tuff
+    on them. The three glass stages are always shown. */
+const stStages = g => ST.ALL_STAGES.filter(s => s[0] !== ST.TUFF_STAGE || (g && g.tuffTotal > 0));
+
 /** One stage of one job: "Cutting 12 of 12" and, under it, who last moved it
     and when. No bar - the floor has none either, and a card that has gone gold
     has already said the only thing a bar was saying. */
@@ -3224,7 +3660,7 @@ function stationBoardHtml() {
         '<span class="stcount tab">' + esc(ST.glassWords(g.total)) + '</span>' +
         '<span class="stfed">' + esc(g.fedAt ? "fed " + agoWords(g.fedAt) : "not fed yet") + '</span>' +
       '</div>' +
-      '<div class="stbars">' + ST.STAGES.map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+      '<div class="stbars">' + stStages(g).map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
       (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(ST.stageLabel(last.stage)) +
         ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
     '</div>';
@@ -3274,7 +3710,7 @@ function renderStationLog() {
       '<select class="txt" id="lgwho">' + opt("", "Everyone", LOGF.who) +
         Object.keys(names).sort().map(nm => opt(nm, nm, LOGF.who)).join("") + '</select>' +
       '<select class="txt" id="lgstage">' + opt("", "Every stage", LOGF.stage) +
-        ST.STAGES.map(st => opt(st[0], st[1], LOGF.stage)).join("") + '</select>' +
+        ST.ALL_STAGES.map(st => opt(st[0], st[1], LOGF.stage)).join("") + '</select>' +
       '<input class="txt" id="lgjob" placeholder="Job number" value="' + esc(LOGF.job) + '">' +
       '<input class="txt" id="lgday" type="date" value="' + esc(LOGF.day) + '">' +
       '<button class="chip" id="lgclear">Clear filters</button>' +
