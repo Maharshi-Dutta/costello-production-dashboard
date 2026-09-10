@@ -732,9 +732,19 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual(sheetNow().dg, WHITE, "it is white, which is what the office asked for");
   pass("a per-item un-tick is safe through its debounce as well as through its write");
 
-  /* and the rule itself is untouched: a floor tap made AFTER the office's
-     click still wins, because the hold is stamped at the click and the
-     comparison is still last-writer-wins */
+  /* CHANGED 2026-09-10 BY THE OWNER'S RESTATED RULE. This used to assert that
+     a floor tap made two seconds after the office's click won, because the
+     hold is stamped at the click and last-writer-wins decided it. It no longer
+     does, and that is the point of the change: "an un-tick from the dashboard
+     is absolute - no thinking, no arguing". Inside the settling window the
+     writer stands down for that job whatever the floor's row says, because
+     inside that window it cannot tell a genuine tap from a stale copy of the
+     office's own change.
+
+     The tap is not lost. Nothing here is one-shot: the writer re-plans from
+     whatever the list says on every pass, so once the window has gone by, that
+     tap - if it is still what the floor's row says - is painted then. Section
+     10d test 3 is where that is asserted. */
   untickScene();
   reset();
   const untick2 = setGroupDone(byId("R7001"), "glass", false);
@@ -745,9 +755,10 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   const afterTap = await glassColourRun();
   await untick2;
   await settle(300);
-  assert.strictEqual(afterTap, 1,
-    "a floor tap made after the office clicked is still the later action and still wins");
-  pass("last-writer-wins is unchanged: the office's hold is dated at the click, not made unbeatable");
+  assert.strictEqual(afterTap, 0,
+    "a floor tap two seconds after the office clicked no longer wins: the office is absolute here");
+  assert.strictEqual(A("officeSettling(byId('R7001'))"), true, "because the office is still settling");
+  pass("inside the office's window the writer stands down, whatever the floor's row says");
   A("PENDING = {}; savePending(); CHANGES = [];");
   CP.cpSetProgress({});
 
@@ -1406,14 +1417,18 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
      the office's clear carries a later stamp than every office record on the
      job, and its colour is painted. Without this the fix would simply be "the
      office always wins", which is not the rule. */
+  /* the office's clear is well behind us - past the settling window of section
+     10d, which would otherwise stand the writer down whatever the stamps say -
+     and the floor tapped a minute and a half after it */
+  const OLD = Date.now() - 260000, TAP = Date.now() - 100000;
   j = scene(caseCJob(), row({ Total: 49, TuffTotal: 20,
     Cut: 49, Hotmelt: 49, Glazed: 0, Tuff: 20,
-    DoneBy: "Person A", DoneAt: isoMs(T0 + 120000),     // a real tap, two minutes later
-    CutBy: "Person A", CutAt: isoMs(T0 + 120000) }));
+    DoneBy: "Person A", DoneAt: new Date(TAP).toISOString(),
+    CutBy: "Person A", CutAt: new Date(TAP).toISOString() }));
   A("PENDING = {}; savePending(); CHANGES = [];");
   CP.cpSetProgress({ R7001: {
-    "glass:tg": { done: 0, total: 49, who: "the admin", when: officeMin } } });
-  rememberClear(isoMs(T0 + 3000));
+    "glass:tg": { done: 0, total: 49, who: "the admin", when: minStamp(OLD) } } });
+  rememberClear(new Date(OLD).toISOString());
   reset();
   assert.strictEqual(await glassColourRun(), 1, "the floor tapped after the office: the floor wins");
   await settle();
@@ -1424,6 +1439,169 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   forgetClears();
   A("PENDING = {}; savePending();");
   pass("a genuine floor tap after the office's clear still wins: the rule is last writer, not office first");
+
+
+  /* ================= 10d. the office is absolute: the writer stands down =====
+     THE OWNER'S RULE, restated 2026-09-10: "the hierarchy is Excel, then master
+     dashboard, then glass. Any change from the dashboard is absolute. If the
+     glass updates the ticks it comes golden instantly, correct, and should not
+     change. An un-tick from the dashboard is absolute - no thinking, no
+     arguing."
+
+     So the writer does not argue. While an office change on a job's glass is
+     still settling, it makes NO decision about that job at all - it does not
+     compare stamps, it does not plan, it does not write. The reason it cannot
+     be allowed to decide is simple: inside that window it cannot tell a
+     genuine floor tap from a stale copy of the office's own change coming back
+     round (the download is ~36 s behind, the floor's list a poll behind, and
+     the clear's own DoneAt looks exactly like a tap). Stamps were refined
+     twice; the owner still saw the gold come back. This stops the argument
+     rather than trying to win it.
+
+     Outside the window nothing changes: the floor's work still reaches the
+     sheet, and last-writer-wins still decides it (test 3 below). */
+  const N = Date.now();
+  const win = ms => new Date(N - ms).toISOString();
+  const qJob = () => mkJob({ glass: { tg: 49, tuff: 20, "not tuff": 29 },
+    cp: { win: "", drs: "", glass: { tg: "done", tuff: "done", "not tuff": "done" }, prod: {} } });
+  const fullRow = doneAt => row({ Total: 49, TuffTotal: 20,
+    Cut: 49, Hotmelt: 49, Glazed: 49, Tuff: 20, DoneBy: "Person A", DoneAt: doneAt });
+  /* the office's own records of an un-tick made `ago` milliseconds back: the
+     hold at the click, the Log line the write left, and the clear it made on
+     the floor's row. No Dashboard Progress row: within the first half minute
+     the downloaded file does not carry one yet, which is the state this is
+     about. */
+  const officeUntick = (ago, hold) => {
+    A("PENDING = {}; savePending();");
+    if (hold) {
+      A("pend('R7001', { cp: { 'glass:tg': 0 } });");
+      A("PENDING['R7001'].t['cp:glass:tg'] = " + (N - ago) + "; PENDING['R7001'].at = " + (N - ago) + ";");
+      A("savePending(); ALL = applyPending(ALL, true);");
+    }
+    global.__qch = [{ at: win(ago - 200), who: "the admin", job: "R7001", what: "Glass TG",
+                      from: "49 of 49", to: "0 of 49", src: "dashboard" },
+                    { at: win(ago - 350), who: "the admin", job: "R7001",
+                      what: "Floor glass counters", from: "49 cut, 49 hotmelted, 49 glazed, 20 tuff",
+                      to: "nothing", src: "dashboard" }];
+    A("CHANGES = __qch;");
+    A("if (typeof OFFICE_FLOOR_AT !== 'undefined') OFFICE_FLOOR_AT['R7001'] = " +
+      JSON.stringify(win(ago - 300)) + ";");
+  };
+
+  /* (1) THE OBSERVED CASE. The office un-ticks TG. A moment later the floor's
+     row reads FULL counters again with a DoneAt LATER than everything the
+     office has - the tablet's own poll, a queued tap landing, or a list read
+     that has not settled. Judged on stamps that is a floor tap and the writer
+     paints the job gold again, which is exactly what the owner keeps seeing.
+     Judged by the owner's rule there is nothing to judge: the office spoke,
+     and the writer stands down until that has settled everywhere. */
+
+  /* (a) at once, with the hold still on */
+  j = scene(qJob(), fullRow(win(1000)));
+  officeUntick(2000, true);
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "t+0: the office un-ticked this job, so the writer decides nothing about it");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "and writes nothing at all");
+  /* deferred is not dropped: the pass arms the follow-up it already uses for a
+     capped run, so the colour lands once the window has closed even if nothing
+     else happens to move in the meantime */
+  assert.ok(A("!!glassAgainT"), "but it arms the follow-up, so a deferred job is not left for ever");
+  A("if (glassAgainT) { clearTimeout(glassAgainT); glassAgainT = null; }");
+
+  /* (b) ten seconds later, the hold still on and the file still behind */
+  j = scene(qJob(), fullRow(win(1000)));
+  officeUntick(12000, true);
+  reset();
+  assert.strictEqual(await glassColourRun(), 0, "t+10 s: still the office's window, still nothing");
+  await settle();
+  assert.strictEqual(CALLS.length, 0);
+
+  /* (c) the hold has been let go because the download agrees the cell is
+     white - the stamp is the only thing left saying the office acted, and it
+     has to be enough */
+  global.__qw = mkJob({ glass: { tg: 49, tuff: 20, "not tuff": 29 },
+    cp: { win: "", drs: "", glass: {}, prod: {} } });
+  j = scene(qJob(), fullRow(win(1000)));
+  officeUntick(45000, false);
+  A("ALL = [__qw];");
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "the hold is gone but the office's action is still settling: still no decision");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "and above all no gold painted back over the un-tick");
+  pass("an office un-tick is absolute: inside the window the writer plans nothing for that job at all");
+
+  /* (2) THE TICK SIDE. "If the glass updates the ticks it comes golden
+     instantly, correct, and should not change." The office marks the glass
+     done; the floor's row is still at nought because the feeder has not run
+     yet. There is no disagreement to resolve here - only a chance to paint
+     white over the office's own gold, which must not happen. */
+  j = scene(mkJob({ glass: { tg: 49, tuff: 20, "not tuff": 29 },
+                    cp: { win: "", drs: "", glass: {}, prod: {} } }),
+            row({ Total: 49, TuffTotal: 20, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0,
+                  DoneBy: "Person A", DoneAt: win(500) }));
+  A("PENDING = {}; savePending(); pend('R7001', { cp: { 'glass:tg': 49, 'glass:tuff': 20, 'glass:not tuff': 29 } });");
+  A("PENDING['R7001'].t['cp:glass:tg'] = " + (N - 1000) + "; PENDING['R7001'].at = " + (N - 1000) + ";");
+  A("savePending(); ALL = applyPending(ALL, true); CHANGES = [];");
+  assert.strictEqual(byId("R7001").cp.glass.tg, "done", "the office's gold is on the screen at once");
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "the office has just marked it done, so the writer says nothing about this job");
+  await settle();
+  assert.strictEqual(CALLS.length, 0, "no white over the office's gold");
+  pass("marking done is absolute too: an office tick is never painted out by the floor's older numbers");
+
+  /* (3) OUTSIDE THE WINDOW, LAST-WRITER-WINS IS UNTOUCHED. Three minutes after
+     the office's last word on this job's glass, a genuine floor tap carries a
+     later stamp and its colour reaches the sheet, exactly as before. Without
+     this the guard would just be "the office always wins", which is not the
+     rule and would strand the floor's work. */
+  j = scene(qJob(), row({ Total: 49, TuffTotal: 20,
+    Cut: 49, Hotmelt: 49, Glazed: 0, Tuff: 20,
+    DoneBy: "Person A", DoneAt: win(1000), CutBy: "Person A", CutAt: win(1000) }));
+  global.__och = [{ at: win(181000), who: "the admin", job: "R7001", what: "Glass TG",
+                    from: "", to: "49 of 49", src: "dashboard" }];
+  A("PENDING = {}; savePending(); CHANGES = __och;");
+  A("if (typeof OFFICE_FLOOR_AT !== 'undefined') OFFICE_FLOOR_AT['R7001'] = " +
+    JSON.stringify(win(181000)) + ";");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1,
+    "181 s on, the office's change has settled and the floor's tap is the later word");
+  await settle();
+  assert.deepStrictEqual(fills().map(c => [c.addr, c.color]).sort(),
+    [["AZ7", YELLOW], ["BA7", YELLOW], ["BB7", YELLOW]],
+    "and it is painted, on every glass column the job has");
+  forgetClears();
+  pass("outside the settling window the floor's work still reaches the sheet, decided as it always was");
+
+  /* (4) AND THE WINDOW IS PER JOB. An un-tick on one job says nothing about
+     another, and must not hold the floor's work off the whole sheet. */
+  BOOK["Production"] = { v: {}, fill: {} };
+  BOOK["Production"].v[kk(7, 3)] = "R7001";
+  BOOK["Production"].v[kk(8, 3)] = "R7002";
+  global.__jA = qJob();
+  global.__jB = mkJob({ id: "R7002", cust: "Customer Two", src: { Production: 8 },
+    glass: { tg: 10 }, cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } });
+  global.__qitems = [fullRow(win(1000)),
+    { id: "701", fields: { Title: "R7002", Job: "R7002", Customer: "Customer Two",
+      GlassType: "GLASS", Total: 10, TuffTotal: 0, Seq: 2, Active: "Yes", OfficeDone: "No",
+      Cut: 10, Hotmelt: 10, Glazed: 0, Tuff: 0, DoneBy: "Person A", DoneAt: win(1000) } }];
+  A("PENDING = {}; savePending(); ALL = [__jA, __jB]; PRODMAP = __m; CHANGES = [];" +
+    "STATION_ITEMS = __qitems; STATION_OK = true; BLOCKNAMES = []; state.sel = null;");
+  CP.cpSetProgress({});
+  clearFail(); forgetClears();
+  officeUntick(2000, true);                    // the office un-ticked job A, and only job A
+  A("ALL = applyPending(ALL, true);");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1, "one job painted: the other one, not the one being cleared");
+  await settle();
+  assert.deepStrictEqual(fills().map(c => c.addr).sort(), ["AZ8"],
+    "job B's own row and column, and nothing of job A's");
+  pass("the window is one job's: an un-tick on one job never holds the floor's work off another");
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  forgetClears();
 
   /* ================= 11. the whole run, end to end ================= */
   const prodWrites = ALLREQ.filter(r => r.method !== "GET" && /worksheets\('Production'\)/.test(r.path));

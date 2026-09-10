@@ -1,7 +1,7 @@
 # An office un-tick clears the floor's counters
 
 **Date:** 2026-09-10
-**Status:** shipped 2026-09-10 (c9bbee5); an un-tick repaint observed in production the same day is fixed in the working tree — see Amendment C. Not demoed, not committed.
+**Status:** shipped 2026-09-10 (c9bbee5, then 1f2f27d / 20260910-1516). The owner restated the rule the same day — the office is absolute over the floor — and it is built in the working tree as a settling window: see Amendment D, which supersedes part of B and C. Not demoed, not committed.
 **Changes a standing rule.** See §2. Only the owner can grant this, and they
 did, on 2026-09-10.
 
@@ -494,3 +494,155 @@ contest survived.
 
 Before the fix: 1, 2, 3a and 3b all plan a repaint; 4 already passes. After: all
 five as they should be.
+
+### D. The owner restates the rule: the office is absolute, so the writer stands down
+
+**Status: built, all suites green, not demoed, not committed. Live build
+1f2f27d (20260910-1516) still shows the repaint.**
+
+#### D1. The rule, in the owner's words
+
+> "The hierarchy is Excel, then master dashboard, then glass. Any change from
+> the dashboard is absolute. If the glass updates the ticks it comes golden
+> instantly, correct, and should not change. An un-tick from the dashboard is
+> absolute — no thinking, no arguing. Excel goes white immediately (it does);
+> the master and the glass dashboard must be updated instantly with no delay,
+> no argument, no confusion."
+
+This is simpler than what had been built, and it supersedes part of it. Two
+rounds of stamp refinement (Amendments B and C) made the comparison correct and
+the owner still watched the gold come back. The rule says not to have the
+argument at all.
+
+#### D2. The guard
+
+One test at the top of `glassColourPlan`, before any other decision:
+
+```
+if (officeSettling(j, log)) return null;
+```
+
+`officeSettling` is true when **either** of these holds:
+
+- `PENDING[job]` carries a hold on any `glass:` checkpoint item. `pend()`
+  stamps that hold at the **click** and `applyPending` lets it go only when the
+  downloaded file agrees — which is exactly the window this needs;
+- the office's own stamp on the job (`glassOfficeJobStamp`: the holds, the
+  `Dashboard Progress` rows, the `Dashboard Log` lines including the clear's
+  own, and `OFFICE_FLOOR_AT`) is younger than `PENDING_MS`. That covers the
+  moment after a hold is released, and a reload or a second dashboard where the
+  hold never existed.
+
+Both, because the office has to be safe in every place its action is read from.
+The window is **per job**: an un-tick on one job says nothing about another and
+must never hold the floor's work off the whole sheet.
+
+Why this and not a third stamp fix: inside the window the writer is being fed
+copies that have not caught up — the workbook download is ~36 s behind, the
+floor's list is a poll behind, and the clear's own `DoneAt` looks exactly like a
+tap — and it cannot tell them apart from the real thing. What this feature is
+*for* is carrying the **floor's** work up to the sheet. It is not for
+second-guessing the office.
+
+Everything outside the window is unchanged: `clearFloorGlass`, the
+confirmation, the per-job stamp, last-writer-wins, the whole-run guarantees
+(fills only, AY–BB only, the tablet walled off from the workbook). No poll rate
+was touched.
+
+#### D3. One behaviour deliberately reversed
+
+The section 6b test asserted that **a floor tap two seconds after the office's
+click still wins**, because the hold is dated at the click and last-writer-wins
+decided it. Under the restated rule it does not: inside the window the office is
+absolute whatever the floor's row says. The assertion has been turned round and
+carries the reason. Last-writer-wins still lives, outside the window, and
+section 10d test 3 is where it is now pinned.
+
+**The tap is not lost.** Nothing here is one-shot: the writer re-plans from
+whatever the list says on every pass, so the tap is painted once the window has
+gone by. To make sure a pass happens — the writer only runs when something
+moves, and on a quiet evening nothing may — a pass that deferred anything now
+arms the same 30 s follow-up a capped pass already uses. One timer, no
+requests, and it stops when the windows close.
+
+#### D4. What this costs, said plainly
+
+**The floor's work can be held off the sheet for up to three minutes per job.**
+Any office glass action on a job starts the window again, so an office working
+steadily down one job's glass items keeps that job's floor colours off the
+sheet for as long as they keep touching it. The colour is deferred, never lost.
+That is what "the office is absolute" means, and it is the owner's call — but
+it should be said out loud rather than discovered.
+
+`PENDING_MS` now does double duty: it is both "how long to hold an optimistic
+change on screen" and "how long the office owns a job". They are the same three
+minutes for the same underlying reason — that is how long the copies take to
+agree — but anyone tuning one will silently move the other.
+
+#### D5. The hole this does NOT close, and it needs the owner
+
+A **second office dashboard**, or the same one just after a reload, inside the
+~36 s download lag, has **no record of the office's action at all**: no hold
+(different tab), no `OFFICE_FLOOR_AT` (in memory, per tab), its `CHANGES` is
+per-browser `localStorage`, and its downloaded copy does not yet carry the
+`Dashboard Progress` row or the `Dashboard Log` line. `glassOfficeJobStamp`
+answers 0, so the guard cannot fire and that dashboard decides the job on
+stamps alone.
+
+This is inherent: a dashboard cannot stand down for an action it cannot see.
+Closing it needs a marker both dashboards can read quickly — an `OfficeAt`
+column on the `Glass station` row, written by the clear and read by every
+dashboard's ten-second poll. That is a new column and a new write, so it is a
+decision for the owner, not a judgement call. **If the owner has two dashboards
+open in the office, this is the remaining route to the behaviour they
+reported.**
+
+#### D6. What the tests pin, and what actually flipped
+
+Section 10d, and the reversed section 6b assertion. Measured against the live
+build 1f2f27d, **five of seven flipped**; the other two already passed and are
+kept as controls:
+
+| check | on 1f2f27d | with the guard |
+|---|---|---|
+| 1a t+0, hold present — nothing planned | FAIL (planned 1) | PASS |
+| 1b t+10 s, hold present — nothing planned | FAIL (planned 1) | PASS |
+| 1c hold released, stamp only — no gold painted back | FAIL (planned 1) | PASS |
+| 2 tick side — no white over the office's gold | PASS | PASS |
+| 3 outside the window — a genuine floor tap still paints | PASS | PASS |
+| 4 the window is per job — job B still painted | FAIL (planned 2) | PASS |
+| 5 (was 6b) a tap 2 s after the click no longer wins | FAIL (planned 1) | PASS |
+
+Checks 2 and 3 passing on 1f2f27d is worth recording rather than glossing:
+Amendment C's per-job stamp already resolved the tick side to the office, and
+check 3 is the control that proves the guard did not simply hand every contest
+to the office.
+
+#### D7. How fast the tablet really sees a clear
+
+Derived from the code path and typical Graph round trips, not measured against
+the live tenant. The office's own screen and the workbook cell are immediate —
+the hold paints at the click and the fill goes out first. Only the tablet
+waits, and it waits for two things: the writes, and its own ten-second poll.
+
+- **the workbook half** (`cpWriteGroup`, "All glass done" toggled off): four
+  sequential requests — the `Dashboard Progress` read and write, the row
+  look-up, the batch of fills. The per-item **Clear** is the same four plus the
+  800 ms tap debounce.
+- **the list half** (`clearFloorGlass`): one PATCH. The site and the list id
+  are cached, so nothing else goes out.
+- **the tablet**: `setInterval(…, REFRESH_MS)` at 10 s, so 0–10 s, 5 s on
+  average.
+
+| | office → tablet at zero |
+|---|---|
+| best (group clear, fast round trips, poll lands at once) | **~1 s** |
+| typical (group clear, ~300 ms round trips, average poll wait) | **~6–7 s** |
+| worst normal (per-item Clear, slow round trips, poll just missed) | **~15–16 s** |
+| the list write refused once / twice | **~35 s / ~65 s** |
+| refused three times | **never — and the office is told, in red, naming the numbers still on the tablet** |
+
+The writes are deliberately in that order and were not reordered: clearing the
+floor first would leave the floor at nought with the sheet still gold if the
+workbook write then failed, which is the mirror of the bug the feature exists
+to remove.

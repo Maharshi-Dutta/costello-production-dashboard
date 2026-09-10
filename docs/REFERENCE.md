@@ -376,7 +376,7 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
 | `test_station.js` | floor stations end to end (offline), incl. tuff, the lock, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 243 |
-| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job), idempotence, the cap, the backoff, fills only, the office clear end to end, and the observed un-tick repaint | 61 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, and the office-absolute guard | 65 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -833,6 +833,33 @@ forgetting it would leave the tablet gold — exactly the bug. `FLOORCLEAR_OWED`
 counts the refusals, one timer retries after 30 s, and after three attempts the
 office is told in a toast that names the numbers still on the tablet. The
 retry re-derives, so a job the office has re-ticked meanwhile is dropped.
+
+**The office is absolute: the writer stands down while an office change is
+settling.** The owner restated the rule on 2026-09-10 — *"the hierarchy is
+Excel, then master dashboard, then glass. Any change from the dashboard is
+absolute … an un-tick from the dashboard is absolute — no thinking, no
+arguing."* So `glassColourPlan` opens with `if (officeSettling(j, log)) return
+null;` and makes **no decision at all** about a job while the office's own
+change on it is still settling — no stamp comparison, no plan, no write.
+`officeSettling` is true while a `glass:` checkpoint hold exists on the job
+(`pend()` dates it at the click; `applyPending` releases it when the download
+agrees) **or** while the per-job office stamp is younger than `PENDING_MS`.
+Both, because the office must be safe in every place its action is read from,
+and the window is **per job**.
+
+The reason is not that the comparison is wrong — it was corrected twice — but
+that inside that window it is fed copies that have not caught up (the download
+~36 s behind, the floor's list a poll behind, the clear's own `DoneAt`
+indistinguishable from a tap), and this feature exists to carry the **floor's**
+work up to the sheet, not to second-guess the office. Outside the window
+nothing changes: last-writer-wins still decides and a genuine floor tap still
+paints. **The cost, plainly: a floor tap made inside the window is deferred by
+up to three minutes** — never lost, because the writer re-plans from the
+current list on every pass, and a pass that deferred anything now arms the same
+30 s follow-up a capped pass uses. **The hole it does not close** is a second
+dashboard, or a reload, inside the download lag: it has no record of the
+office's action at all, so it cannot stand down for it. Closing that needs an
+`OfficeAt` column on the `Glass station` row — a decision for the owner.
 
 **The office's stamp is per JOB, and the clear's own `DoneAt` is the office's.**
 Fixed 2026-09-10 after the owner saw it in production: `glassOfficeStamp` was

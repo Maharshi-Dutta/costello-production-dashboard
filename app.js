@@ -2068,6 +2068,35 @@ function glassOfficeJobStamp(j, log) {
   return best;
 }
 
+/** Is an office change to THIS job's glass still settling? While it is, the
+    colour writer stands down for this job (see glassColourPlan).
+
+    The window is PENDING_MS - the same three minutes every other optimistic
+    hold in this app uses, and for the same reason: it is how long the
+    downloaded copy, the dashboard's own sheets and the floor's list can take
+    to agree on something this dashboard has already done.
+
+    It is one job's window, not the sheet's. An un-tick on one job says nothing
+    about another and must never hold the floor's work off the whole sheet. */
+/* How many jobs the guard stood down for in this pass. A deferred job is not a
+   dropped one: the writer re-plans from whatever the list says every time it
+   runs, so the colour lands on a later pass. But it only runs when something
+   moves - a floor tap, or a load - and on a quiet evening nothing may move
+   again for hours, which would leave the sheet stale for no good reason. So a
+   pass that deferred anything comes back, through the follow-up the cap
+   already uses: one timer, no requests, and it stops as soon as the windows
+   have closed and there is nothing left to do. */
+let GLASS_SETTLING = 0;
+function officeSettling(j, log) {
+  if (!j || !j.id) return false;
+  const held = PENDING[j.id] || PENDING[String(j.id).toUpperCase()];
+  /* a hold on any glass item of this job: the office has clicked and the file
+     has not caught up. Never a `gc` hold, which is this feature's own write. */
+  if (held && held.cp && Object.keys(held.cp).some(k => k.indexOf("glass:") === 0)) return true;
+  const at = glassOfficeJobStamp(j, log);
+  return at > 0 && (Date.now() - at) < PENDING_MS;
+}
+
 /** The Dashboard Log, indexed by job and glass type, in one pass.
     CHANGES can be four hundred lines and the writer asks about four columns of
     every job on the sheet, so asking it line by line would be the log walked
@@ -2120,6 +2149,41 @@ function glassLogStamps() {
 function glassColourPlan(j, log) {
   if (!j || j.done) return null;             // a gold row is finished work: leave it whole
   if (!PRODMAP || !PRODMAP.glass || typeof ST === "undefined") return null;
+  /* THE OFFICE IS ABSOLUTE, AND THIS IS WHERE THAT IS ENFORCED.
+
+     The owner's rule, 2026-09-10: "the hierarchy is Excel, then master
+     dashboard, then glass. Any change from the dashboard is absolute. If the
+     glass updates the ticks it comes golden instantly, correct, and should not
+     change. An un-tick from the dashboard is absolute - no thinking, no
+     arguing."
+
+     So while an office change on this job's glass is still settling, this
+     function makes NO decision about the job. It does not compare stamps, it
+     does not plan, it does not write. Not because the comparison is wrong -
+     it was corrected twice - but because inside that window it is being fed
+     copies that have not caught up, and it cannot tell them apart from the
+     real thing: the downloaded workbook is about 36 seconds behind, the
+     floor's list is a poll behind, and the clear's own DoneAt looks exactly
+     like a tap. The owner watched the gold come back after both stamp fixes.
+     This one stops arguing instead of trying to win the argument.
+
+     Two readings of "still settling", and either is enough, because the office
+     must be safe in every one of the places its action is read from:
+
+       - a hold on any of this job's glass items. pend() stamps it at the
+         CLICK and applyPending lets it go only when the downloaded file agrees
+         - which is precisely the window this needs;
+       - the office's own stamp on the job (glassOfficeJobStamp: the holds, the
+         Dashboard Progress rows, the Dashboard Log lines including the clear's
+         own, and OFFICE_FLOOR_AT) being younger than PENDING_MS. That covers
+         the moment after a hold is released, and a second dashboard or a
+         reload, where the hold never existed.
+
+     What this feature is FOR is carrying the FLOOR's work up to the sheet. It
+     is not for second-guessing the office, and outside this window it does not
+     change at all: last-writer-wins still decides, and a genuine floor tap
+     still paints. */
+  if (officeSettling(j, log)) { GLASS_SETTLING++; return null; }
   const g = stationForJob(j.id);
   if (!g) return null;                       // never fed to the floor
   const floorAt = stampMs(ST.floorStamp(g));
@@ -2224,6 +2288,7 @@ async function glassColourRun() {
      returning is what guarantees the rest of a big catch-up still goes out. */
   if (glassRunning) { glassColourAgain(); return 0; }
   const all = [];
+  GLASS_SETTLING = 0;
   const log = glassLogStamps();              // one pass over the log, not one per column
   for (let i = 0; i < ALL.length; i++) {
     const j = ALL[i];
@@ -2232,7 +2297,13 @@ async function glassColourRun() {
     const plan = glassColourPlan(j, log);
     if (plan) all.push({ id: j.id, plan: plan });
   }
-  if (!all.length) return 0;
+  if (!all.length) {
+    /* nothing to paint now - but if that is because the office is still
+       settling on some job, come back for it rather than waiting for the next
+       thing to happen to move */
+    if (GLASS_SETTLING) glassColourAgain();
+    return 0;
+  }
   /* the cap counts CELLS, because a cell fill is what reaches the workbook -
      one job is one batched request carrying up to four of them */
   const todo = [];
@@ -2265,7 +2336,7 @@ async function glassColourRun() {
        through its own checkpoint chain inside that, so an office tick and a
        floor colour for one job can never interleave. */
     const r = await stationSend(todo.map(x => () => cpChain(x.id, () => glassColourWrite(x.id, x.plan))));
-    if (!whole || r.failed) glassColourAgain();
+    if (!whole || r.failed || GLASS_SETTLING) glassColourAgain();
   } finally {
     glassRunning = false;
   }
