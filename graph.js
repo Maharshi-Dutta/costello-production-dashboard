@@ -658,9 +658,17 @@ async function batchRun(reqs) {
       { headers: Object.assign({}, h, r.body ? { "Content-Type": "application/json" } : {}) })) };
     const r = await call("POST", "/$batch", body);
     const byId = {}; (r.responses || []).forEach(x => { byId[x.id] = x; });
-    const bad = reqs.map(q => byId[q.id]).find(x => !x || x.status >= 400);
-    if (!bad) return reqs.map(q => (byId[q.id] || {}).body || {});
+    /* findIndex, not find: a request Graph did not answer at all has no entry
+       here, and `find` would hand back that missing entry - undefined - which
+       is the very same answer it gives when nothing failed. So a batch that
+       applied NOTHING used to count as applied, and the caller went on to hold
+       a colour over a cell it had never changed. A missing answer is a
+       failure, and not a retryable one: we do not know what happened. */
+    const at = reqs.findIndex(q => { const x = byId[q.id]; return !x || x.status >= 400; });
+    if (at < 0) return reqs.map(q => (byId[q.id] || {}).body || {});
+    const bad = byId[reqs[at].id];
     const txt = JSON.stringify((bad && bad.body) || {});
+    if (!bad) throw new Error("batch item failed: missing answer for request " + reqs[at].id);
     if (!sessionRetried && /InvalidSession|invalidSessionReCreatable/.test(txt)) {
       sessionRetried = true; sessionId = null; await openSession(); continue;
     }

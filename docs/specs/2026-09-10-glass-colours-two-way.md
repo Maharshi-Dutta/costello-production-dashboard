@@ -440,3 +440,122 @@ cells across 192 jobs"; the real figures are **193 glass jobs in production,
 130 filled / 129 gold / 1 yellow** across the eight glass columns. Gold and
 yellow were effectively right; the denominator matched nothing. §2 now carries
 the measured numbers, because the owner may end up quoting them.
+
+### G. The morning of 2026-09-11: the office's Clear masked the writer's paint instead of voiding it
+
+**Status: built, all suites green, not demoed, not committed. Live build
+eea3ec6 (20260910-1759) has the bug.**
+
+#### G1. What happened, in order
+
+Reproduced byte for byte in a stubbed browser before anything was written
+(`morning_repro.js` / `stub_morning.js` / `morning-V2g.json`), and pinned in a
+unit test that fails on eea3ec6 (`pin_untick_gold.js`).
+
+1. **At boot the colour writer legitimately painted a job gold.** The floor's
+   row read 49/49/49 and the office had no newer dated record, because
+   yesterday's un-tick of those items had not gone through the drawer. Nothing
+   about that was wrong — but it left no trace anywhere, which is why the
+   morning looked inexplicable (see G4).
+2. **The feeder locked the job** on the tablet fifteen seconds later, the
+   office's record now reading "done".
+3. **The office pressed Clear**, 33 s after the paint. Its `cp` hold on each
+   glass item outranked the writer's `gc` hold, and the drawer went white.
+4. **Six seconds later the download agreed with the Clear.** The office's own
+   hold was let go — correctly, the file now shows what it asked for — and the
+   writer's older `gc` hold, **still sitting underneath**, came straight back.
+   Gold, over a sheet the office had just made white.
+5. **It stood for eleven minutes forty seconds.** Amendment F had just made a
+   hold survive while the file disagrees (twelve reads at 45 s), so what used
+   to be a three-minute lie became an eleven-minute one — long enough to cross
+   the feeder's ten-minute `STATION_FEED_MS`, whose `officeComplete` read the
+   held gold as "the office says done" and wrote `OfficeDone: "Yes"`. **The
+   tablet re-locked at 0/0/0/0.**
+
+#### G2. The cause, in one line
+
+`applyPending` only ever **masked** a `gc` hold with a newer `cp` hold on the
+same glass type. It never dropped it. So the office's Clear hid the writer's
+gold rather than cancelling it, and the moment the Clear settled the gold was
+still there to come back.
+
+#### G3. The fix
+
+In `pend()`: when the office sets a `cp` hold on a `glass:<type>` item, any
+`gc` hold for that type is **discarded** — the value, its stamp and its
+give-up count. The office is absolute over the floor; the moment the office
+acts on a glass cell, the writer's un-landed paint of that cell is void.
+
+It is four lines, in the one place where the office's action is recorded, and
+it cannot be reached from anywhere else: `pend` is the only writer of
+`PENDING`, and only the drawer pends a `cp` hold. `pendEmpty` already treats an
+emptied `gc` bag as empty, so the entry is cleaned up on the next pass.
+
+**It voids only what was painted before the office acted.** A genuine floor tap
+after the Clear — once the office's own change has settled, per Amendment D —
+paints as it always did. Asserted, and it is the control that shows the fix is
+not "the office always wins".
+
+#### G4. Three secondary fixes, all from the same morning
+
+**A `$batch` reply that answers nothing counted as success** (`graph.js`). The
+test was `reqs.map(q => byId[q.id]).find(x => !x || x.status >= 400)` — and
+`find` hands back the *element*, which for a request Graph did not answer is
+`undefined`: the very same answer it gives when nothing failed. So a batch that
+applied nothing was treated as applied, and the caller went on to hold a colour
+over a cell it had never changed. Now `findIndex`, and a missing answer throws
+rather than retrying: we do not know what happened, so it is reported.
+
+**The writer left no trace in the office's history.** `glassColourWrite` wrote
+fills and nothing else (the colours spec, Amendment A12), so a job going gold
+by itself was invisible in Changes — the single biggest reason this morning
+could not be explained from the screen. It now writes one Dashboard Log line
+per paint: `Floor glass colours`, from `TG blank, TUFF blank` to `TG gold, TUFF
+gold`. A12's other reason stands untouched: still no `Dashboard Progress` row,
+because the floor counts one combined DG + TG number and a per-type count would
+be invented.
+
+**The wording of that line is load-bearing**, and there is a test that says so.
+`glassLogStamps` reads any entry beginning `Glass ` or `Glass:` as the **office**
+having spoken about that job's glass. This line is the **floor's** work. If it
+were named "Glass colours …" the writer's own paint would become an office
+stamp and out-rank the floor it came from — the exact inverse of the bug fixed
+in Amendment C. "Floor glass colours" begins with neither, as "Floor glass
+counters" does. Do not rename it.
+
+**The give-up message was worded for the wrong person.** `holdGaveUp` said
+*"the sheet still does not show your change to Glass TG — it may not have
+saved"* even when the hold was the writer's, and the office never made that
+change. It now reads *"the colour painted from the floor's work for R5033 TG is
+not showing in the sheet yet"* for a `gc` hold, and is unchanged for the
+office's own.
+
+#### G5. What flipped
+
+| check | on eea3ec6 | with the fix |
+|---|---|---|
+| a1 the Clear voids the writer's gold instead of masking it | **FAIL — gold still held** | PASS |
+| a2 so the drawer stays white when the file catches up | **FAIL — reads "done"** | PASS |
+| b1 the morning sequence ends with nothing owed | FAIL | PASS |
+| b2 and nothing warned about | PASS | PASS |
+| b3 the office's record says not done, so no re-lock | **FAIL — `officeComplete` true** | PASS |
+| c a genuine floor tap after the Clear still paints | PASS | PASS |
+| d the paint leaves one line in the office's history | FAIL | PASS |
+| e a `$batch` missing a response is a failure | FAIL | PASS |
+| f1 a stuck floor colour is given up on, once | PASS | PASS |
+| f2 and worded as the floor's colour | FAIL | PASS |
+
+**b3 is the tablet re-lock, reproduced in a unit test**: on the shipped build
+`officeComplete` answers *true* off the held gold, which is precisely what makes
+a feed write `OfficeDone: "Yes"` and grey the card at 0/0/0/0. b2, c and f1 are
+controls that already passed and are kept as such.
+
+#### G6. Worth telling the owner
+
+A job can still go gold **on its own** at boot, with no office action behind
+it, when the floor's row says finished and the office has no dated record for
+those items — for instance because they were un-ticked in Excel by hand rather
+than in the drawer. That is the colour rule working as designed (the colours
+spec's Amendment A5, "an office mark with no dated record always loses"), not a
+fault. What has changed is that it now says so in Changes, so the next time it
+happens it can be read off the screen instead of reproduced in a browser.

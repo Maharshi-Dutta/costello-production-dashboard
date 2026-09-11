@@ -376,7 +376,7 @@ and no body carried a phone, eircode, county, price or comment.
 | `test_phases.js` | phase derivation and the wheel | 26 |
 | `test_phases_list.js` | the phases list, scope split, dedupe | 35 |
 | `test_station.js` | floor stations end to end (offline), incl. tuff, the lock and its release by a clear, the seed, the office clear's vocabulary and a queued tap meeting its zeros | 245 |
-| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, the office-absolute guard, and a hold surviving a reload | 71 |
+| `test_glasscolour.js` | glass colours into `Production`: the rule, last-writer-wins (per job, outside the settling window), idempotence, the cap, the backoff, fills only, the office clear end to end, the observed un-tick repaint, the office-absolute guard, a hold surviving a reload, and the office's Clear voiding the writer's paint | 77 |
 | `automation/test_digest.js` | the alerts digest | 26 |
 
 Pattern: `vm.runInThisContext` loads the real source; `global.fetch` is a
@@ -839,6 +839,30 @@ forgetting it would leave the tablet gold — exactly the bug. `FLOORCLEAR_OWED`
 counts the refusals, one timer retries after 30 s, and after three attempts the
 office is told in a toast that names the numbers still on the tablet. The
 retry re-derives, so a job the office has re-ticked meanwhile is dropped.
+
+**An office action voids the writer's un-landed paint of that cell** (the
+morning of 2026-09-11). `applyPending` only ever *masked* a `gc` hold with a
+newer `cp` hold on the same glass type; it never dropped it. So the writer
+painted a job gold at boot and held it; the office pressed Clear 33 s later and
+its `cp` hold outranked the gold, so the drawer went white; six seconds after
+that the download agreed with the **Clear**, the office's own hold was let go —
+and the writer's older gold, still underneath, came straight back over a sheet
+the office had just made white. With holds now kept while the file disagrees
+(below) that lie stood for **11 min 40 s**, crossing the feeder's ten-minute
+window, whose `officeComplete` read the held gold as "the office says done" and
+re-locked the tablet at 0/0/0/0. Fixed in `pend()`: an office `cp` hold on
+`glass:<type>` discards any `gc` hold for that type — value, stamp and give-up
+count. Only what was painted *before* the office acted; a genuine floor tap
+after it still paints.
+
+Three things found with it: a `$batch` reply **missing** a response counted as
+success (`find` returns `undefined` both for a missing entry and for no
+failure) — now `findIndex`, and a missing answer throws; the writer wrote **no
+Dashboard Log line**, so a job going gold by itself was invisible in Changes —
+it now writes one per paint, named `Floor glass colours` because
+`glassLogStamps` must never read it as an office stamp (the same constraint as
+`Floor glass counters`, and asserted); and `holdGaveUp` said "your change …
+may not have saved" for a colour the office never made — now worded by source.
 
 **A hold never expires into a stale copy** (2026-09-10, and this was the
 un-tick gold — not the writer, not a stamp). The owner un-ticks, then

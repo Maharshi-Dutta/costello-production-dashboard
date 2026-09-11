@@ -111,7 +111,29 @@ function pend(id, patch) {
        count it replaced was itself unknown, so there is nothing to put back */
     for (const k in patch.cp) {
       if (patch.cp[k] == null) { delete p.cp[k]; delete t["cp:" + k]; }
-      else { p.cp[k] = patch.cp[k]; t["cp:" + k] = now; }
+      else {
+        p.cp[k] = patch.cp[k]; t["cp:" + k] = now;
+        /* THE OFFICE IS ABSOLUTE, AND THIS IS WHERE THE MORNING OF 2026-09-11
+           WENT WRONG. A `gc` hold is the colour writer saying "I have painted
+           this cell and the download has not caught up". applyPending only
+           ever MASKED one with a newer cp hold on the same glass type - it
+           never dropped it. So the office pressed Clear, its cp hold outranked
+           the writer's gold and the drawer went white; six seconds later the
+           download agreed with the CLEAR, the office's own hold was let go,
+           and the writer's older gold - still sitting underneath - came
+           straight back over a sheet the office had just made white. It then
+           stood for eleven and a half minutes (a hold is now kept while the
+           file disagrees, twelve reads), long enough to cross the feeder's ten
+           minute window and re-lock the tablet at 0/0/0/0.
+
+           The moment the office acts on a glass cell, the writer's un-landed
+           paint of that cell is VOID. Not masked - discarded. */
+        const ty = k.indexOf("glass:") === 0 ? k.slice(6) : "";
+        if (ty && p.gc && Object.prototype.hasOwnProperty.call(p.gc, ty)) {
+          delete p.gc[ty]; delete t["gc:" + ty];
+          if (p.n) delete p.n["gc:" + ty];
+        }
+      }
     }
   }
   /* A glass colour the floor's work has just put into the sheet, held the same
@@ -207,9 +229,15 @@ function holdStuck(p, key, fresh) {
   return true;
 }
 /** Said once, when a change is given up on. Never one per read. */
-function holdGaveUp(job, what) {
-  toast(job + ": the sheet still does not show your change to " + what +
-        " — it may not have saved. Check the sheet.", true);
+function holdGaveUp(job, what, floor) {
+  /* worded by WHOSE change it was. "your change may not have saved" is wrong
+     for a colour this dashboard painted from the floor's counters: the office
+     never made that change and has nothing to check for having made it. */
+  toast(floor
+    ? job + ": the colour painted from the floor's work for " + what +
+      " is not showing in the sheet yet. Check the sheet."
+    : job + ": the sheet still does not show your change to " + what +
+      " — it may not have saved. Check the sheet.", true);
 }
 /** A page that starts up holding something asks to be re-read, because after a
     reload nothing else ever will: the reconcile timer is gone with the old
@@ -295,7 +323,7 @@ function applyPending(list, fresh) {
       if (!stale("gc:" + k)) return;
       if (holdStuck(p, "gc:" + k, fresh)) return;
       letGcGo(k);
-      holdGaveUp(j.id, "Glass " + String(k).toUpperCase());
+      holdGaveUp(j.id, "Glass " + String(k).toUpperCase(), true);
     });
     if (pendEmpty(p)) { delete PENDING[j.id]; dropped = true; return j; }
     const c = Object.assign({}, j);
@@ -1974,6 +2002,11 @@ function cpReplayQueue() {
    no-fill as the same nothing, so a cell that already has neither colour is
    left alone rather than painted white for the sake of it.                  */
 const GLASS_PROD_SHEET = "Production";
+/* What the Dashboard Log calls a paint made from the floor's counters. Said
+   once, and deliberately not beginning "Glass": glassLogStamps would read that
+   as the office having spoken about the job's glass, and this is the floor's
+   work, not the office's. */
+const GLASSPAINT_LOG = "Floor glass colours";
 const GLASS_HEX = { gold: GOLD_HEX, yellow: YELLOW_HEX, "": WHITE_HEX };
 const GLASSC_BUSY = {};        // job -> a colour write for it is in the air
 /* Cells per run, and three at a time - the same numbers and the same shape as
@@ -2366,6 +2399,22 @@ async function glassColourWrite(job, plan) {
     });
     delete GLASSC_FAIL[job];                 // it works again: forget the backoff
     setGlassFoot();
+    /* one line per paint, in the office's own history. Until 2026-09-11 this
+       feature wrote nothing anywhere (the colours spec's Amendment A12), so a
+       job going gold by itself left no trace at all - which is exactly why the
+       morning of 2026-09-11 was inexplicable until the whole thing was
+       reproduced in a browser. A12's other reason stands and is not touched:
+       no Dashboard Progress row, because the floor counts one combined DG + TG
+       number and a per-type count would be invented.
+
+       The WORDING is load-bearing. glassLogStamps reads any entry beginning
+       "Glass " or "Glass:" as the OFFICE having spoken about that job's glass;
+       this line is the FLOOR's work and must never be read as one, or the
+       writer's own paint would out-rank the floor it came from. "Floor glass
+       colours" begins with neither, exactly as "Floor glass counters" does -
+       do not rename it to start with Glass. */
+    const said = k => plan.map(p => p.type.toUpperCase() + " " + (p[k] || "blank")).join(", ");
+    noteChange(job, GLASSPAINT_LOG, said("from"), said("to"));
     scheduleReconcile();                     // read the file back once it has caught up
   } catch (e) {
     /* let the holds go rather than putting an old colour back: what the sheet

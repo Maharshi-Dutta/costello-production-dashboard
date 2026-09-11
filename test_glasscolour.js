@@ -59,6 +59,7 @@ global.document = {
 const BOOK = {};
 const CALLS = [];
 let FAIL_FILL = 0;                            // n fills to refuse with a 403
+let DROP_BATCH_ID = 0;                        // n $batch replies to send one response short
 const kk = (r, c) => r + "|" + c;
 const colNum = s => { let n = 0; for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64); return n; };
 function sh(name) { return BOOK[name] || (BOOK[name] = { v: {}, fill: {} }); }
@@ -154,7 +155,11 @@ global.fetch = async (url, init) => {
     /* every request inside a batch is a request: the "over the whole run"
        assertions must see them, not the envelope */
     (body.requests || []).forEach(q => ALLREQ.push({ method: q.method, path: q.url, body: q.body }));
-    res = ok({ responses: body.requests.map(q => Object.assign({ id: q.id }, route(q.method, q.url, q.body))) });
+    let rs = body.requests.map(q => Object.assign({ id: q.id }, route(q.method, q.url, q.body)));
+    /* Graph can answer a batch without answering every request in it. That is
+       not a success for the ones it left out. */
+    if (DROP_BATCH_ID) { DROP_BATCH_ID--; rs = rs.slice(1); }
+    res = ok({ responses: rs });
   } else {
     ALLREQ.push({ method: init.method, path: path, body: body });
     res = route(init.method, path, body);
@@ -184,7 +189,11 @@ global.toast = (m, err) => TOASTS.push({ m: String(m), err: !!err });
 const A = vm.runInThisContext.bind(vm);        // reach app.js' own let-bound state
 const settle = ms => new Promise(r => setTimeout(r, ms == null ? 60 : ms));
 const reset = () => { CALLS.length = 0; TOASTS.length = 0; };
-const fills = () => CALLS.filter(c => c.kind === "fill");
+/* fills on the PRODUCTION sheet, which is what every assertion here means by
+   one. Since 2026-09-11 the writer also leaves a Dashboard Log line, and
+   creating that sheet fills its header row once - a fill, on a sheet none of
+   these tests are about. */
+const fills = () => CALLS.filter(c => c.kind === "fill" && c.sheet === "Production");
 /* the backoff record is a module-level const object, so a test clears it the
    same way test_checkpoints.js ages a hold: by reaching in */
 const clearFail = () => A("Object.keys(GLASSC_FAIL).forEach(k => delete GLASSC_FAIL[k]); setGlassFoot();");
@@ -1781,6 +1790,161 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   holdOff();
   A("PENDING = {}; savePending(); CHANGES = [];");
   pass("a reload cannot orphan a pending write: a page that boots holding one asks for a re-read");
+
+
+  /* ================= 13. the office's clear voids the writer's paint =========
+     THE MORNING OF 2026-09-11, reproduced byte for byte before this was
+     written. What the owner saw: a job went gold on its own at boot, the
+     office pressed Clear, the drawer went white for six seconds - and then
+     came back GOLD over a sheet the office had just made white, and stayed
+     that way for eleven and a half minutes, long enough for the feeder's
+     ten-minute window to write OfficeDone: "Yes" and re-lock the tablet at
+     0/0/0/0.
+
+     The mechanism is one line of applyPending. A `gc` hold - the colour writer
+     saying "I have painted this cell gold and the download has not caught up"
+     - was only ever MASKED by a newer `cp` hold on the same glass type, never
+     dropped. So: the writer paints gold and holds it; 33 s later the office
+     presses Clear and its cp hold outranks the gc one, and the drawer goes
+     white; six seconds after that the download agrees with the CLEAR, the
+     office's own hold is let go - and the writer's older gold hold, still
+     sitting underneath, comes straight back.
+
+     The rule: the office is absolute over the floor. The moment the office
+     acts on a glass cell, the writer's un-landed paint of that cell is VOID -
+     not masked, discarded. */
+  /* the writer's held colours for that job, or "null" when it holds none -
+     an emptied bag reads the same as no bag, because pendEmpty treats it so */
+  const gcHold = () => A("(function(){ var g = (PENDING['R7001'] || {}).gc; " +
+    "return JSON.stringify(g && Object.keys(g).length ? g : null); })()");
+  const drawerGlass = () => A("JSON.stringify(ALL[0].cp.glass)");
+
+  /* (a) THE PIN. Writer holds gold; office clears; the file catches up with
+     the CLEAR. The gold must be gone, not waiting underneath. */
+  j = scene(mkJob({ glass: { tg: 49, tuff: 10, "not tuff": 39 },
+                    cp: { win: "", drs: "", glass: {}, prod: {} } }),
+            row({ Total: 49, TuffTotal: 10, Cut: 49, Hotmelt: 49, Glazed: 49, Tuff: 10,
+                  DoneAt: isoAt(16, 0), DoneBy: "Person B" }));
+  A("PENDING = {}; savePending();");
+  A("pend('R7001', { gc: { tg: 'gold', tuff: 'gold', 'not tuff': 'gold' } })");
+  assert.strictEqual(gcHold(), '{"tg":"gold","tuff":"gold","not tuff":"gold"}',
+    "the writer has painted three cells gold and is holding them");
+  A("pend('R7001', { cp: { 'glass:tg': 0, 'glass:tuff': 0, 'glass:not tuff': 0 } })");
+  assert.strictEqual(gcHold(), "null",
+    "the office presses Clear, and the writer's un-landed gold is VOID - not masked, gone");
+  global.__pinWhite = mkJob({ glass: { tg: 49, tuff: 10, "not tuff": 39 },
+                              cp: { win: "", drs: "", glass: {}, prod: {} } });
+  A("ALL = applyPending([__pinWhite], true)");
+  assert.strictEqual(gcHold(), "null", "so when the file catches up there is nothing left to come back");
+  assert.ok(drawerGlass() === "{}" || drawerGlass() === '{"tg":"","tuff":"","not tuff":""}',
+    "and the drawer reads white over a white sheet, not gold: " + drawerGlass());
+  pass("an office Clear voids the colour writer's un-landed paint of those cells, instead of masking it");
+
+  /* (b) THE MORNING SEQUENCE, in order, on the parses the dashboard really
+     saw: the drawer must be white from the Clear onwards and stay white
+     however many times the file is re-read, with nothing owed and nothing to
+     warn about. */
+  TOASTS.length = 0;
+  for (let i = 0; i < 6; i++) {
+    global.__mw = mkJob({ glass: { tg: 49, tuff: 10, "not tuff": 39 },
+                          cp: { win: "", drs: "", glass: {}, prod: {} } });
+    A("ALL = applyPending([__mw], true)");
+    assert.ok(drawerGlass() === "{}" || drawerGlass() === '{"tg":"","tuff":"","not tuff":""}',
+      "re-read " + (i + 1) + ": still white, not gold");
+  }
+  assert.strictEqual(A("Object.keys(PENDING).length"), 0, "nothing is owed on that job at all");
+  assert.strictEqual(TOASTS.filter(t => t.err).length, 0,
+    "and nothing is warned about: there is no stuck hold to give up on");
+  /* the eleven and a half minutes were what let the feeder re-lock the tablet.
+     With the office's clear standing, the office's own record says the job's
+     glass is NOT complete, so a feed writes OfficeDone: "No". */
+  assert.strictEqual(ST.officeComplete(A("glassCounts(byId('R7001'))")), false,
+    "the office's record says this job's glass is not done, so a feed cannot re-lock the tablet");
+  pass("the morning sequence ends white and stays white: no stale gold, no stuck hold, no re-lock");
+
+  /* (c) THE MIRROR: the office discards only what was painted BEFORE it acted.
+     A genuine floor tap after the Clear - once the office's own change has
+     settled - still reaches the sheet. */
+  const AGO = Date.now() - 260000;               // the office's clear, well past the settling window
+  j = scene(mkJob({ glass: { tg: 49 }, cp: { win: "", drs: "", glass: {}, prod: {} } }),
+            row({ Total: 49, TuffTotal: 0, Cut: 49, Hotmelt: 49, Glazed: 0, Tuff: 0,
+                  DoneBy: "Person A", DoneAt: new Date(Date.now() - 100000).toISOString(),
+                  CutBy: "Person A", CutAt: new Date(Date.now() - 100000).toISOString() }));
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  A("if (typeof OFFICE_FLOOR_AT !== 'undefined') OFFICE_FLOOR_AT['R7001'] = " +
+    JSON.stringify(new Date(AGO).toISOString()) + ";");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1,
+    "the floor cut and hotmelted after the office's clear had settled, so it paints");
+  await settle();
+  assert.strictEqual(fillOn("AZ7"), YELLOW, "TG goes yellow from the floor's own work");
+  assert.strictEqual(gcHold(), '{"tg":"yellow"}', "and the writer holds it, as it always did");
+  A("if (typeof OFFICE_FLOOR_AT !== 'undefined') " +
+    "Object.keys(OFFICE_FLOOR_AT).forEach(function (k) { delete OFFICE_FLOOR_AT[k]; });");
+  pass("the office voids only the paint that went out before it acted: a later floor tap still paints");
+
+  /* (d) AND THE PAINT IS IN THE OFFICE'S OWN HISTORY NOW. A job going gold by
+     itself left no trace anywhere, which is why this morning was inexplicable
+     until the whole thing was reproduced. One line per paint - and it must NOT
+     be read back as an office stamp, or the writer's own paint would out-rank
+     the floor it came from. */
+  const paintLine = A("CHANGES").filter(c => c.what === "Floor glass colours");
+  assert.strictEqual(paintLine.length, 1, "one line, for the one paint");
+  assert.strictEqual(paintLine[0].job, "R7001");
+  assert.ok(/TG/.test(paintLine[0].to) && /yellow/.test(paintLine[0].to),
+    "saying which columns went to which colour: " + paintLine[0].to);
+  assert.ok(/blank|gold|yellow/.test(paintLine[0].from), "and what they were: " + paintLine[0].from);
+  assert.strictEqual(A("(function(){ var keep = CHANGES; " +
+    "CHANGES = CHANGES.filter(function (c) { return c.what === 'Floor glass colours'; }); " +
+    "var r = Object.keys(glassLogStamps()).length; CHANGES = keep; return r; })()"), 0,
+    "and glassLogStamps does not read it as the office having spoken - it is the FLOOR's work");
+  assert.ok("Floor glass colours".toUpperCase().indexOf("GLASS ") !== 0 &&
+            "Floor glass colours".toUpperCase().indexOf("GLASS:") !== 0,
+    "which is what the wording buys, and why it must not be renamed to start with Glass");
+  pass("every paint the writer makes is one line in the office's own history, and never an office stamp");
+
+  /* (e) A BATCH THAT ANSWERS NOTHING IS A FAILURE, not a success. A $batch
+     reply missing a response id used to satisfy `find(x => !x || x.status >=
+     400)` - which answers undefined for a missing entry, the same as for no
+     failure at all - so a batch that applied nothing counted as applied, and
+     left a gc hold over a cell it had not changed. */
+  j = scene(mkJob({ glass: { tg: 49 }, cp: { win: "", drs: "", glass: {}, prod: {} } }),
+            row({ Total: 49, TuffTotal: 0, Cut: 49, Hotmelt: 49, Glazed: 0, Tuff: 0,
+                  DoneBy: "Person A", DoneAt: new Date(Date.now() - 100000).toISOString() }));
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  A("if (typeof OFFICE_FLOOR_AT !== 'undefined') OFFICE_FLOOR_AT['R7001'] = " +
+    JSON.stringify(new Date(AGO).toISOString()) + ";");
+  reset();
+  DROP_BATCH_ID = 1;                              // the reply comes back one response short
+  let batchThrew = "";
+  try { await CW.batchWrite([{ method: "PATCH", url: "/x/workbook/worksheets('Production')/range(address='AZ7')/format/fill", body: { color: "#FFFF00" } }]); }
+  catch (e) { batchThrew = (e && e.message) || String(e); }
+  DROP_BATCH_ID = 0;
+  assert.ok(batchThrew, "a batch whose reply is missing a response is a failure, not a success");
+  assert.ok(/missing/i.test(batchThrew), "and it says so: " + batchThrew);
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  A("if (typeof OFFICE_FLOOR_AT !== 'undefined') " +
+    "Object.keys(OFFICE_FLOOR_AT).forEach(function (k) { delete OFFICE_FLOOR_AT[k]; });");
+  pass("a $batch reply that answers nothing cannot leave a colour held over a cell it never changed");
+
+  /* (f) AND THE GIVING-UP MESSAGE IS WORDED BY WHOSE CHANGE IT WAS. "your
+     change may not have saved" is wrong for a colour this dashboard painted
+     from the floor's counters - the office never made that change. */
+  A("PENDING = {}; savePending(); pend('R7001', { gc: { tg: 'gold' } });");
+  A("PENDING['R7001'].t['gc:tg'] -= 200000; PENDING['R7001'].at -= 200000; savePending();");
+  TOASTS.length = 0;
+  global.__gw = mkJob({ glass: { tg: 49 }, cp: { win: "", drs: "", glass: {}, prod: {} } });
+  for (let i = 0; i < 20 && A("!!PENDING['R7001']"); i++) {
+    A("if (reconcileT) { clearTimeout(reconcileT); reconcileT = null; } holdForceAt = 0;");
+    A("ALL = applyPending([__gw], true)");
+  }
+  const gwarn = TOASTS.filter(t => t.err);
+  assert.strictEqual(gwarn.length, 1, "one message, once");
+  assert.ok(/from the floor/i.test(gwarn[0].m) && !/your change/i.test(gwarn[0].m),
+    "worded as the floor's colour, not the office's own change: " + gwarn[0].m);
+  A("if (reconcileT) { clearTimeout(reconcileT); reconcileT = null; } holdForceAt = 0;");
+  A("PENDING = {}; savePending(); CHANGES = [];");
+  pass("a colour painted from the floor is given up on in the floor's words, not the office's");
 
   /* ================= 11. the whole run, end to end ================= */
   const prodWrites = ALLREQ.filter(r => r.method !== "GET" && /worksheets\('Production'\)/.test(r.path));
