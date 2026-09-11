@@ -1,0 +1,7 @@
+# Files the code graph should skip: third-party bundles and generated output.
+vendor/
+node_modules/
+docs/pdf/
+docs/img/
+snap_*.xlsx
+graphify-out/

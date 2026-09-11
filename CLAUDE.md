@@ -17,7 +17,10 @@ Two pages ship from this repo:
 
 Read `docs/REFERENCE.md` (what has been built and how, feature by feature),
 `docs/ARCHITECTURE.md`, `docs/SUPPORT.md`, `docs/STATIONS.md` and
-`docs/specs/README.md` before making any change. They are kept accurate to
+`docs/specs/README.md` before making any change. **If something is
+misbehaving, read `docs/HISTORY.md` section B first** — it is the record of
+every bug that cost real time, written from the symptom, and several of them
+looked identical to each other with entirely different causes. They are kept accurate to
 the code — if something here or there looks wrong, the code wins and the
 docs need fixing.
 
@@ -260,3 +263,27 @@ real workbook through real dashboard use.
 - `docs/SUPPORT.md` — troubleshooting for sign-in, permissions, stale builds, alerts.
 - `docs/STATIONS.md` — what a floor station is, the glass station data model, admin setup.
 - `docs/specs/README.md` — index of every feature spec, with status.
+- `docs/HISTORY.md` — the running record: the owner's decisions and why (A),
+  every bug that cost time and what actually caused it (B), the build log (C),
+  and a symptom index (D). Add to it at every ship: a feature gets a line in
+  C, an owner decision an entry in A, and anything that took more than one
+  attempt to fix an entry in B.
+
+## Seeing the code as a graph
+
+`graphify` (Claude Code plugin `graphify@pleaseai`, CLI `graphifyy`) builds a
+navigable graph of this repo — every function and file as a node, with the
+calls between them as edges. The output lands in `graphify-out/` and is
+**gitignored**; `.graphifyignore` keeps the vendored bundles in `vendor/` out
+of it, since minified third-party code produces thousands of useless nodes.
+
+```
+graphify update .          # rebuild after code changes (deterministic, no LLM)
+graphify tree              # collapsible file/symbol tree -> graphify-out/GRAPH_TREE.html
+graphify god-nodes         # the most connected functions, i.e. the real hubs
+graphify query "how does an office un-tick reach the tablet"
+```
+
+`graphify-out/graph.html` is the interactive graph; `GRAPH_REPORT.md` is the
+plain-language summary. Rebuild it after any sizeable change, or the graph
+quietly describes code that no longer exists.

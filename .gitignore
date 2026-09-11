@@ -1,3 +1,6 @@
 node_modules/
 package-lock.json
 snap_*.xlsx
+graphify-out/
+.graphify_analysis.json
+.graphify_labels.json
