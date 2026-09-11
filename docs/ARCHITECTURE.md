@@ -50,7 +50,7 @@ what it downloads, a person's own edit would appear to work and then vanish
 the next time the page refreshed and re-downloaded a still-stale file.
 
 The fix is `PENDING` (`app.js`): every optimistic write is held in memory
-and in `localStorage` (`cw_pending`) for up to 180 seconds (`PENDING_MS`),
+and in `localStorage` (`cw_pending`) for up to 180 seconds (`PENDING_MS`) — for a section move, mark-ready, a product status and a hand-set phase only, since 2026-09-11 —
 each field tracked with its own timestamp. `applyPending(list, fresh)`
 overlays these holds onto whatever was just parsed; when a *freshly*
 downloaded file agrees with a held value, that hold is dropped early so
@@ -185,7 +185,7 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 |---|---|
 | `graph.js` | MSAL sign-in, token acquisition (with the quiet/popup split above), all Graph HTTP calls (`call()`), workbook session handling and retry-on-`InvalidSession`, `findFile()`/download/version history, the dashboard-owned-sheet upserts, `moveJobRow()` and its supporting row-capture/write/border functions, the SharePoint list layer (`listId`/`listItems`/`listUpsert`/`listDelete`/`listAdd`/`listPatch`/`listDelta`), batching (`batchGet`/`batchWrite`/`batchRun`) |
 | `parser.js` | `parseWorkbook()`: turns a downloaded workbook into the job model; section/divider detection (`blocksFromValues`); fill-colour reading and the Cut/process/done ranking; **font-colour reading and the row colour code** (`fontOf`/`flagOf` → `j.flag`/`j.flagHex`, by hue range, hyperlinks and the two hyperlink theme colours excluded); **`parseJohnSheet()`** — "Production (2)" read on its own terms for the John print sheet, and never merged into the job model; `mapSheet()` header detection; `templateForJob()` (captures formatting for a move) |
-| `checkpoints.js` | pure logic only, no DOM: the Excel-colour-vs-stored-count merge rule (`itemState`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`), and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
+| `checkpoints.js` | pure logic only, no DOM: the record of checkpoint status (`cpRow`/`cpRowsFrom`/`itemState`, the `Dashboard progress` list since 2026-09-11 — **not** the Excel colour, which is `cpFileStatus`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`, record→fill→log), the one-time import (`cpImportPlan`) and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
 | `export.js` | pure logic only, no DOM, no network: filtering (`exportFilter`), row shaping, filename/summary text, building an ExcelJS workbook and a pdfmake document definition; §7b holds the fixed **John print sheet** (`exportJohnRows`/`buildJohnWorkbook`/`buildJohnDoc`), built from Production (2)'s own rows and the one export the owner sanctioned to carry a phone number; the eircode exclusion, and the phone exclusion from every other template, live here as hard rules with standing tests |
 | `app.js` | everything with a DOM: rendering the job list/drawer/windows, wiring every tap to a write, `PENDING`/`PENDV`/`PENDA` optimistic holds, sign-in/session boot, the phase-list read/write UI, the Export/Alerts/Versions windows, the radial selection menu, build-freshness polling |
 | `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassTotal`, `officeSeed`, `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `boardFilter`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
@@ -236,7 +236,10 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | kind of state | where |
 |---|---|
 | the job model itself | never stored — always re-derived from the downloaded workbook on each `load()` |
-| a person's own unconfirmed edit (checkpoint count, section move, alert, phase, glass colour from the floor) | in memory + `localStorage`, for up to 180 s, until the downloaded file (or list) agrees — `cw_pending`, `cw_pendv`, `cw_penda`, and the `phase` and `gc` fields inside `cw_pending` |
+| checkpoint status — what is ticked off, per job per item | the SharePoint list `Dashboard progress` (2026-09-11). Read in full at boot, then `listDelta` every 10 s; written at the click, before the Excel colour. Nothing about it lives in this browser |
+| the colour this dashboard last painted into each managed cell | `cw_painted`, so the safeguard can tell a hand-paint in Excel from a stale download, and so a fill the workbook refused is painted again on the next load |
+| whether the one-time import of the sheet's colours has drained in this browser | `cw_cpimported`; until it has, an item with no row reads as the sheet's colour so nothing on any screen changes during the switch-on window |
+| a person's own unconfirmed edit (section move, mark-ready, product status, alert, hand-set phase) | in memory + `localStorage`, for up to 180 s, until the downloaded file (or list) agrees — `cw_pending`, `cw_pendv`, `cw_penda`, and the `phase` field inside `cw_pending`. **Neither a checkpoint tick nor a glass colour is one of them** since 2026-09-11: both go straight onto the record, and `cw_pending` can no longer gain a `cp` or `gc` key at all |
 | exact checkpoint counts | `Dashboard Progress` sheet (Excel keeps only the cell colour) |
 | the audit trail | `Dashboard Log` sheet — every write anywhere in the app appends one line here |
 | custom groupings / saved views | `Dashboard Views` sheet |

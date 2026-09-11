@@ -77,18 +77,38 @@ const PENDING_MS = 180000;
    change would disappear the moment you pressed F5. */
 try { PENDING = JSON.parse(localStorage.getItem("cw_pending") || "{}"); } catch (e) { PENDING = {}; }
 const savePending = () => { try { localStorage.setItem("cw_pending", JSON.stringify(PENDING)); } catch (e) {} };
-/* The two vocabularies for one cell, and the translation between them. The
-   parser reads a fill and says "done" / "process" / "cut" / nothing; the glass
-   colour feature (§ glass colours, below) decides "gold" / "yellow" / "" and
-   writes the hex. A colour this feature does not own - the sheet's own Cut
-   green - has no word here at all, which is exactly how the writer knows to
-   leave that cell alone. */
+/* A page opened straight after the 2026-09-11 build can still be carrying `cp`
+   or `gc` holds written by the build before it - a checkpoint tick, or a
+   colour the glass writer had painted. Nothing reads either any more, so they
+   would sit in localStorage for ever keeping their job's entry alive. They go
+   once, here, on the way in. */
+(function dropOldCpHolds() {
+  let hit = false;
+  Object.keys(PENDING).forEach(id => {
+    const p = PENDING[id];
+    if (!p || (!p.cp && !p.gc)) return;
+    Object.keys(p.cp || {}).forEach(k => { if (p.t) delete p.t["cp:" + k]; if (p.n) delete p.n["cp:" + k]; });
+    Object.keys(p.gc || {}).forEach(k => { if (p.t) delete p.t["gc:" + k]; if (p.n) delete p.n["gc:" + k]; });
+    delete p.cp; delete p.gc; hit = true;
+    /* pendEmpty is declared further down, so the test is spelled out here */
+    if (!("done" in p) && p.blk == null && p.phase == null &&
+        !Object.keys(p.prods || {}).length) delete PENDING[id];
+  });
+  if (hit) savePending();
+})();
+/* The two vocabularies for one glass cell, and the translation between them.
+   The record says "done" / "process" / "" and the glass colour feature says
+   "gold" / "yellow" / "" (ST.glassColours), so one of these turns the floor's
+   answer into a status and the other turns a status back into a word for the
+   Dashboard Log line.
+
+   glassCellNow() lived here until 2026-09-11. It answered "what is the cell
+   showing", off the downloaded workbook, and the colour writer used it to
+   decide whether to write. Nothing decides on the file any more: the writer
+   compares the floor's stamp with the record's own row and writes through the
+   same path an office click does. */
 const GLASS_COLOUR_WORD = { done: "gold", process: "yellow", "": "" };
 const GLASS_WORD_CP = { gold: "done", yellow: "process", "": "" };
-/** What the Production sheet is showing for one of the four glass columns,
-    in the colour feature's own words - undefined when it is a colour this
-    feature has no business touching. */
-const glassCellNow = (j, type) => GLASS_COLOUR_WORD[((j.cp || {}).glass || {})[type] || ""];
 
 /* Each held thing carries its own timestamp: ticking a checkpoint must not
    extend the hold on an unrelated change made two minutes earlier. */
@@ -100,55 +120,25 @@ function pend(id, patch) {
   if ("done" in p && !t.done) t.done = was;
   if (p.blk != null && !t.blk) t.blk = was;
   Object.keys(p.prods || {}).forEach(k => { if (!t["prod:" + k]) t["prod:" + k] = was; });
-  Object.keys(p.cp || {}).forEach(k => { if (!t["cp:" + k]) t["cp:" + k] = was; });
-  Object.keys(p.gc || {}).forEach(k => { if (!t["gc:" + k]) t["gc:" + k] = was; });
   p.at = now;
   if ("done" in patch) { p.done = patch.done; t.done = now; }
   if (patch.prod) { p.prods[patch.prod.name] = patch.prod.status; t["prod:" + patch.prod.name] = now; }
-  if (patch.cp) {
-    p.cp = p.cp || {};
-    /* null means "stop holding this one" - used when a write failed and the
-       count it replaced was itself unknown, so there is nothing to put back */
-    for (const k in patch.cp) {
-      if (patch.cp[k] == null) { delete p.cp[k]; delete t["cp:" + k]; }
-      else {
-        p.cp[k] = patch.cp[k]; t["cp:" + k] = now;
-        /* THE OFFICE IS ABSOLUTE, AND THIS IS WHERE THE MORNING OF 2026-09-11
-           WENT WRONG. A `gc` hold is the colour writer saying "I have painted
-           this cell and the download has not caught up". applyPending only
-           ever MASKED one with a newer cp hold on the same glass type - it
-           never dropped it. So the office pressed Clear, its cp hold outranked
-           the writer's gold and the drawer went white; six seconds later the
-           download agreed with the CLEAR, the office's own hold was let go,
-           and the writer's older gold - still sitting underneath - came
-           straight back over a sheet the office had just made white. It then
-           stood for eleven and a half minutes (a hold is now kept while the
-           file disagrees, twelve reads), long enough to cross the feeder's ten
-           minute window and re-lock the tablet at 0/0/0/0.
+  /* NEITHER HOLD IS HERE ANY MORE (2026-09-11, spec steps 2 and 3).
 
-           The moment the office acts on a glass cell, the writer's un-landed
-           paint of that cell is VOID. Not masked - discarded. */
-        const ty = k.indexOf("glass:") === 0 ? k.slice(6) : "";
-        if (ty && p.gc && Object.prototype.hasOwnProperty.call(p.gc, ty)) {
-          delete p.gc[ty]; delete t["gc:" + ty];
-          if (p.n) delete p.n["gc:" + ty];
-        }
-      }
-    }
-  }
-  /* A glass colour the floor's work has just put into the sheet, held the same
-     way and for the same reason as a checkpoint tick: the downloaded file is
-     about 36 s behind the API, and without the hold the next refresh would
-     read the old colour back and the cell would flicker gold, blank, gold. The
-     value is the colour's own word ("gold" / "yellow" / ""); null drops the
-     hold, which is what a failed write does. */
-  if (patch.gc) {
-    p.gc = p.gc || {};
-    for (const k in patch.gc) {
-      if (patch.gc[k] == null) { delete p.gc[k]; delete t["gc:" + k]; }
-      else { p.gc[k] = patch.gc[k]; t["gc:" + k] = now; }
-    }
-  }
+     The `cp` hold was the office's own tick, kept alive while the downloaded
+     workbook - about 36 s behind - caught up. The `gc` hold was the colour
+     writer's un-landed paint, kept for the same reason. Both existed only
+     because status was read off a copy. Status is the `Dashboard progress`
+     record now: the office writes it at the click, the floor's colours are
+     written into it by the writer, and both screens read it directly. There is
+     no lag to hold against, nothing to reconcile, nothing to expire and
+     nothing to unmask.
+
+     What PENDING still holds is everything that really does ride the
+     downloaded file and has nowhere else to live: a whole-row section move
+     (`blk`), mark-ready (`done`), a product status (`prods`), and a hand-set
+     phase (`phase`, which rides the `Dashboard phases` list instead). Those
+     keep the three-minute window and the boot re-read. */
   if ("blk" in patch) { if (patch.blk == null) { delete p.blk; delete t.blk; } else { p.blk = patch.blk; t.blk = now; } }
   /* A hand-set phase, held while the SharePoint list catches up. 0-6 is a
      phase; -1 means "held as cleared" - the item has just been deleted and a
@@ -159,86 +149,19 @@ function pend(id, patch) {
 }
 const blkCat = b => b === 0 ? "secondhand" : b === 1 ? "wonttake" : b === 2 ? "collect" : "active";
 const pendEmpty = p => !("done" in p) && p.blk == null && p.phase == null &&
-  !Object.keys(p.prods || {}).length && !Object.keys(p.cp || {}).length &&
-  !Object.keys(p.gc || {}).length;
+  !Object.keys(p.prods || {}).length;
 
-/* ---- a hold is never let go into a copy that still disagrees with it -------
-   Owner's bug, observed 2026-09-10 with the mechanism. Un-tick a job's glass,
-   then REFRESH the page - which the owner does after an un-tick, because the
-   tablet looked locked, and not after a tick. `cw_pending` survives the reload
-   byte for byte, so the screen is correctly white. But:
+/* The hold machinery lived here until 2026-09-11 and is gone with the holds
+   it served: HOLD_GIVEUP, holdForceAt, reconcileForHolds(), holdStuck() and
+   holdGaveUp() - the "a hold is never let go into a copy that still disagrees
+   with it" mechanism of 2026-09-10, about seventy lines. It kept demanding
+   re-reads of the workbook until the download agreed with a colour this
+   dashboard had written, and gave up out loud after twelve disagreeing parses.
+   Nothing reads a colour to decide anything now, so there is nothing for a
+   re-read to settle. What remains is scheduleReconcile(), which simply asks
+   for the file again after a write so the parse catches up, and
+   bootReconcile(), which still matters for the holds that DO ride the file. */
 
-     · the 45 s reconcile timer died with the old page - it lives in memory -
-       and poll() only downloads when `lastModified` MOVES, which this
-       dashboard's own write was the last thing to do and the boot load has
-       already recorded. So nothing ever re-reads the file, and the page sits
-       on the stale gold parse with the hold as its only cover;
-     · and the hold's expiry was a pure clock test. The next time anything at
-       all called applyPending - a floor tap on a DIFFERENT job, through
-       glassColourRun - the three-minute-old hold was dropped and the gold
-       underneath was UNMASKED. Minutes after an un-tick, and it stayed until
-       something else happened to move lastModified.
-
-   So expiry no longer means "let go". It means "ask again":
-
-     · a hold kept because the parse still disagrees keeps a re-read armed;
-     · an EXPIRED hold whose parse still disagrees is kept, and a read is
-       demanded now rather than waited for;
-     · it is let go the moment the file agrees - and only then;
-     · after HOLD_GIVEUP fresh parses that still disagree it is let go anyway
-       and the office is told, in red, naming the job and the item: at that
-       point the write really may not have saved, and quietly showing a colour
-       we know is older than our own change is the one thing not to do.
-
-   What counts as "disagrees" is what a release would UNMASK, which is the
-   colour: the sheet carries only that. A held count whose colour the file
-   already shows expires quietly, exactly as before - otherwise an item whose
-   exact count the Dashboard Progress sheet cannot answer for would be held for
-   ever and warned about for nothing. */
-const HOLD_GIVEUP = 12;             // fresh parses still disagreeing: ~9 min at 45 s apart
-let holdForceAt = 0;                // when a read was last demanded for a hold
-/** Keep a re-read coming while a hold is waiting for the file. `soon` demands
-    one now - bounded to one a minute, because applyPending is called from
-    every render and a download per call would be a storm. */
-function reconcileForHolds(soon) {
-  if (soon) {
-    if (Date.now() - holdForceAt < 45000) { if (!reconcileT) scheduleReconcile(); return; }
-    holdForceAt = Date.now();
-    scheduleReconcile(0);
-    return;
-  }
-  if (!reconcileT) scheduleReconcile();
-}
-/** Would letting this checkpoint hold go change what the row SHOWS? The sheet
-    carries the colour and nothing else, so the colour is what a release can
-    unmask - and what this refuses to unmask while it is still wrong. */
-function cpHoldUnmasks(j, item, held) {
-  const total = cpTotal(j, item);
-  if (!(total > 0)) return false;
-  const st = itemState(j, item);
-  return !!st && cpStatusFor(held, total) !== st.status;
-}
-/** An expired hold the file still disagrees with. Answers whether to keep it.
-    Only a FRESH parse counts towards giving up: a parse is what could have
-    caught up, and applyPending is called far more often than the file is read. */
-function holdStuck(p, key, fresh) {
-  const n = p.n = p.n || {};
-  if (fresh) n[key] = (n[key] || 0) + 1;
-  if ((n[key] || 0) >= HOLD_GIVEUP) { delete n[key]; return false; }
-  reconcileForHolds(!fresh);
-  return true;
-}
-/** Said once, when a change is given up on. Never one per read. */
-function holdGaveUp(job, what, floor) {
-  /* worded by WHOSE change it was. "your change may not have saved" is wrong
-     for a colour this dashboard painted from the floor's counters: the office
-     never made that change and has nothing to check for having made it. */
-  toast(floor
-    ? job + ": the colour painted from the floor's work for " + what +
-      " is not showing in the sheet yet. Check the sheet."
-    : job + ": the sheet still does not show your change to " + what +
-      " — it may not have saved. Check the sheet.", true);
-}
 /** A page that starts up holding something asks to be re-read, because after a
     reload nothing else ever will: the reconcile timer is gone with the old
     page and poll() only downloads when lastModified moves - which this
@@ -263,9 +186,6 @@ function bootReconcile() {
 function applyPending(list, fresh) {
   const now = Date.now();
   let dropped = false;
-  /* the jobs this call can actually compare a hold against */
-  const seen = {};
-  (list || []).forEach(x => { const j = (x && x.raw) || x; if (j && j.id) seen[j.id] = 1; });
   Object.keys(PENDING).forEach(id => {
     const p = PENDING[id], t = p.t = p.t || {};
     const old = k => now - (t[k] || p.at || 0) > PENDING_MS;
@@ -273,14 +193,6 @@ function applyPending(list, fresh) {
     if (p.blk != null && old("blk")) { delete p.blk; delete t.blk; dropped = true; }
     if (p.phase != null && old("phase")) { delete p.phase; delete t.phase; dropped = true; }
     Object.keys(p.prods || {}).forEach(k => { if (old("prod:" + k)) { delete p.prods[k]; delete t["prod:" + k]; dropped = true; } });
-    /* cp and gc holds are settled against the parsed job below, where there is
-       something to compare them WITH. A hold on a job this call cannot see -
-       gone from the sheet, or a list that does not carry it - has nothing to
-       be compared against and still goes on the clock alone. */
-    if (!seen[id]) {
-      Object.keys(p.cp || {}).forEach(k => { if (old("cp:" + k)) { delete p.cp[k]; delete t["cp:" + k]; dropped = true; } });
-      Object.keys(p.gc || {}).forEach(k => { if (old("gc:" + k)) { delete p.gc[k]; delete t["gc:" + k]; dropped = true; } });
-    }
     if (pendEmpty(p)) { delete PENDING[id]; dropped = true; }
   });
   const out = list.map(x => {
@@ -297,57 +209,10 @@ function applyPending(list, fresh) {
       const set = PHASES_SET[String(j.id).toUpperCase()];
       if (p.phase < 0 ? !set : (set && set.phase === p.phase)) { delete p.phase; delete p.t.phase; dropped = true; }
     }
-    const stale = k => now - ((p.t || {})[k] || p.at || 0) > PENDING_MS;
-    const letCpGo = k => { delete p.cp[k]; delete p.t["cp:" + k];
-                           if (p.n) delete p.n["cp:" + k]; dropped = true; };
-    if (p.cp) Object.keys(p.cp).forEach(k => {
-      const st = itemState(j, k);
-      /* the file has caught up with this tick, to the count: let go */
-      if (fresh && st && st.done != null && st.done === p.cp[k]) { letCpGo(k); return; }
-      if (!stale("cp:" + k)) return;                    // still inside its three minutes
-      /* expired. If letting go would put back a colour we know is older than
-         our own change, it is NOT let go - the file is asked for again. */
-      if (!cpHoldUnmasks(j, k, p.cp[k])) { letCpGo(k); return; }
-      if (holdStuck(p, "cp:" + k, fresh)) return;
-      const label = typeof cpLabel === "function" ? cpLabel(k) : k;
-      letCpGo(k);
-      holdGaveUp(j.id, label);
-    });
-    /* the same rule for a glass colour: the file now shows what we painted, so
-       stop holding it and let the sheet speak for itself again */
-    const letGcGo = k => { delete p.gc[k]; delete p.t["gc:" + k];
-                           if (p.n) delete p.n["gc:" + k]; dropped = true; };
-    if (p.gc) Object.keys(p.gc).forEach(k => {
-      /* a gc hold IS a colour, so agreement and unmasking are the same test */
-      if (glassCellNow(j, k) === p.gc[k]) { letGcGo(k); return; }
-      if (!stale("gc:" + k)) return;
-      if (holdStuck(p, "gc:" + k, fresh)) return;
-      letGcGo(k);
-      holdGaveUp(j.id, "Glass " + String(k).toUpperCase(), true);
-    });
     if (pendEmpty(p)) { delete PENDING[j.id]; dropped = true; return j; }
     const c = Object.assign({}, j);
     c.raw = j;
     if ("done" in p) c.done = p.done;
-    if (p.cp && Object.keys(p.cp).length) { c.cp = cpWithHeld(j, p.cp); c.cpDone = Object.assign({}, p.cp); }
-    /* Both sides can be holding the same cell at once: the office ticked DG in
-       the drawer at 14:00:00 and a floor tap reached this dashboard two seconds
-       later, and both writes are still in the air. The newer of the two holds
-       is the one shown - which is the same last-writer-wins rule the writer
-       itself applies, applied to the two things this browser has not yet seen
-       land. Never edited in place: `c.cp` can still be the parsed job's own
-       object, and `x.raw` has to keep saying exactly what the file said. */
-    if (p.gc && Object.keys(p.gc).length) {
-      const glass = Object.assign({}, (c.cp || {}).glass);
-      Object.keys(p.gc).forEach(k => {
-        if ((p.t["cp:glass:" + k] || 0) > (p.t["gc:" + k] || 0)) return;
-        glass[k] = GLASS_WORD_CP[p.gc[k]];
-        /* the count the office's own tick was holding is no longer what this
-           cell is about, so the drawer must not go on showing it */
-        if (c.cpDone) delete c.cpDone["glass:" + k];
-      });
-      c.cp = Object.assign({}, c.cp, { glass: glass });
-    }
     if (p.blk != null) { c.blk = p.blk; c.cat = blkCat(p.blk); }   // moved in Excel; file still catching up
     c.prods = j.prods.map(y => Object.prototype.hasOwnProperty.call(p.prods, y.n)
       ? Object.assign({}, y, { st: p.prods[y.n] ? [p.prods[y.n]] : [] }) : y);
@@ -355,14 +220,6 @@ function applyPending(list, fresh) {
     return c;
   });
   if (dropped) savePending();
-  /* anything still held after a fresh parse is something the file has not
-     caught up with, so keep a re-read coming until it has. This is also the
-     answer to a download served OLDER than the one before it, which SharePoint
-     does: the hold stands and the next read is asked for. */
-  if (fresh && Object.keys(PENDING).some(id => {
-    const p = PENDING[id];
-    return Object.keys(p.cp || {}).length || Object.keys(p.gc || {}).length;
-  })) reconcileForHolds(false);
   if (list.blockNames) out.blockNames = list.blockNames;   // the grouped view reads them off the list
   return out;
 }
@@ -515,8 +372,13 @@ function diffJobs(prev, next, who, at) {
     Object.keys(ps).forEach(k => { if (!ns[k]) add(n.id, "Product removed - " + cap(k), ps[k].f + "/" + ps[k].s + "/" + ps[k].t, ""); });
     /* checkpoint colours, named the same way the dashboard's own log names them,
        so a tick made here is not also listed as a change spotted in Excel */
+    /* the parsed colour, deliberately: this list is "what changed in the Excel
+       file", and since 2026-09-11 the colour is a copy written FROM the record
+       rather than the record itself. A hand-paint shows up here and is also
+       adopted by the safeguard, which logs it under the same name - so
+       dropMine folds the two into one line. */
     cpItems(n).forEach(x => {
-      const was = cpStatus(p, x.key), is = cpStatus(n, x.key);
+      const was = cpFileStatus(p, x.key), is = cpFileStatus(n, x.key);
       if (was !== is) add(n.id, cpLabel(x.key), CPWORD[was], CPWORD[is]);
     });
     if (p.notes.length !== n.notes.length) {
@@ -689,6 +551,618 @@ async function setPhaseByHand(j, n) {
   return true;
 }
 
+/* ---------- checkpoint status lives in a SharePoint list ---------------------
+   Shipped 2026-09-11, spec docs/specs/2026-09-11-status-list-is-truth.md,
+   step 2 of three. READ THE SPEC BEFORE CHANGING ANY OF THIS.
+
+   The rule: `Dashboard progress` - a list in the workbook's own site, one row
+   per JOB|ITEM, Title the dedupe key - is the single record of checkpoint
+   status. Both screens read it directly. The Excel colour is written FROM it
+   so people can see it in Excel and is never read back to decide anything.
+
+   What that buys, and it is the whole point: the download is about 36 s behind
+   and the dashboard no longer cares. An un-tick is white the moment it is
+   clicked, stays white through a refresh, and stays white when the stale gold
+   file finally arrives - because nothing in the checkpoint path reads the
+   file. There is no hold, no reconcile, no expiry and nothing to give up on.
+
+   No list is created by code (CLAUDE.md rule 3). A missing list is a plain
+   message and read-only checkpoints; nothing is written anywhere at all -
+   not the list, not the workbook, not the log.                              */
+const CP_LIST_MISSING = "The \u201cDashboard progress\u201d list is not in SharePoint yet, so checkpoints " +
+  "cannot be ticked here. Ask the manager to add it \u2014 nothing in the Excel file is involved.";
+const CP_LIST_NEED_CONSENT = "Ticking checkpoints needs a SharePoint permission that has not been granted yet. " +
+  "Nothing in the Excel file is involved.";
+const CP_LIST_UNREACHABLE = "The \u201cDashboard progress\u201d list could not be read just now, so checkpoints " +
+  "are read-only until it answers. Nothing in the Excel file is involved.";
+const CP_LIST_CHECKING = "checking\u2026";
+const CP_POLL_MS = 10000;              // the list is the record: it is asked what moved every ten seconds
+const CP_SOON_MS = 1500;               // ... and again right after this dashboard's own write
+const CP_IMPORT_MAX = 60;              // rows imported per load - the feeder's own cap and lanes
+const CP_IMPORT_LANES = 3;
+const CP_ADOPT_MAX = 60;               // cells confirmed through the Excel API per download (three batches)
+const CP_ADOPT_LIVE_MAX = 20;          // ... and per live check of the open drawer's job (one batch)
+
+/* HAS THE ONE-TIME IMPORT DRAINED IN THIS BROWSER? (review findings M1, M5.)
+   It takes fifteen to twenty-five minutes on the owner's real sheet, and two
+   things turn on knowing when it is over:
+
+     - until it is, an item with no row answers from the sheet's own colour
+       (checkpoints.js, cpFileState), so nothing on any screen changes and the
+       feeder does not write OfficeDone twice per job as rows land;
+     - after it is, a colour appearing on a cell that has no row is a
+       HAND-PAINT, not something the import missed, and belongs to the
+       safeguard - which confirms it through the Excel API and records it as
+       `Source = "excel"` with a log line of its own, instead of the import
+       swallowing it as `Source = "import"`, `Who = "the sheet"`.
+
+   Kept per browser, because it is a statement about what THIS page has
+   finished doing. A second dashboard opening afterwards finds the plan already
+   empty and settles on its first load. */
+const CP_IMPORTED_KEY = "cw_cpimported";
+let CP_IMPORTED = "";
+try { CP_IMPORTED = localStorage.getItem(CP_IMPORTED_KEY) || ""; } catch (e) {}
+const cpImportSettled = () => !!CP_IMPORTED;
+
+let CP_ITEMS = null;          // the list, as last read - null until the first read answers
+let CP_LIST_OK = null;        // null: not looked yet - false: missing, refused or unreachable - true: read it
+let CP_LIST_WHY = "";         // which of those, in words, for the drawer
+let CP_LIST_CONSENT = false;  // the last read failed for want of the list permission
+let cpListWarned = false;     // one console line per page for a list that will not read
+let cpListReading = null;     // the read in flight, so two callers share one
+let cpPolling = false, cpSoonT = null, cpPollT = null;
+
+/** Can a click write? Only when the list has actually answered. */
+const cpWritable = () => CP_LIST_OK === true;
+/** What to say when it cannot, in the drawer and in a toast. */
+const cpWhyNot = () => CP_LIST_OK === null ? CP_LIST_CHECKING : (CP_LIST_WHY || CP_LIST_MISSING);
+
+function cpListRebuild() { cpRowsSet(cpRowsFrom(CP_ITEMS || [])); }
+
+/** Settle the switch-on window: is there anything left to import? Asked once
+    per load and once after every import pass, and never again once it has
+    answered yes - `cpImportPlan` with a cap of one stops at the first missing
+    row, so it is a walk and not a scan. */
+function cpImportCheck() {
+  if (!CP_IMPORTED && CP_LIST_OK === true && !cpImportPlan(ALL, cpStored, 1).length) {
+    CP_IMPORTED = new Date().toISOString();
+    try { localStorage.setItem(CP_IMPORTED_KEY, CP_IMPORTED); } catch (e) {}
+  }
+  /* an unreadable list falls back the same way: the sheet's colours are a
+     better answer than a screen saying nothing has been ticked */
+  cpSetImportPending(!cpImportSettled() || CP_LIST_OK !== true);
+  return cpImportSettled();
+}
+/* until the first load has answered, the sheet's colours are what everything
+   reads - exactly as they did before the switch-over */
+cpSetImportPending(true);
+
+/** Read the whole list. Quiet: never opens a consent window, never throws. */
+async function readCpList() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  try {
+    const items = await CW.listItems(CP_LIST, { fields: CP_LIST_FIELDS });
+    if (items == null) { CP_LIST_OK = false; CP_LIST_WHY = CP_LIST_MISSING; CP_LIST_CONSENT = false; return null; }
+    CP_ITEMS = items;
+    cpListRebuild();
+    stationResetFeed("progress");            // a full read: the next poll starts a fresh delta
+    CP_LIST_OK = true; CP_LIST_WHY = ""; CP_LIST_CONSENT = false;
+    return items;
+  } catch (e) {
+    const m = (e && e.message) || String(e);
+    CP_LIST_CONSENT = /permission needed/.test(m);
+    if (CP_LIST_CONSENT) { CP_LIST_OK = false; CP_LIST_WHY = CP_LIST_NEED_CONSENT; }
+    else if (CW.isMissing && CW.isMissing(e)) { CP_LIST_OK = false; CP_LIST_WHY = CP_LIST_MISSING; }
+    else if (CP_LIST_OK !== true) { CP_LIST_OK = false; CP_LIST_WHY = CP_LIST_UNREACHABLE; }
+    if (!cpListWarned) { cpListWarned = true; console.warn("[checkpoints] could not read \u201c" + CP_LIST + "\u201d: " + m); }
+    return null;
+  }
+}
+/** One read shared by every caller. */
+function cpListReadIfNeeded(then) {
+  if (CP_LIST_OK === true) { if (then) then(); return; }
+  if (!cpListReading) cpListReading = readCpList().then(r => { cpListReading = null; return r; },
+                                                        () => { cpListReading = null; });
+  cpListReading.then(() => { if (then) then(); });
+}
+/** The list permission, asked for from a click - the one place a popup may
+    open, exactly as setPhaseByHand does it. */
+async function cpListConsent() {
+  try { if (CW.listConsent) await CW.listConsent(); } catch (e) { toast(friendly(e), true); return false; }
+  await readCpList();
+  return CP_LIST_OK === true;
+}
+
+/* ---- this dashboard's copy of the list ------------------------------------
+   Two things in step: the map the drawer reads (cpRow, in checkpoints.js) and
+   the array the delta merges into. A click puts the row in both BEFORE the
+   request goes out - that is the optimistic state, and it is all of it. There
+   is no timestamp on it, nothing expires and nothing is unmasked when it goes:
+   the next delta simply says the same thing. */
+/* The array is searched by Title, and Title carries the item key exactly as
+   the drawer spells it ("glass:not tuff"), so both sides are upper-cased
+   before they are compared - cpTitle upper-cases only the job. */
+const cpItemTitle = it => String(((it && it.fields) || {}).Title || "").trim().toUpperCase();
+const cpItemKey = (job, item) => cpTitle(job, item).toUpperCase();
+/** Everything needed to put one row back if the write is refused. */
+function cpSnap(job, item) {
+  const key = cpItemKey(job, item);
+  const row = cpRow(job, item);
+  let it = null;
+  (CP_ITEMS || []).forEach(x => { if (cpItemTitle(x) === key) it = x; });
+  return { key: key, row: row ? Object.assign({}, row) : null,
+           item: it ? { id: it.id, fields: Object.assign({}, it.fields || {}) } : null };
+}
+function cpUnsnap(job, item, snap) {
+  if (!snap) return;
+  cpRowPut(job, item, snap.row);
+  const arr = (CP_ITEMS || []).filter(x => cpItemTitle(x) !== snap.key);
+  if (snap.item) arr.push(snap.item);
+  CP_ITEMS = arr;
+}
+/** Put one row in, at once. `id` null keeps whatever id is already known. */
+function cpLocalPut(job, item, fields, id) {
+  const key = cpItemKey(job, item);
+  const arr = (CP_ITEMS || []).slice();
+  let at = -1;
+  for (let i = 0; i < arr.length; i++) if (cpItemTitle(arr[i]) === key) { at = i; break; }
+  /* A row this dashboard has just made and the list has not answered for yet
+     still needs an id of its own: ST.mergeDelta keys the array on the id, and
+     two rows sharing a blank one would collapse into a single entry. "local:"
+     marks it as not-a-real-id, so the write knows to create rather than patch. */
+  const keep = id != null ? String(id) : (at >= 0 ? arr[at].id : "local:" + key);
+  const it = { id: keep, fields: fields };
+  if (at >= 0) arr[at] = it; else arr.push(it);
+  CP_ITEMS = arr;
+  cpRowPut(job, item, cpRowsFrom([it])[cpTitle(job, item)] || null);
+  return cpRow(job, item);
+}
+/** The office's own record of one item, put in place at the click. No write. */
+function cpRowNow(job, item, done, total, status, who) {
+  const had = cpRow(job, item);
+  const when = cpStampNow();
+  return cpLocalPut(job, item,
+    cpRowFields(job, item, done, total, status, who, when, "office"), had ? had.id : null);
+}
+/** ISO to the second, which is what the list carries and what stampMs reads. */
+const cpStampNow = () => new Date().toISOString().slice(0, 19) + "Z";
+
+/* ---- the one list write ----------------------------------------------------
+   Which verb, and why it matters. `listUpsert` reads the WHOLE list before it
+   writes, so that two browsers cannot leave two rows for one Title. That is
+   right and cheap for `Dashboard phases`, which has one row per job; this list
+   has one row per job per item and will be the biggest in the tenant, so a
+   full read before every tick would put seconds on every click.
+
+     - a row this dashboard already knows the id of  -> one PATCH, no read;
+     - a row that does not exist yet, from a CLICK   -> listUpsert, which reads
+       once, creates once, and clears up a duplicate if another browser got
+       there in the same second. Once per item, ever;
+     - a row that does not exist yet, from the IMPORT -> listAdd, a plain POST.
+       The import is a one-off of up to sixty rows a load and a full read
+       before each of them is not affordable. Two dashboards importing the same
+       cell in the same minute would leave two rows; cpRowsFrom resolves that
+       on When, and the first office click on that item goes through
+       listUpsert, which removes the loser. Written down as a known limit
+       rather than hidden.                                                    */
+async function cpSaveRow(o) {
+  if (!cpWritable()) throw new Error(cpWhyNot());
+  const when = o.when || cpStampNow();
+  const source = o.source || "office";
+  const fields = cpRowFields(o.job, o.item, o.done, o.total, o.status, o.who, when, source);
+  const had = cpRow(o.job, o.item);
+  const known = had && had.id && String(had.id).indexOf("local:") !== 0;
+  /* A BACKGROUND WRITE NEVER OPENS A CONSENT WINDOW (review finding M6).
+     listUpsert calls listConsent(), which is allowed to throw a popup at
+     somebody - fine from a click, never from a ten-second timer. So a
+     background caller that would have to create a row (no id, or only the
+     "local:" one a cancelled burst can leave behind) writes nothing and leaves
+     the cell to the next click. */
+  if (o.quiet && !known && !o.add) return null;
+  cpLocalPut(o.job, o.item, fields, had ? had.id : null);      // the row moves before the request goes
+  if (known) {
+    await CW.listPatch(CP_LIST, had.id, fields);
+  } else if (o.add) {
+    const made = await CW.listAdd(CP_LIST, fields);
+    cpLocalPut(o.job, o.item, fields, made && made.id);
+  } else {
+    const made = await CW.listUpsert(CP_LIST, cpTitle(o.job, o.item), fields);
+    cpLocalPut(o.job, o.item, fields, made && made.id);
+  }
+  cpListSoon();                       // ask the list what it now says, right after our own write
+  return fields;
+}
+
+/* ---- kept current by delta, every ten seconds -----------------------------
+   The same shape and the same code as the floor's two lists (STATION_FEEDS,
+   stationDelta, stationFull) - but on its own clock and its own site. Its own
+   clock because the floor's poll drops to a minute when nobody is looking at
+   the floor, and a colleague's tick has to reach this screen in ten seconds
+   whatever is on it. Its own site because this list is in the WORKBOOK's site,
+   where the floor's three are not. */
+/* the feed itself is registered where STATION_FEEDS is declared, further down:
+   it is a const, and this block is above it. */
+async function cpListPoll() {
+  if (cpPolling || CP_LIST_OK !== true) return false;
+  if (typeof CW === "undefined" || !CW || !CW.listDelta || typeof ST === "undefined") return false;
+  cpPolling = true;
+  try {
+    const f = await CW.findFile();
+    const moved = await stationDelta("progress", f.siteId);
+    if (moved) cpRedraw();
+    return moved;
+  } catch (e) {
+    if (!cpListWarned) { cpListWarned = true; console.warn("[checkpoints] delta failed: " + ((e && e.message) || e)); }
+    return false;
+  } finally { cpPolling = false; }
+}
+/** Ask again shortly - after this dashboard's own write, and never more than
+    one timer at a time. */
+function cpListSoon(ms) {
+  if (cpSoonT) return;
+  cpSoonT = setTimeout(() => { cpSoonT = null; cpListPoll().catch(() => {}); }, ms == null ? CP_SOON_MS : ms);
+}
+/** Somebody else's tick has arrived: repaint what shows a checkpoint. */
+function cpRedraw() {
+  if (rowsInUse()) ROWS_STALE = true; else quietRows();
+  if (state.sel && $("#dhost")) renderDrawer();
+}
+/** The list's own clock. Re-armed after every pass, like the floor's. */
+function cpTick() {
+  if (cpPollT) clearTimeout(cpPollT);
+  cpPollT = setTimeout(async () => {
+    cpPollT = null;
+    try { await cpListPoll(); await cpAdoptDrawerJob(); } catch (e) {}
+    cpTick();
+  }, CP_POLL_MS);
+}
+
+/* ---- the safeguard: a colour changed in Excel by hand is adopted ----------
+   Spec section 4a, the owner on 2026-09-11: "if anyone changes the colour in
+   the Excel sheet directly, recognise the change was done outside the
+   dashboard, update the list with the changes, and log who made them and what
+   changed" - as fast as possible, with no waiting period.
+
+   There is none, and this is why. The dashboard remembers the colour it last
+   PAINTED into every managed cell. The download is used to FIND a cell whose
+   colour differs from that, and the Excel API - the channel the dashboard
+   writes through, which reads the live file with no lag - is used to CONFIRM
+   it. If the API agrees with the download it is a real outside change and it
+   is adopted now. If the API says what we painted, the download was simply
+   stale, and nothing happens and nothing is said.
+
+   Managed cells are every checkpoint item the drawer shows: windows, doors,
+   every glass type (arch and astragal included), and every product's F, S
+   and T. Not only the four columns the glass writer owns.
+
+   The open drawer's job is read live on every ten-second pass, so a hand-paint
+   on the job somebody is actually looking at shows within ten seconds without
+   waiting for a download at all. Every other job waits for the download to
+   notice it - checking every cell of every job through the API each pass would
+   be thousands of reads a minute. */
+const PAINTED_KEY = "cw_painted";
+const CP_ADOPT_LOG_TO = " \u2014 adopted from Excel";
+let PAINTED = {};
+try { PAINTED = JSON.parse(localStorage.getItem(PAINTED_KEY) || "{}"); } catch (e) { PAINTED = {}; }
+const savePainted = () => { try { localStorage.setItem(PAINTED_KEY, JSON.stringify(PAINTED)); } catch (e) {} };
+let LASTBY = "";                       // who Graph says last edited the file, for the adoption's Who
+let cpAdopting = false, cpImporting = false;
+
+function paintedOf(job, item) {
+  const m = PAINTED[String(job).toUpperCase()];
+  return m && Object.prototype.hasOwnProperty.call(m, item) ? m[item] : undefined;
+}
+function paintedSet(job, item, word) {
+  const id = String(job).toUpperCase();
+  const m = PAINTED[id] || (PAINTED[id] = {});
+  if (m[item] === word) return;
+  m[item] = word;
+  savePainted();
+}
+/** Called by cpWriteItem / cpWriteGroup the moment a fill has actually landed.
+    Never before: a fill that was refused leaves the cell as it was, and
+    recording a colour we did not paint would make the next download look like
+    somebody else's change. */
+function cpPainted(job, item, status) { paintedSet(job, item, status); }
+
+/** Cells worth asking the Excel API about.
+    `live` = the open drawer's job, where every managed cell is asked whatever
+    the download says, because the download may not have arrived yet. */
+function cpAdoptCandidates(jobs) {
+  const out = [];
+  (jobs || []).forEach(j => {
+    if (!j || !j.id) return;
+    const row = j.src && j.src.Production;
+    if (!row) return;                                   // not on the Production sheet: no cell to read
+    cpItems(j).forEach(it => {
+      const rec = cpRow(j.id, it.key);
+      /* No record at all. Until the one-time import has drained, that cell is
+         the import's - it is a colour that was there before the switch-over.
+         Afterwards it is a colour that has APPEARED on a cell nothing had
+         recorded, which is a hand-paint like any other and belongs here, with
+         the API confirming it and a log line of its own (review finding M5). */
+      if (!rec && !cpImportSettled()) return;
+      if (!cpColumn(it.key, PRODMAP)) return;           // no column on the sheet
+      const file = cpFileStatus(j, it.key);
+      if (file === "cut") return;                       // a colour checkpoints do not own
+      if (!rec && !file) return;                        // nothing recorded and nothing in the cell
+      const recWord = rec ? rec.status : "";
+      let was = paintedOf(j.id, it.key);
+      if (was === undefined) {
+        /* first sight of a cell that already has a record. If the file agrees
+           with the record there is nothing outside to adopt: remember the
+           colour and say nothing. Only a real disagreement is worth a read. */
+        if (file === recWord) { paintedSet(j.id, it.key, file); return; }
+        was = recWord;
+      }
+      /* THE SAME RULE ON BOTH PATHS (review finding M4). The download is how a
+         candidate is DISCOVERED; the Excel API read is the CONFIRMATION, not
+         the discovery. Asking the API about every managed cell of the open
+         drawer's job six times a minute was about a hundred workbook
+         operations a minute for as long as the drawer stayed open, and adopted
+         nothing. */
+      if (file === was) return;
+      out.push({ job: j.id, item: it.key, row: row, col: cpColumn(it.key, PRODMAP),
+                 total: it.total, was: was, rec: rec });
+    });
+  });
+  return out;
+}
+
+/** Confirm a batch of candidates through the Excel API and adopt the real
+    ones. Twenty reads per $batch, three batches in flight - CW.batchGet's own
+    numbers. Returns how many were adopted. */
+async function cpAdoptConfirm(work) {
+  if (!work.length) return 0;
+  const f = await CW.findFile();
+  const S = f.base + "/worksheets('" + CP_PROD_SHEET + "')";
+  /* The row comes from the last download, so it can be one section move out of
+     date. One values read per JOB proves it before a single colour is believed
+     - a handful of reads, and a row that has moved is simply left for the next
+     download to re-plan rather than read off somebody else's line. */
+  const jobRows = {};
+  work.forEach(c => { jobRows[c.job] = c.row; });
+  const ids = Object.keys(jobRows);
+  const urls = ids.map(id => S + "/range(address='C" + jobRows[id] + "')?$select=values")
+    .concat(work.map(c => S + "/range(address='" + CW.A1(c.col) + c.row + "')/format/fill"));
+  const bodies = await CW.batchGet(urls, 3);
+  const rowOk = {};
+  ids.forEach((id, i) => {
+    const v = (((bodies[i] || {}).values || [])[0] || [])[0];
+    rowOk[id] = String(v == null ? "" : v).trim().toUpperCase() === String(id).toUpperCase();
+  });
+  let n = 0;
+  const at = cpStampNow(), by = LASTBY || "someone in Excel";
+  for (let i = 0; i < work.length; i++) {
+    const c = work[i];
+    if (!rowOk[c.job]) continue;
+    const liveWord = cpWordForHex(((bodies[ids.length + i] || {}).color));
+    if (liveWord === null) { continue; }                 // a colour checkpoints do not own
+    if (liveWord === c.was) { continue; }                // the download was stale: ignore, silently
+    /* a real outside change. The count behind a yellow cell is not in the
+       colour, so a part-way cell keeps whatever count the record already had. */
+    const done = liveWord === "done" ? c.total
+      : (liveWord === "process" && c.rec && c.rec.done > 0 && c.rec.done < c.total ? c.rec.done : 0);
+    try {
+      /* quiet: this runs from a load and from a timer, so it may never open a
+         consent window - a cell it would have to create a row for without one
+         is left to the next click (review finding M6) */
+      const wrote = await cpSaveRow({ job: c.job, item: c.item, done: done, total: c.total,
+                                      status: liveWord, who: by, when: at, source: "excel",
+                                      quiet: true, add: !c.rec });
+      if (!wrote) continue;
+    } catch (e) { console.warn("[checkpoints] could not adopt " + c.job + " " + c.item + ": " + ((e && e.message) || e)); continue; }
+    paintedSet(c.job, c.item, liveWord);
+    /* named exactly as diffJobs names the same difference, so the one change
+       is one line in Changes rather than two */
+    noteChange(c.job, cpLabel(c.item), CPWORD[c.was] == null ? c.was : CPWORD[c.was],
+               (CPWORD[liveWord] == null ? liveWord : CPWORD[liveWord]) +
+               CP_ADOPT_LOG_TO + " (file last edited by " + by + ")");
+    n++;
+  }
+  if (n) cpRedraw();
+  return n;
+}
+
+/** Every job, against the download that has just been parsed. */
+async function cpAdoptRun() {
+  if (!cpWritable() || cpAdopting || !PRODMAP) return 0;
+  const all = cpAdoptCandidates(ALL);
+  if (!all.length) return 0;
+  cpAdopting = true;
+  try { return await cpAdoptConfirm(all.slice(0, CP_ADOPT_MAX)); }
+  catch (e) { console.warn("[checkpoints] adoption pass failed: " + ((e && e.message) || e)); return 0; }
+  finally { cpAdopting = false; }
+}
+/** The open drawer's job, on the ten-second clock and no oftener than every
+    thirty seconds (review finding M4). It reads nothing at all unless the
+    download already disagrees with what this dashboard painted, so a drawer
+    left open on a job nobody is touching costs no workbook operations. */
+const CP_DRAWER_MS = 30000;
+let cpDrawerJob = "", cpDrawerAt = 0;
+async function cpAdoptDrawerJob() {
+  if (!cpWritable() || cpAdopting || !PRODMAP || !state.sel || !$("#dhost")) return 0;
+  const id = String(state.sel);
+  if (id === cpDrawerJob && Date.now() - cpDrawerAt < CP_DRAWER_MS) return 0;
+  const j = byId(id);
+  if (!j) return 0;
+  const all = cpAdoptCandidates([j]);
+  if (!all.length) return 0;                    // nothing differs: not one request goes out
+  cpDrawerJob = id; cpDrawerAt = Date.now();
+  cpAdopting = true;
+  try { return await cpAdoptConfirm(all.slice(0, CP_ADOPT_LIVE_MAX)); }
+  catch (e) { console.warn("[checkpoints] live check failed: " + ((e && e.message) || e)); return 0; }
+  finally { cpAdopting = false; }
+}
+
+/* ---- putting the Excel copy right (review finding M3) ----------------------
+   A fill the workbook refuses leaves the record saying one thing and the sheet
+   another, for ever: the safeguard compares the FILE with what this dashboard
+   last painted, and after a refused fill those two agree, so the cell is never
+   a candidate and nothing ever notices. That is the exact failure class this
+   whole change exists to end, so the record is compared with `PAINTED` too -
+   both in memory, no read - and a disagreement is painted again through the
+   ordinary fill path. `PAINTED` only moves when a fill lands, so one success
+   ends it and a refusal is simply tried again on the next load.
+
+   The four glass columns used to be left out of this while step 3 was
+   outstanding, because the colour writer painted them from the floor's
+   counters without going through the record. It goes through the record now,
+   so they are ordinary managed cells and this covers them like any other -
+   which is also what puts a floor colour into Excel when the fill was refused
+   the first time. */
+const CP_REPAINT_MAX = 20;                 // cells per load; a refusal waits for the next one
+let cpRepainting = false;
+function cpRepaintPlan(jobs, cap) {
+  const out = [];
+  for (let i = 0; i < (jobs || []).length; i++) {
+    const j = jobs[i];
+    if (!j || !j.id || j.done) continue;                    // a gold row is whole
+    if (!(j.src && j.src.Production)) continue;
+    const items = cpItems(j);
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      const rec = cpRow(j.id, it.key);
+      if (!rec) continue;
+      if (cpFileStatus(j, it.key) === "cut") continue;      // not this feature's colour to paint over
+      if (cpPending(j.id + "|" + it.key)) continue;         // its own write is still in the air
+      const col = cpColumn(it.key, PRODMAP);
+      if (!col) continue;
+      if (paintedOf(j.id, it.key) === rec.status) continue; // the sheet has it
+      /* THERE USED TO BE A SECOND SHORTCUT HERE, and it was B3's own failure
+         class coming back through another door (review finding F1). It said:
+         if the DOWNLOAD already shows what the record says, the sheet must be
+         right, so remember that colour and skip. But the download is ~36 s old
+         and this runs precisely when the record and what we painted disagree -
+         which is to say, when something did not land. Concretely: the office
+         un-ticks (record "", the fill lands, PAINTED ""); the floor finishes
+         and the writer's fill is REFUSED (record "done", PAINTED still "");
+         the download in hand is still the pre-un-tick gold; the shortcut saw
+         the file agreeing with the record, wrote PAINTED = "done" - and the
+         cell was never a candidate again. Excel white, record done, for ever.
+
+         So the file is not consulted at all. A fill that turns out to have
+         been unnecessary is one idempotent write, and it only happens when the
+         record and what this dashboard painted already disagree. */
+      out.push({ job: j.id, item: it.key, col: col, want: rec.status });
+      if (cap && out.length >= cap) return out;
+    }
+  }
+  return out;
+}
+async function cpRepaintRun() {
+  if (!cpWritable() || cpRepainting || !PRODMAP) return 0;
+  const plan = cpRepaintPlan(ALL, CP_REPAINT_MAX);
+  if (!plan.length) return 0;
+  cpRepainting = true;
+  try {
+    const byJob = {};
+    plan.forEach(p => { (byJob[p.job] = byJob[p.job] || []).push(p); });
+    const ids = Object.keys(byJob);
+    let n = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const job = ids[i], cells = byJob[job];
+      try {
+        /* on the job's own checkpoint chain, so it can never interleave with a
+           click's write on the same job */
+        await cpChain(job, async () => {
+          const row = await CW.rowForJob(CP_PROD_SHEET, job);
+          const f = await CW.findFile();
+          const S = f.base + "/worksheets('" + CP_PROD_SHEET + "')";
+          await CW.batchWrite(cells.map(c => ({
+            method: "PATCH",
+            url: S + "/range(address='" + CW.A1(c.col) + row + "')/format/fill",
+            body: { color: CP_WORD_HEX[c.want] }
+          })));
+        });
+        cells.forEach(c => { cpPainted(c.job, c.item, c.want); n++; });
+      } catch (e) {
+        console.warn("[checkpoints] could not put " + job + "'s colours right: " +
+                     ((e && e.message) || e) + " - trying again on the next load");
+      }
+    }
+    if (n) scheduleReconcile();
+    return n;
+  } finally { cpRepainting = false; }
+}
+
+/* ---- the one-time import ---------------------------------------------------
+   Spec section 4, last paragraph. A job+item with no row in the list adopts
+   what the Excel colour says ONCE, with Source = "import", and the colour is
+   never consulted for it again. Lazy - only the rows that are missing - and
+   capped per load with the feeder's own numbers, so the first load after
+   switch-on does not fire hundreds of writes at once.
+
+   The exact count behind a yellow cell comes from the `Dashboard Progress`
+   SHEET, read out of the workbook this dashboard has already downloaded. That
+   is the last thing that sheet is for; nothing writes it any more. */
+let cpImportAgainT = null;
+function cpImportAgain() {
+  if (cpImportAgainT) return;
+  cpImportAgainT = setTimeout(() => { cpImportAgainT = null; cpImportRun().catch(() => {}); }, STATION_AGAIN_MS);
+}
+async function cpImportRun() {
+  if (!cpWritable()) return 0;
+  /* THE FOLLOW-UP MUST NOT FIRE INTO A CLOSED DOOR (review finding M2). A pass
+     of sixty writes can outlast the thirty-second timer; when it did, the
+     timer fired, met this guard, returned - and nothing armed another one, so
+     the import stalled until the next load(), which on a quiet workbook may
+     never come. */
+  if (cpImporting) { cpImportAgain(); return 0; }
+  if (cpImportSettled()) return 0;                 // there is nothing left to import, ever
+  const plan = cpImportPlan(ALL, cpStored, CP_IMPORT_MAX);
+  if (!plan.length) { cpImportCheck(); return 0; }
+  cpImporting = true;
+  /* owed until proved otherwise, so a throw re-arms as surely as a refusal */
+  let owed = true;
+  const when = cpStampNow();
+  try {
+    const work = plan.map(p => () => cpSaveRow({ job: p.job, item: p.item, done: p.done, total: p.total,
+                                                 status: p.status, who: "the sheet", when: when,
+                                                 source: "import", add: true })
+      .then(() => { paintedSet(p.job, p.item, p.status); }));
+    const r = await cpSend(work);
+    if (r.sent) {
+      /* a job, not a blank: load() skips a Dashboard Log row with no job when
+         it reads the sheet back, so a blank one was written and then never
+         seen again in the Changes window. The first job of the plan is the
+         honest answer to "which job is this line about" for a line that is
+         about many. */
+      noteChange(plan[0].job, "Checkpoints imported", "", "Imported " + r.sent + " checkpoint" +
+        (r.sent === 1 ? "" : "s") + " from the sheet's colours");
+      cpRedraw();
+    }
+    if (r.failed) console.warn("[checkpoints] " + r.failed + " import write" +
+      (r.failed > 1 ? "s" : "") + " refused: " + r.err);
+    owed = !!(r.failed || plan.length >= CP_IMPORT_MAX);
+    return r.sent;
+  } finally {
+    cpImporting = false;
+    cpImportCheck();                      // has that drained it?
+    /* the cap cut it short, something was refused, or it threw: come back for
+       the rest rather than waiting for a load that may never happen */
+    if (owed) cpImportAgain();
+  }
+}
+/** The feeder's lane runner, on this list's own writes: a few at a time, in
+    order, every failure counted and the first message kept. */
+async function cpSend(work) {
+  let sent = 0, failed = 0, err = "";
+  let next = 0;
+  const lane = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= work.length) return;
+      try { await work[i](); sent++; }
+      catch (e) { failed++; if (!err) err = (e && e.message) || String(e); }
+    }
+  };
+  const lanes = [];
+  for (let i = 0; i < Math.min(CP_IMPORT_LANES, work.length); i++) lanes.push(lane());
+  await Promise.all(lanes);
+  return { sent: sent, failed: failed, err: err };
+}
+
 /* ---------- the glass station ------------------------------------------------
    The floor works on glass.html, signed in with a shared station account that
    has no access to the workbook at all. Everything it sees comes from one
@@ -737,7 +1211,16 @@ const STATION_FEEDS = {
   items: { list: () => ST.STATION_LIST, fields: () => ST.STATION_FIELDS,
            get: () => STATION_ITEMS, set: v => { STATION_ITEMS = v; }, token: null, off: 0 },
   log: { list: () => ST.LOG_LIST, fields: () => ST.LOG_FIELDS,
-         get: () => STATION_LOG, set: v => { STATION_LOG = v; }, token: null, off: 0 }
+         get: () => STATION_LOG, set: v => { STATION_LOG = v; }, token: null, off: 0 },
+  /* the third feed, and the odd one out: `Dashboard progress` is in the
+     WORKBOOK's site, not the floor's, and it is polled on its own clock
+     (cpTick) rather than this one - a colleague's tick has to reach this
+     screen in ten seconds whatever is on it, and the floor's poll drops to a
+     minute when nobody is looking at the floor. Everything else about it -
+     the delta, the token, the 410 resync, the five-minute "delta off" - is
+     the same code. */
+  progress: { list: () => CP_LIST, fields: () => CP_LIST_FIELDS,
+              get: () => CP_ITEMS, set: v => { CP_ITEMS = v; cpListRebuild(); }, token: null, off: 0 }
 };
 /* A delta request is in the air for as long as SharePoint takes to answer it,
    and in that time a feed or a full read can replace the whole list and null
@@ -746,10 +1229,16 @@ const STATION_FEEDS = {
    and would collapse the board to those two rows until the next feed ten
    minutes later. So every wholesale replacement bumps a generation, and a
    delta whose generation has moved throws its answer away. */
-let STATION_GEN = 0;
+/* ONE GENERATION PER FEED, not one for all of them (review finding M8). It
+   used to be shared, which was harmless while both feeds were the floor's and
+   moved together; with the record's own feed in the same table, a full read of
+   `Dashboard progress` would throw away an in-flight delta of the floor's
+   board for no reason at all. */
+const feedGen = f => f.gen || 0;
 function stationResetFeed(key) {
-  STATION_FEEDS[key].token = null;
-  STATION_GEN++;
+  const f = STATION_FEEDS[key];
+  f.token = null;
+  f.gen = feedGen(f) + 1;
 }
 /* A list that will not serve a delta at all must not be asked for one six
    times a minute: it is marked off for five minutes and polled the plain way
@@ -964,7 +1453,7 @@ function stationWatching() {
 async function stationFull(key, siteId, gen) {
   const f = STATION_FEEDS[key];
   const all = await CW.listItems(f.list(), { siteId: siteId, fields: f.fields() });
-  if (gen !== STATION_GEN) return false;           // somebody replaced it while we read
+  if (gen !== feedGen(f)) return false;            // somebody replaced it while we read
   if (all == null) return false;
   f.set(key === "log" ? stationLogRecent(all) : all);
   return true;
@@ -972,7 +1461,7 @@ async function stationFull(key, siteId, gen) {
 /** One list, brought up to date the cheap way. true = something moved. */
 async function stationDelta(key, siteId) {
   const f = STATION_FEEDS[key];
-  if (deltaOff(f)) return await stationFull(key, siteId, STATION_GEN);
+  if (deltaOff(f)) return await stationFull(key, siteId, feedGen(f));
   const opts = { siteId: siteId, fields: f.fields() };
   if (f.token) opts.token = f.token;
   /* BOTH captured before the await. f.token can be nulled by a feed or a full
@@ -980,13 +1469,13 @@ async function stationDelta(key, siteId) {
      delta of two changed rows look like a fresh enumeration of the whole
      list, and the board would collapse to two rows. */
   const had = opts.token || null;
-  let gen = STATION_GEN;
+  let gen = feedGen(f);
   let d;
   try {
     d = await CW.listDelta(f.list(), opts);
   } catch (e) {
     if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
-    if (gen !== STATION_GEN) return false;         // that answer is about a list we no longer hold
+    if (gen !== feedGen(f)) return false;          // that answer is about a list we no longer hold
     /* a 410 means the token is too old and delta is fine; anything else means
        this list will not serve one, so stop asking for five minutes */
     if (!(CW.isDeltaResync && CW.isDeltaResync(e))) {
@@ -994,10 +1483,10 @@ async function stationDelta(key, siteId) {
       console.warn("[station] the " + f.list() + " list refused a delta; polling it the plain way for five minutes");
     }
     stationResetFeed(key);
-    gen = STATION_GEN;
+    gen = feedGen(f);
     return await stationFull(key, siteId, gen);
   }
-  if (gen !== STATION_GEN) return false;           // a feed or a full read landed while this was in the air
+  if (gen !== feedGen(f)) return false;            // a feed or a full read landed while this was in the air
   if (d == null) return false;                     // the list is not there
   f.off = 0;                                       // it served one: it is not a refusing list
   f.token = d.next || null;
@@ -1149,7 +1638,12 @@ function setStationFoot() {
   const el = $("#stationfeed"); if (!el) return;
   const wrap = $("#stationfeedwrap");
   const show = t => { el.textContent = t; if (wrap) wrap.hidden = !t; };
-  /* first, because it is the more serious of the two: a feed that will not
+  /* First of all, because it is the most serious thing this footer can say:
+     the record of checkpoint status cannot be read, so every job on the list
+     is drawing as though nothing were ticked. The drawer says so when it is
+     open; without this the rest of the screen would say it silently. */
+  if (CP_LIST_OK === false) { show("checkpoints read-only"); el.title = CP_LIST_WHY || CP_LIST_MISSING; return; }
+  /* then, because it is the more serious of the two below: a feed that will not
      write means the floor's board goes stale, while this means the WORKBOOK is
      refusing a write and somebody has to know rather than read it in a console */
   if (GLASS_COLOUR_ERR) { show("glass colours not saved"); el.title = GLASS_COLOUR_ERR; return; }
@@ -1270,9 +1764,11 @@ function stationFeedAgain() {
 /** What the office has already ticked off on a job's glass, as plain data for
     ST.officeSeed - one entry per glass item with the sheet's own word for it
     and the office's count where there is one. The reading of the colour and
-    the stored count is checkpoints.js' job (`cpStatus`, `itemState`, which is
-    the merge of `cpStatus` with `cpStored`); station-core.js is handed the
-    answer rather than any of the dashboard's globals.
+    the count is checkpoints.js' job (`itemState`, which since 2026-09-11 reads
+    the `Dashboard progress` list and NOT the Excel colour); station-core.js is
+    handed the answer rather than any of the dashboard's globals. So
+    `OfficeDone` - the office's lock on a job, ST.officeComplete of exactly
+    these counts - follows the record, which is the point of the change.
 
     Nothing here writes anything: this is the workbook's own record, read. */
 function glassCounts(j) {
@@ -1284,7 +1780,13 @@ function glassCounts(j) {
     if (!(total > 0)) return;
     const key = "glass:" + k;
     const s = typeof itemState === "function" ? itemState(j, key) : null;
-    out.push({ type: k, total: total, status: cpStatus(j, key),
+    /* the record's word, except for the sheet's own Cut green - which nothing
+       in the dashboard writes, so the record can never carry it, and which
+       ST.officeSeed reads as "cut, not hotmelted". The same one reading of the
+       parsed file the phase pipeline makes, and for the same reason. */
+    const word = s && s.status ? s.status
+      : (cpFileStatus(j, key) === "cut" ? "cut" : "");
+    out.push({ type: k, total: total, status: word,
                done: s && s.done != null ? s.done : 0 });
   });
   return out;
@@ -1430,7 +1932,12 @@ async function load(reason, force) {
     /* the checkpoint counts, read before the held ticks are applied: a hold is
        let go the moment the file agrees with it, and that comparison needs the
        counts from this download, not the ones from the last */
-    const pgw = wb.getWorksheet(CW.PROGRESS_SHEET);
+    /* THE `Dashboard Progress` SHEET, for the last time. Since step 3 removed
+       glassOfficeStamp there is exactly one reader left - the switch-on
+       window, which needs the exact count behind a yellow cell for the
+       one-time import and for cpFileState. So it is not parsed at all once
+       the import has drained, which is every load but the first few, ever. */
+    const pgw = cpImportSettled() ? null : wb.getWorksheet(CW.PROGRESS_SHEET);
     if (pgw) {
       const counts = {};
       for (let r = 2; r <= (pgw.rowCount || 0); r++) {
@@ -1453,6 +1960,13 @@ async function load(reason, force) {
       cpSetProgress(counts);
     } else cpSetProgress({});          // no sheet, no counts - never the last download's
 
+    /* THE RECORD OF CHECKPOINT STATUS, and the first thing the drawer will
+       ask about. Read in full only when it has never answered - the ten-second
+       delta keeps it current after that, and this list will be the biggest in
+       the tenant. A list that will not read leaves checkpoints read-only with
+       a plain message and nothing is written anywhere. */
+    if (CP_LIST_OK !== true) await readCpList();
+
     /* the hand-set phases, from the SharePoint list - never from the workbook.
        Read before the holds are settled below, so a hold can be let go the
        moment the list agrees with it. */
@@ -1460,10 +1974,15 @@ async function load(reason, force) {
 
     ALL = applyPending(parsed, true);   // our own recent writes win over a stale file
     ALL.blockNames = BLOCKNAMES;
+    /* is the one-time import over? Everything that used to read the Excel
+       colour falls back to it until it is (review finding M1), so this is
+       settled before a single row is drawn. */
+    cpImportCheck();
     const ps = wb.getWorksheet("Production");
     PRODMAP = ps ? mapSheet(ps) : null;
     const m = await CW.lastModified();
     lastStamp = m.at;
+    LASTBY = m.by || "";               // who the safeguard names when it adopts a hand-paint
     const t = new Date(m.at);
     const tAll = Math.round(performance.now() - t0);
     console.log("[dashboard] download " + Math.round(tDown) + "ms, total " + tAll + "ms, " + ALL.length + " jobs");
@@ -1536,7 +2055,17 @@ async function load(reason, force) {
        the floor has finished since this dashboard last looked, painted into
        the four glass columns. Last, after the feed, because the feed is what
        puts STATION_ITEMS in front of it. */
-    feedStation().then(stationAfterFeed, () => {})
+    /* ... and before any of that, the two things that keep the record and the
+       sheet's colours honest: the one-time import of a cell that has no record
+       yet, and the safeguard, which asks the Excel API about every managed
+       cell whose colour differs from the one this dashboard last painted. Both
+       must run BEFORE the feeder, because OfficeDone and the floor's seed are
+       derived from the record and the import is what puts it there. */
+    cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
+      .then(() => cpAdoptRun(), () => {})
+      .then(() => cpRepaintRun(), () => {})
+      .then(() => feedStation(), () => {})
+      .then(stationAfterFeed, () => {})
       .then(() => glassColourRun(), () => {})
       .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
   } catch (e) {
@@ -1646,9 +2175,21 @@ function cpRefresh(id) {
   if (state.sel === id) cpPatchSection(byId(id));   // patched in place: a tap must not rebuild the section under the finger
 }
 
-/** Set one item of one job to a count. Clamped, debounced, logged once. */
+/** The list has not answered, so nothing may be written. Says why, once per
+    click, and asks for the permission if that is what is missing - a click is
+    the one place a consent window may open. */
+function cpRefuse() {
+  toast(cpWhyNot(), true);
+  if (CP_LIST_CONSENT) cpListConsent().then(ok => { if (ok && state.sel) renderDrawer(); }, () => {});
+  return false;
+}
+
+/** Set one item of one job to a count. Clamped, debounced, logged once.
+    The record moves at once (cpRowNow) and the write follows; there is no hold
+    and nothing to reconcile. */
 function setItemProgress(j, item, newDone) {
   if (!j || j.done) return;                        // a gold row is finished: no holes in it
+  if (!cpWritable()) { cpRefuse(); return; }
   const s = itemState(j, item);
   if (!s) return;
   const want = cpClamp(newDone, s.total);
@@ -1662,16 +2203,27 @@ function setItemProgress(j, item, newDone) {
      single thing is written - and a "no" writes nothing at all, not even the
      workbook half. (An office clear reaches the floor, below.) */
   if (!confirmFloorClear(j, glassCountsAfter(j, item, want), j.id + "|" + item)) { cpRefresh(j.id); return; }
-  pend(j.id, { cp: { [item]: want } });
+  const prev = cpSnap(j.id, item);
+  /* THE OFFICE IS ABSOLUTE, and since step 3 that needs no machinery at all:
+     the click writes an office row stamped now, and the colour writer will not
+     write a floor row over one whose `When` is later than the floor's own
+     stamp. There is nothing to void. */
+  cpRowNow(j.id, item, want, s.total, cpStatusFor(want, s.total), whoAmI());
   cpRefresh(j.id);
   /* from = the count before this burst of taps started, not before this tap.
      The column and total recorded here are only what the tap saw: the flush
      works both out again from the sheet it is about to write. */
   cpBurst(j.id + "|" + item,
-    { job: j.id, item: item, col: col, who: whoAmI(),
+    { job: j.id, item: item, col: col, who: whoAmI(), prev: prev,
       from: s.done == null ? null : cur, to: want, total: s.total },
     cpFlushItem);
 }
+
+/* glassVoidPaint() lived here for one day, 2026-09-11. It discarded the
+   colour writer's un-landed paint of a cell the office had just acted on. The
+   writer has no un-landed paint any more - it writes the record, and the
+   record's own `When` and `Source` are the whole of the contest - so an office
+   click simply writes a row that is later than the floor's stamp and wins. */
 
 /** One settled burst (or one replayed from a previous visit). */
 async function cpFlushItem(b) {
@@ -1682,24 +2234,34 @@ async function cpFlushItem(b) {
   const col = cpColumn(b.item, PRODMAP);
   try {
     if (!col || !(total > 0)) {
-      pend(b.job, { cp: { [b.item]: null } });          // nowhere to write it: stop showing it as held
+      /* nowhere to paint it: the record must not say something the sheet has
+         no cell for, so it goes back to what it was */
+      if (Object.prototype.hasOwnProperty.call(b, "prev")) cpUnsnap(b.job, b.item, b.prev);
       cpRefresh(b.job);
       toast(cpLabel(b.item) + " is not a column on the Production sheet - that tick was not saved.", true);
       return;
     }
     await cpWriteItem({ job: b.job, item: b.item, col: col, done: b.to, total: total,
-                        from: b.from, who: b.who || whoAmI(), log: noteChange });
+                        from: b.from, who: b.who || whoAmI(),
+                        save: cpSaveRow, paint: cpPainted, log: noteChange });
     /* the workbook half landed: if this was a confirmed clear of the job's
        glass, the floor's counters go back to nought too - and only THIS burst's
        own clear, never another burst's on the same job */
     floorClearAfterWrite(b.job, b.key);
-    scheduleReconcile();                                  // reconcile once the file catches up
+    scheduleReconcile();                                  // the file catches up with the colour
   } catch (e) {
-    toast(friendly(e), true);
-    /* put the screen back to what the sheet still says. When the count it
-       replaced was unknown there is no number to go back to, so let the hold go
-       and let Excel's colour speak for itself. */
-    pend(b.job, { cp: { [b.item]: b.from == null ? null : b.from } });
+    /* A refused LIST write means the click did not take: the record goes back
+       to exactly what it was before this burst started. A refused FILL is a
+       different thing - the record has already been written and stands, and
+       Excel is simply behind. cpWriteItem writes the list first for precisely
+       this reason and marks the error to say which of the two happened. */
+    if (e && e.cpRecordStands) {
+      toast(cpLabel(b.item) + " is saved, but the colour could not be written into the " +
+            "Production sheet just now. " + friendly(e), true);
+    } else {
+      toast(friendly(e), true);
+      if (Object.prototype.hasOwnProperty.call(b, "prev")) cpUnsnap(b.job, b.item, b.prev);
+    }
     cpRefresh(b.job);
   } finally {
     cpSettled(b.key);
@@ -1708,9 +2270,19 @@ async function cpFlushItem(b) {
 
 const CPBUSY = {};        // job|group -> a group write is in the air
 
+/** Did this item's list write actually land? The row carries the id the list
+    gave it back, and only a landed write has one. A row that was created by
+    the very write that failed has no id, and one that already had an id is
+    told apart by its count. */
+function cpRowLanded(job, item, done) {
+  const r = cpRow(job, item);
+  return !!(r && r.id && String(r.id).indexOf("local:") !== 0 && Number(r.done) === Number(done));
+}
+
 /** "All done" / "Clear" for a whole group: windows, doors, glass, or one product. */
 async function setGroupDone(j, group, on) {
   if (!j || j.done) return;
+  if (!cpWritable()) { cpRefuse(); return; }
   const items = cpItems(j).filter(x => x.group === group);
   if (!items.length) return;
   const missing = items.filter(x => !cpColumn(x.key, PRODMAP));
@@ -1721,14 +2293,17 @@ async function setGroupDone(j, group, on) {
   if (!on && group === "glass" &&
       !confirmFloorClear(j, glassCounts(j).map(c =>
         ({ type: c.type, total: c.total, status: "", done: 0 })), j.id + "|" + group)) return;
-  const before = {}, held = {};
+  const before = {}, held = {}, snaps = {};
+  const who = whoAmI();
   items.forEach(x => {
     const s = itemState(j, x.key);
     before[x.key] = s && s.done != null ? s.done : null;  // null = it was "in progress, count unknown"
     held[x.key] = on ? x.total : 0;
+    snaps[x.key] = cpSnap(j.id, x.key);                   // what to put back if the write is refused
     cpCancelBurst(j.id + "|" + x.key);                    // this write covers the item; drop its own
   });
-  pend(j.id, { cp: held });
+  /* the record moves at once, one row per item */
+  items.forEach(x => cpRowNow(j.id, x.key, held[x.key], x.total, cpStatusFor(held[x.key], x.total), who));
   CPBUSY[j.id + "|" + group] = 1;                         // no second tap while this one is in the air
   cpRefresh(j.id);
   const what = (items[0].groupLabel === "Glass" ? "Glass" : cap(items[0].groupLabel)) + (on ? ": all done" : ": cleared");
@@ -1743,8 +2318,8 @@ async function setGroupDone(j, group, on) {
       const gone = cols.find(c => !c.col);
       if (gone) throw new Error(cpLabel(gone.item) + " is no longer a column on the Production sheet.");
       return cpWriteGroup({
-        job: j.id, who: whoAmI(), what: what, to: to, log: noteChange, items: cols,
-        before: items.map(x => ({ item: x.key, done: before[x.key], total: x.total }))
+        job: j.id, who: who, what: what, to: to, log: noteChange, items: cols,
+        save: cpSaveRow, paint: cpPainted
       });
     });
     /* the workbook half landed: a confirmed clear of the glass now reaches the
@@ -1753,10 +2328,26 @@ async function setGroupDone(j, group, on) {
     toast(j.id + " · " + what);
     scheduleReconcile();
   } catch (e) {
-    toast(friendly(e), true);
-    const back = {};
-    items.forEach(x => { back[x.key] = before[x.key]; });  // null drops the hold entirely
-    pend(j.id, { cp: back });
+    /* A refused FILL leaves the record standing - the office decided and Excel
+       is behind. A refused RECORD write is a click that did not take, and only
+       the rows that never landed go back: one whose write DID land is on the
+       record now, and putting it back would be a second lie. */
+    if (e && e.cpRecordStands) {
+      toast(j.id + " is saved, but the colours could not be written into the Production sheet " +
+            "just now. " + friendly(e), true);
+    } else {
+      /* half way down the group: say which items took and which did not,
+         rather than leaving the job part-ticked with a bare error
+         (review finding M7) */
+      const landed = (e && e.cpSaved) || [];
+      const lost = items.map(x => x.key).filter(k => landed.indexOf(k) < 0);
+      const words = ks => ks.map(k => cpLabel(k)).join(", ");
+      toast(landed.length
+        ? j.id + ": " + words(landed) + (landed.length > 1 ? " were" : " was") + " saved, but " +
+          words(lost) + (lost.length > 1 ? " were" : " was") + " not. " + friendly(e)
+        : friendly(e), true);
+      items.forEach(x => { if (!cpRowLanded(j.id, x.key, held[x.key])) cpUnsnap(j.id, x.key, snaps[x.key]); });
+    }
   } finally {
     delete CPBUSY[j.id + "|" + group];
     cpRefresh(j.id);
@@ -1807,19 +2398,10 @@ async function setGroupDone(j, group, on) {
 const FLOORCLEAR_AGAIN_MS = 30000;
 const FLOORCLEAR_TRIES = 3;
 const FLOORCLEAR_OK = {};        // burst key -> the office was asked for this clear and said yes
-/* What the Dashboard Log calls a clear of the floor's counters. Said once
-   because glassLogStamps has to recognise it: it is an office action on the
-   job and counts as the office's stamp on every one of its glass columns. */
+/* What the Dashboard Log calls a clear of the floor's counters. It decided
+   something until 2026-09-11 - glassLogStamps read it as the office's stamp on
+   the job's glass - and now it is simply the honest name for the line. */
 const FLOORCLEAR_LOG = "Floor glass counters";
-/* The DoneAt this dashboard last wrote on a job's row when clearing it. The
-   clear stamps the floor's row so floorStamp stays honest (spec section 3),
-   which means the office's own write would otherwise read as a FLOOR action
-   newer than anything the office has - and the writer would paint the job's
-   other glass columns out from the counters this very write zeroed. So it is
-   kept, and glassOfficeJobStamp counts it as the office's. In memory only: the
-   Dashboard Log line is what carries it across a reload and to a second
-   dashboard. */
-const OFFICE_FLOOR_AT = {};
 const FLOORCLEAR_OWED = {};      // job -> how many times the write has been refused
 let floorClearT = null;
 
@@ -1923,11 +2505,12 @@ async function clearFloorGlass(job) {
     return false;
   }
   delete FLOORCLEAR_OWED[id];
-  /* the office has just moved this row, so remember WHEN before anything reads
-     it back: DoneAt is the office's own stamp here, not the floor's, and the
-     colour writer has to know that or it will paint this job's other glass
-     columns out from the counters this very write zeroed */
-  OFFICE_FLOOR_AT[id] = body.DoneAt;
+  /* This used to remember the DoneAt it had just written (OFFICE_FLOOR_AT), so
+     the colour writer would not read the office's own clear as a floor action
+     newer than anything the office had. It needs no such memory now: the clear
+     zeroes the counters, so ST.glassColours of this row says nothing is done -
+     which is exactly what the office's own rows already say, and the writer
+     leaves a record that already says what it would write. */
   /* keep this dashboard's copy of the list in step at once, so the board, the
      rows and the drawer read nought without waiting for the ten-second poll -
      and so the colour writer plans from what the list now says. A NEW array,
@@ -1936,11 +2519,10 @@ async function clearFloorGlass(job) {
     ? { id: it.id, fields: Object.assign({}, it.fields || {}, body) } : it);
   redrawStation();
   /* an office action, in the office's own log, exactly as spec §3 says - and
-     NOT in the Station log, which stays the floor's alone. glassLogStamps
-     reads this line as the office's stamp on this job's glass, and that is
-     what carries the clear across a reload and to a second dashboard: without
-     it the DoneAt written above reads as a floor action and the office's own
-     clear out-ranks the office. */
+     NOT in the Station log, which stays the floor's alone. It carries no
+     weight in any decision since 2026-09-11: what stops this clear reading as
+     a floor action is that it zeroes the counters, so the colours the writer
+     derives from them say exactly what the office's own rows say. */
   noteChange(id, FLOORCLEAR_LOG, was, "nothing");
   return true;
 }
@@ -2002,10 +2584,10 @@ function cpReplayQueue() {
    no-fill as the same nothing, so a cell that already has neither colour is
    left alone rather than painted white for the sake of it.                  */
 const GLASS_PROD_SHEET = "Production";
-/* What the Dashboard Log calls a paint made from the floor's counters. Said
-   once, and deliberately not beginning "Glass": glassLogStamps would read that
-   as the office having spoken about the job's glass, and this is the floor's
-   work, not the office's. */
+/* What the Dashboard Log calls a paint made from the floor's counters. The
+   wording used to be load-bearing (glassLogStamps read anything beginning
+   "Glass" as the office having spoken); it is now simply the honest name for
+   whose work it is. */
 const GLASSPAINT_LOG = "Floor glass colours";
 const GLASS_HEX = { gold: GOLD_HEX, yellow: YELLOW_HEX, "": WHITE_HEX };
 const GLASSC_BUSY = {};        // job -> a colour write for it is in the air
@@ -2113,277 +2695,147 @@ function stampMs(v) {
   return isFinite(t) ? t : 0;
 }
 
-/** When the office last said something about one glass type of one job, in
-    milliseconds - 0 when it never has.
+/* THE CONTEST USED TO LIVE HERE, AND IT IS GONE (2026-09-11, spec step 3).
+   About two hundred and thirty lines: glassOfficeStamp, glassOfficeJobStamp,
+   officeSettling, GLASS_SETTLING, glassLogStamps and OFFICE_FLOOR_AT.
 
-    Two records, both already in memory after load(), so this costs no request:
-    the Dashboard Progress row the drawer writes for every tick (`Who`/`When`,
-    read back through cpStored), and the Dashboard Log lines, which arrive as
-    CHANGES. A whole-group write logs "Glass: all done" or "Glass: cleared" and
-    counts for every type; a single tick logs the item's own name.
+   They existed to answer one question - "who spoke last about this job's
+   glass, the office or the floor?" - from evidence scattered across four
+   copies that were all behind: a `cp` hold, a `Dashboard Progress` row read
+   out of a workbook 36 s old, `Dashboard Log` lines read back at minute
+   precision, and this dashboard's own memory of a clear it had made. The
+   answer was corrected three times in two days and was still wrong often
+   enough to paint an un-tick back to gold.
 
-    0 is the honest answer for an office tick made before this feature existed,
-    and for a cell somebody painted by hand in Excel: neither leaves a dated
-    record anywhere, so neither can be shown to be the later action. See the
-    honest limits in the spec. */
-function glassOfficeStamp(job, type, log, jobAt) {
-  const id = String(job).toUpperCase();
-  const row = typeof cpStored === "function" ? cpStored(id, "glass:" + type) : null;
-  let best = row ? stampMs(row.when) : 0;
-  const mine = (log || glassLogStamps())[id];
-  if (mine) {
-    /* the item's own line, and any whole-group line, which is about all four */
-    const t = Math.max(mine[type] || 0, mine["*"] || 0);
-    if (t > best) best = t;
-  }
-  /* AND the office's stamp on the JOB, whatever column it was made on. This is
-     the half that was missing, and it is what the owner saw on 2026-09-10.
+   There is one record now, and both sides write it at the moment they act. So
+   the contest is two fields of one row: `When`, and `Source`. If the row was
+   last written by the office (or adopted from Excel) at a time at or after the
+   floor's own stamp, the floor does not write. Otherwise it does. That is the
+   whole of it, there is no copy anywhere in it, and there is nothing left to
+   settle - so the "the writer stands down while an office change settles"
+   quarantine went with them: it was a way of not having to trust the
+   comparison, and the comparison is now between two things that cannot be
+   stale.                                                                    */
 
-     Asked per column, this function answered a literal 0 for every column the
-     office had not named IN THAT ACTION - no hold, no Progress row, no Log
-     line - so any floor stamp at all beat it. The office pressed Clear on TG
-     alone and the writer promptly painted out the TUFF and NOT TUFF it had
-     ticked by hand, because for those two columns the office had never
-     "spoken". Worse, the floor stamp it lost to was one the office had itself
-     just written: clearFloorGlass's own DoneAt, a fraction of a second after
-     the click.
-
-     The office's control is per JOB. A clear is a job-level act - it is what
-     the drawer's Clear does - and the floor's row is one combined number with
-     no per-type split in it at all (the colours spec, section 8). So an office
-     action at time T on a job must not lose to a floor stamp on a column that
-     action happened not to mention. That is all this adds, and it changes
-     nothing about the contest itself: a floor tap made after T still carries
-     the later stamp and still wins. */
-  const at = jobAt == null ? glassOfficeJobStamp(byId(id) || byId(job), log) : jobAt;
-  if (at > best) best = at;
-  /* AND the tick this office has made but not landed yet, which is the third
-     record and the one this used to miss. Both of the records above are
-     written by the WRITE - Dashboard Progress at the start of it, Dashboard
-     Log at the end - so between the click and the end of that write the office
-     HAS acted and nothing here said so. The floor then won by default, its
-     colour landed after the office's own (both go on the job's cpChain), and
-     because the cell was then the colour the floor wanted it was never written
-     again: an un-tick undone silently and for good. The owner's bug of
-     2026-09-10, and it only showed on un-ticking because marking done moves
-     the cell TOWARDS what the floor says, where there is nothing to plan.
-
-     The hold IS the office's action, stamped at the click by pend(), so this
-     does not change last-writer-wins: a floor tap made after the click still
-     carries the later stamp and still wins. Only the glass items' own holds
-     count - never a `gc` hold, which is this feature's own write. */
-  const held = PENDING[id] || PENDING[job];
-  if (held && held.cp && Object.prototype.hasOwnProperty.call(held.cp, "glass:" + type)) {
-    const t = ((held.t || {})["cp:glass:" + type]) || held.at || 0;
-    if (t > best) best = t;
-  }
-  return best;
-}
-
-/** The newest thing the OFFICE has said about this job's glass, on any column,
-    in milliseconds - 0 when it never has. Four records, all of them already in
-    memory, so this costs no request:
-
-      - every glass item's hold, stamped at the click by pend(): the office has
-        acted the moment the button is pressed, long before either sheet knows
-        about it;
-      - every "Glass ..." and "Glass: ..." line of the Dashboard Log for this
-        job, whichever column it named;
-      - the "Floor glass counters" line, which records the office clearing the
-        floor's counters. It is an OFFICE action on this job and is counted as
-        one. The earlier build deliberately excluded it, which was exactly
-        backwards: the clear's other half - the DoneAt it writes on the floor's
-        row - was being counted FOR THE FLOOR, so the office's own act
-        out-ranked the office;
-      - every glass item's Dashboard Progress row.
-
-    Takes the job object rather than its id: byId is a linear scan of every job
-    on the sheet, and this is asked once per job per pass. */
-function glassOfficeJobStamp(j, log) {
-  if (!j || !j.id) return 0;
-  const id = String(j.id).toUpperCase();
-  let best = 0;
-  const held = PENDING[id] || PENDING[j.id];
-  if (held && held.cp) {
-    Object.keys(held.cp).forEach(k => {
-      if (k.indexOf("glass:") !== 0) return;          // never a `gc` hold: that is our own write
-      const t = ((held.t || {})["cp:" + k]) || held.at || 0;
-      if (t > best) best = t;
-    });
-  }
-  const mine = (log || glassLogStamps())[id];
-  if (mine && mine.job > best) best = mine.job;
-  if (typeof cpStored === "function") {
-    Object.keys(j.glass || {}).forEach(k => {
-      const row = cpStored(id, "glass:" + k);
-      const t = row ? stampMs(row.when) : 0;
-      if (t > best) best = t;
-    });
-  }
-  /* and the clear this dashboard made itself, which is the only record of it
-     until the Log line has been written and read back */
-  const own = stampMs(OFFICE_FLOOR_AT[id] || OFFICE_FLOOR_AT[j.id] || "");
-  if (own > best) best = own;
-  return best;
-}
-
-/** Is an office change to THIS job's glass still settling? While it is, the
-    colour writer stands down for this job (see glassColourPlan).
-
-    The window is PENDING_MS - the same three minutes every other optimistic
-    hold in this app uses, and for the same reason: it is how long the
-    downloaded copy, the dashboard's own sheets and the floor's list can take
-    to agree on something this dashboard has already done.
-
-    It is one job's window, not the sheet's. An un-tick on one job says nothing
-    about another and must never hold the floor's work off the whole sheet. */
-/* How many jobs the guard stood down for in this pass. A deferred job is not a
-   dropped one: the writer re-plans from whatever the list says every time it
-   runs, so the colour lands on a later pass. But it only runs when something
-   moves - a floor tap, or a load - and on a quiet evening nothing may move
-   again for hours, which would leave the sheet stale for no good reason. So a
-   pass that deferred anything comes back, through the follow-up the cap
-   already uses: one timer, no requests, and it stops as soon as the windows
-   have closed and there is nothing left to do. */
-let GLASS_SETTLING = 0;
-function officeSettling(j, log) {
-  if (!j || !j.id) return false;
-  const held = PENDING[j.id] || PENDING[String(j.id).toUpperCase()];
-  /* a hold on any glass item of this job: the office has clicked and the file
-     has not caught up. Never a `gc` hold, which is this feature's own write. */
-  if (held && held.cp && Object.keys(held.cp).some(k => k.indexOf("glass:") === 0)) return true;
-  const at = glassOfficeJobStamp(j, log);
-  return at > 0 && (Date.now() - at) < PENDING_MS;
-}
-
-/** The Dashboard Log, indexed by job and glass type, in one pass.
-    CHANGES can be four hundred lines and the writer asks about four columns of
-    every job on the sheet, so asking it line by line would be the log walked
-    a couple of thousand times per run. Built once per run and handed down;
-    a caller with nothing to hand gets a fresh one, so the function above is
-    still usable on its own. */
-function glassLogStamps() {
-  const out = {};
-  for (let i = 0; i < CHANGES.length; i++) {
-    const c = CHANGES[i];
-    if (!c) continue;
-    const what = String(c.what || "").toUpperCase();
-    /* "GLASS DG" is one column; "GLASS: ALL DONE" and "GLASS: CLEARED" are the
-       whole group and count for every one of them; and "FLOOR GLASS COUNTERS"
-       is the office clearing the floor's own counters, which is an office
-       action on this job's glass like any other.
-
-       That last one used to be excluded here, deliberately and wrongly. The
-       reasoning was that the feature must not feed the contest with its own
-       writes - but the clear's OTHER half, the DoneAt it stamps on the floor's
-       row, was being read as a FLOOR action by floorStamp. Counting one side
-       and not the other is what let the office's own clear out-rank the
-       office. Both halves are the office's, and both are counted now. */
-    const group = what.indexOf("GLASS:") === 0;
-    const clear = what === FLOORCLEAR_LOG.toUpperCase();
-    if (!group && !clear && what.indexOf("GLASS ") !== 0) continue;
-    const id = String(c.job || "").toUpperCase();
-    if (!id) continue;
-    const t = stampMs(c.at);
-    if (!t) continue;
-    const m = out[id] || (out[id] = {});
-    /* every one of them counts for the JOB; only a column's own line counts
-       for that column */
-    if (t > (m.job || 0)) m.job = t;
-    if (clear) continue;
-    const key = group ? "*" : what.slice(6).toLowerCase();
-    if (t > (m[key] || 0)) m[key] = t;
-  }
-  return out;
-}
-
-/** What this job's four glass cells should be repainted to, or null when there
-    is nothing to do - which is the answer nearly every time this is asked.
+/** What this job's four glass cells should say in the RECORD, or null when
+    there is nothing to do - which is the answer nearly every time this is
+    asked.
 
     Read it as a series of reasons to write nothing, because that is what it
-    mostly is: the job is finished, the floor has never touched it, the column
-    is not on this sheet, the job has none of that glass, the cell already
-    says it, the cell is a colour this feature does not own, or the office
-    spoke more recently than the floor did. */
-function glassColourPlan(j, log) {
+    mostly is: the job is finished, the record cannot be written, the switch-on
+    import has not drained, the floor has never touched the job, the column is
+    not on this sheet, the job has none of that glass, the record already says
+    it, or the office said something later. */
+function glassColourPlan(j) {
   if (!j || j.done) return null;             // a gold row is finished work: leave it whole
   if (!PRODMAP || !PRODMAP.glass || typeof ST === "undefined") return null;
-  /* THE OFFICE IS ABSOLUTE, AND THIS IS WHERE THAT IS ENFORCED.
-
-     The owner's rule, 2026-09-10: "the hierarchy is Excel, then master
-     dashboard, then glass. Any change from the dashboard is absolute. If the
-     glass updates the ticks it comes golden instantly, correct, and should not
-     change. An un-tick from the dashboard is absolute - no thinking, no
-     arguing."
-
-     So while an office change on this job's glass is still settling, this
-     function makes NO decision about the job. It does not compare stamps, it
-     does not plan, it does not write. Not because the comparison is wrong -
-     it was corrected twice - but because inside that window it is being fed
-     copies that have not caught up, and it cannot tell them apart from the
-     real thing: the downloaded workbook is about 36 seconds behind, the
-     floor's list is a poll behind, and the clear's own DoneAt looks exactly
-     like a tap. The owner watched the gold come back after both stamp fixes.
-     This one stops arguing instead of trying to win the argument.
-
-     Two readings of "still settling", and either is enough, because the office
-     must be safe in every one of the places its action is read from:
-
-       - a hold on any of this job's glass items. pend() stamps it at the
-         CLICK and applyPending lets it go only when the downloaded file agrees
-         - which is precisely the window this needs;
-       - the office's own stamp on the job (glassOfficeJobStamp: the holds, the
-         Dashboard Progress rows, the Dashboard Log lines including the clear's
-         own, and OFFICE_FLOOR_AT) being younger than PENDING_MS. That covers
-         the moment after a hold is released, and a second dashboard or a
-         reload, where the hold never existed.
-
-     What this feature is FOR is carrying the FLOOR's work up to the sheet. It
-     is not for second-guessing the office, and outside this window it does not
-     change at all: last-writer-wins still decides, and a genuine floor tap
-     still paints. */
-  if (officeSettling(j, log)) { GLASS_SETTLING++; return null; }
+  if (!cpWritable()) return null;            // no record to write: nothing decides anything
+  /* the switch-on window. Until the one-time import has drained, an item with
+     no row reads as the sheet's own colour, and writing a floor row over that
+     would be deciding a contest against a record that does not exist yet. */
+  if (cpImportPending()) return null;
   const g = stationForJob(j.id);
   if (!g) return null;                       // never fed to the floor
-  const floorAt = stampMs(ST.floorStamp(g));
+  const at = ST.floorStamp(g);
+  const floorAt = stampMs(at);
   if (!floorAt) return null;                 // the floor has never tapped it: nothing of theirs to show
   const want = ST.glassColours(g);
-  /* worked out once for the job, not once per column: byId is a linear scan
-     and this is asked of every job on the sheet, six times a minute */
-  const jobAt = glassOfficeJobStamp(j, log);
-  /* and the memory of our own clear is let go once the floor has moved that
-     row since - it can decide nothing after that, and the map would otherwise
-     grow for as long as the tab is open */
-  const own = OFFICE_FLOOR_AT[j.id];
-  if (own && stampMs(own) < floorAt) delete OFFICE_FLOOR_AT[j.id];
+  /* whose work this is. DoneBy is the floor's own last-touch name; the stage's
+     own By is the fallback, and a row with neither is still the floor. */
+  const who = String(g.doneBy || ST.ALL_STAGE_KEYS.map(k => (g.by || {})[k]).filter(Boolean)[0] ||
+                     "the floor");
   const out = [];
   ST.COLOUR_TYPES.forEach(type => {
     const col = PRODMAP.glass[type];
     if (!col) return;                        // not a column on this sheet at all
-    if (!((j.glass || {})[type] > 0)) return;   // the job has none of this glass
-    const have = glassCellNow(j, type);
-    /* undefined means the cell is carrying something else - the sheet's own Cut
-       green, or a colour somebody painted for a reason of their own. This
-       feature owns gold, yellow and nothing; it does not paint over anything
-       it cannot recognise, in either direction. */
-    if (have === undefined) return;
-    if (have === want[type]) return;         // already right: never rewrite a cell
-    /* last writer wins, and a tie goes to the office. Two reasons: the owner's
-       "the master dashboard should not be overridden", and the office's own
-       stamp is written to the minute, so it is already biased early - giving it
-       the ties it would otherwise lose is the reading that is wrong less often.
-       It is also the quiet answer: a tie resolves to no write at all. */
-    if (glassOfficeStamp(j.id, type, log, jobAt) >= floorAt) return;
-    out.push({ type: type, col: col, from: have, to: want[type] });
+    const total = Math.round(Number((j.glass || {})[type]) || 0);
+    if (!(total > 0)) return;                // the job has none of this glass
+    const item = "glass:" + type;
+    /* A COLOUR THIS FEATURE DOES NOT OWN. The sheet's own Cut green, or
+       something somebody used for a reason of their own: it owns gold, yellow
+       and nothing, and it does not paint over anything else in either
+       direction (the colours spec, 2026-09-10). That is a fact about the CELL,
+       not about status - the record still decides what is done - and it is the
+       same one reading of the parsed file the phase pipeline makes. An office
+       CLICK still paints such a cell, exactly as it always did. */
+    if (cpFileStatus(j, item) === "cut") return;
+    const status = GLASS_WORD_CP[want[type]] || "";
+    const row = cpRow(j.id, item);
+    /* nothing recorded and nothing to record: a blank cell the floor has not
+       finished either. Writing a row of nothing for every glass item of every
+       fed job would be thousands of rows saying the same as no row at all. */
+    if (!row && !status) return;
+    /* IDEMPOTENCE. The record already says this, whoever put it there - so
+       there is nothing for this feature to decide. Ten turns of the poll after
+       a write send no request at all, which is what lets this be called six
+       times a minute. If the SHEET is behind the record - a fill the workbook
+       refused - that is cpRepaintRun's job, not this one's. */
+    if (row && row.status === status) return;
+    /* LAST WRITER WINS, AND IT IS TWO FIELDS OF ONE ROW. The office (or a
+       colour adopted from Excel, which is somebody acting in the file) spoke
+       at `When`; the floor acted at `floorStamp`. A tie goes to the office,
+       for the owner's own reason - "any change from the dashboard is
+       absolute" - and because a tie resolving to no write is the quiet
+       answer. An `import` or `floor` row never blocks: neither is somebody
+       deciding something after the floor did. */
+    if (row && (row.source === "office" || row.source === "excel") &&
+        stampMs(row.when) >= floorAt) return;
+    /* AND NEVER OVER A NEWER READING OF THE FLOOR'S OWN WORK (review finding
+       F4). STATION_ITEMS can regress: a full read of the list dispatched
+       before a delta can land after it, and for a moment this dashboard holds
+       an older copy of the floor's row than the one it has already recorded.
+       Writing that back would undo the floor's own newer tap. The record's
+       stamp is the floor's action time, so the two are directly comparable. */
+    if (row && row.source === "floor" && stampMs(row.when) > floorAt) return;
+    /* the count behind the colour. Gold is all of them; blank is none; a
+       part-way cell keeps whatever count the record already had, because the
+       floor counts one combined DG + TG number and a per-type count would be
+       invented (the colours spec, Amendment A12). */
+    const done = status === "done" ? total
+      : status === "" ? 0
+      : (row && row.done > 0 && row.done < total ? row.done : 0);
+    out.push({ type: type, item: item, col: col, status: status, done: done, total: total,
+               who: who, when: at,
+               from: GLASS_COLOUR_WORD[row ? row.status : ""], to: want[type] });
   });
   return out.length ? out : null;
 }
 
-/** Paint one job's cells. On the job's own checkpoint chain, so an office tick
-    and a floor colour for the same job can never interleave, and inside
-    serialised() for the sheet, so two of these cannot either. */
+/** Put one job's glass on the record, and then into Excel. The record first
+    and the colour second, exactly as an office click does it - the same
+    cpSaveRow, the same fill, the same PAINTED - so there is one checkpoint
+    write path in this app and the floor's work goes down it too.
+
+    On the job's own checkpoint chain, so an office tick and a floor colour for
+    the same job can never interleave, and the fills inside serialised() for
+    the sheet, so two of these cannot either. */
 async function glassColourWrite(job, plan) {
   try {
+    /* THE RECORD FIRST. Quiet, because this runs from a load and from a
+       ten-second timer and may never throw a consent window at anybody; a row
+       that would have to be created without one is left for the next pass. */
+    const wrote = [];
+    for (let i = 0; i < plan.length; i++) {
+      const p = plan[i];
+      const got = await cpSaveRow({ job: job, item: p.item, done: p.done, total: p.total,
+                                    status: p.status, who: p.who, when: p.when,
+                                    source: "floor", quiet: true, add: !cpRow(job, p.item) });
+      if (got) wrote.push(p);
+    }
+    if (!wrote.length) { delete GLASSC_BUSY[job]; return 0; }
+    /* THE LINE IN THE OFFICE'S HISTORY, WRITTEN NOW - after the record and
+       before the fill (review finding F5). It sat after the fill until
+       2026-09-11, which meant a refused fill threw first and a floor colour
+       that had been RECORDED left no trace in Changes at all; cpRepaintRun
+       would paint the cell on a later load and say nothing either. The record
+       is the event - the colour in the cell is its copy - so the line belongs
+       to the moment the record moved.
+
+       The wording no longer decides anything (glassLogStamps went with the
+       contest), but it is still the honest name for whose work it is. */
+    const said = k => wrote.map(p => p.type.toUpperCase() + " " + (p[k] || "blank")).join(", ");
+    noteChange(job, GLASSPAINT_LOG, said("from"), said("to"));
+    /* THEN THE COPY IN EXCEL. */
     await CW.serialised(GLASS_PROD_SHEET, async () => {
       /* re-found immediately before writing, like every other fill in this app:
          rows move, and a remembered row number eventually paints somebody
@@ -2391,41 +2843,25 @@ async function glassColourWrite(job, plan) {
       const row = await CW.rowForJob(GLASS_PROD_SHEET, job);
       const f = await CW.findFile();
       const S = f.base + "/worksheets('" + GLASS_PROD_SHEET + "')";
-      await CW.batchWrite(plan.map(p => ({
+      await CW.batchWrite(wrote.map(p => ({
         method: "PATCH",
         url: S + "/range(address='" + CW.A1(p.col) + row + "')/format/fill",
         body: { color: GLASS_HEX[p.to] }
       })));
     });
+    /* the colour really is in the cell now, so the safeguard knows this
+       dashboard put it there and will not adopt its own work as somebody's
+       hand-paint - and cpRepaintRun knows it has nothing to put right */
+    wrote.forEach(p => cpPainted(job, p.item, p.status));
     delete GLASSC_FAIL[job];                 // it works again: forget the backoff
     setGlassFoot();
-    /* one line per paint, in the office's own history. Until 2026-09-11 this
-       feature wrote nothing anywhere (the colours spec's Amendment A12), so a
-       job going gold by itself left no trace at all - which is exactly why the
-       morning of 2026-09-11 was inexplicable until the whole thing was
-       reproduced in a browser. A12's other reason stands and is not touched:
-       no Dashboard Progress row, because the floor counts one combined DG + TG
-       number and a per-type count would be invented.
-
-       The WORDING is load-bearing. glassLogStamps reads any entry beginning
-       "Glass " or "Glass:" as the OFFICE having spoken about that job's glass;
-       this line is the FLOOR's work and must never be read as one, or the
-       writer's own paint would out-rank the floor it came from. "Floor glass
-       colours" begins with neither, exactly as "Floor glass counters" does -
-       do not rename it to start with Glass. */
-    const said = k => plan.map(p => p.type.toUpperCase() + " " + (p[k] || "blank")).join(", ");
-    noteChange(job, GLASSPAINT_LOG, said("from"), said("to"));
     scheduleReconcile();                     // read the file back once it has caught up
+    return wrote.length;
   } catch (e) {
-    /* let the holds go rather than putting an old colour back: what the sheet
-       still says IS the old colour, and holding a guess over it for three
-       minutes would be this dashboard telling the office something untrue */
-    const back = {};
-    plan.forEach(p => { back[p.type] = null; });
-    pend(job, { gc: back });
-    ALL = applyPending(ALL);
-    if (!rowsInUse()) quietRows();
-    if (state.sel === job && $("#dhost")) renderDrawer();
+    /* Nothing to put back: the record is the record, and if a row landed it
+       stands. A refused FILL leaves PAINTED alone, so cpRepaintRun paints it
+       on the next load; a refused ROW is simply not on the record and the next
+       pass plans it again. What this does is stop asking for a while. */
     const why = (e && e.message) || String(e);
     const f = GLASSC_FAIL[job] || { n: 0 };
     f.n++; f.at = Date.now(); f.why = why;
@@ -2459,26 +2895,19 @@ async function glassColourWrite(job, plan) {
 async function glassColourRun() {
   if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.serialised) return 0;
   if (STATION_OK !== true || !PRODMAP || !ALL.length) return 0;
+  if (!cpWritable() || cpImportPending()) return 0;   // no record, or not settled: decide nothing
   /* a pass is already in the air. Arming the follow-up rather than simply
      returning is what guarantees the rest of a big catch-up still goes out. */
   if (glassRunning) { glassColourAgain(); return 0; }
   const all = [];
-  GLASS_SETTLING = 0;
-  const log = glassLogStamps();              // one pass over the log, not one per column
   for (let i = 0; i < ALL.length; i++) {
     const j = ALL[i];
     if (GLASSC_BUSY[j.id]) continue;         // one write per job in the air at a time
     if (glassWaiting(j.id)) continue;        // this one is serving a backoff, or given up on
-    const plan = glassColourPlan(j, log);
+    const plan = glassColourPlan(j);
     if (plan) all.push({ id: j.id, plan: plan });
   }
-  if (!all.length) {
-    /* nothing to paint now - but if that is because the office is still
-       settling on some job, come back for it rather than waiting for the next
-       thing to happen to move */
-    if (GLASS_SETTLING) glassColourAgain();
-    return 0;
-  }
+  if (!all.length) return 0;
   /* the cap counts CELLS, because a cell fill is what reaches the workbook -
      one job is one batched request carrying up to four of them */
   const todo = [];
@@ -2489,18 +2918,11 @@ async function glassColourRun() {
     todo.push(all[i]);
   }
   const whole = todo.length === all.length;
-  /* held before a single request leaves, and all of them before anything is
-     redrawn: the screen must show what it is about to write, not flicker
-     through the states it is writing */
-  todo.forEach(x => {
-    GLASSC_BUSY[x.id] = 1;
-    const held = {};
-    x.plan.forEach(p => { held[p.type] = p.to; });
-    pend(x.id, { gc: held });
-  });
-  ALL = applyPending(ALL);
-  if (!rowsInUse()) quietRows();
-  if (state.sel && $("#dhost")) renderDrawer();
+  /* one write per job in the air at a time. Nothing is held and nothing is
+     drawn yet: the record is what the screen reads, and cpSaveRow puts each
+     row in as it lands, so the board catches up a row at a time rather than
+     showing a colour before it has been recorded. */
+  todo.forEach(x => { GLASSC_BUSY[x.id] = 1; });
   console.log("[glass] painting " + todo.length + " job" + (todo.length > 1 ? "s" : "") +
               " (" + cells + " cell" + (cells > 1 ? "s" : "") + ") of " + all.length +
               " from the floor's counters");
@@ -2511,7 +2933,8 @@ async function glassColourRun() {
        through its own checkpoint chain inside that, so an office tick and a
        floor colour for one job can never interleave. */
     const r = await stationSend(todo.map(x => () => cpChain(x.id, () => glassColourWrite(x.id, x.plan))));
-    if (!whole || r.failed || GLASS_SETTLING) glassColourAgain();
+    if (!whole || r.failed) glassColourAgain();
+    if (r.sent) cpRedraw();                  // the record moved: the board and the drawer follow
   } finally {
     glassRunning = false;
   }
@@ -4748,7 +5171,7 @@ function cpSummaryHtml(j) {
 function cpLineHtml(j, it, on, withAll) {
   const s = itemState(j, it.key); if (!s) return "";
   const dis = on ? "" : " disabled";
-  const w = cpStored(j.id, it.key);
+  const w = cpRow(j.id, it.key);       // who set it and when, off the record itself
   const btn = (t, act, cls) => '<button class="' + cls + '" data-cp="' + esc(it.key) + '" data-act="' + act + '"' + dis + '>' + t + '</button>';
   return '<div class="cpline" data-cpline="' + esc(it.key) + '" data-cpgroup="' + esc(it.group) + '">' +
     '<span class="cplab">' + esc(cap(it.label)) + '</span>' +
@@ -4783,24 +5206,32 @@ function cpGroupHtml(j, items, name, on, showBtn, perLineAll, allText) {
 function cpSectionHtml(j, ed) {
   const items = cpItems(j);
   if (!items.length) return "";
+  /* a drawer opened before the first load has answered: read the record once,
+     shared with every other caller, and draw again when it answers - the same
+     shape stationReadIfNeeded has */
+  if (CP_LIST_OK === null) cpListReadIfNeeded(() => { if (state.sel === j.id && $("#dhost")) renderDrawer(); });
   /* a gold row is finished work: every checkpoint on it reads as done, so
      offering "Clear" would only invite someone to punch white holes in it */
   const locked = !!j.done;
-  const on = ed && !locked;
+  /* the record cannot be written: every control is dead and the section says
+     why, in the same shape a gold row uses */
+  const readOnly = !cpWritable();
+  const on = ed && !locked && !readOnly;
   const g = k => items.filter(x => x.group === k);
   const prodNames = [];
   items.forEach(x => { if (x.group.indexOf("prod:") === 0 && prodNames.indexOf(x.group) < 0) prodNames.push(x.group); });
   const hint = locked
     ? "Marked ready to deliver: all checkpoints are complete. Use Undo above to put the job back into production first."
+    : readOnly ? cpWhyNot()
     : (ed ? "" : "Click Edit above to tick work off. Only the colour goes into the Production sheet.");
   return '<div class="sect"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">' +
       '<span class="kick">Checkpoints</span>' +
       '<span class="cpsum">' + esc(cpSummaryHtml(j)) + '</span></div>' +
     (hint ? '<div class="cphint">' + esc(hint) + '</div>' : "") +
-    g("win").map(x => cpLineHtml(j, x, on && !cpBusy(j, "win"), !locked)).join("") +
-    g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked)).join("") +
-    (g("glass").length ? cpGroupHtml(j, g("glass"), "Glass", on, !locked, !locked, "All glass done") : "") +
-    prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked, false, "All done")).join("") +
+    g("win").map(x => cpLineHtml(j, x, on && !cpBusy(j, "win"), !locked && !readOnly)).join("") +
+    g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly)).join("") +
+    (g("glass").length ? cpGroupHtml(j, g("glass"), "Glass", on, !locked && !readOnly, !locked && !readOnly, "All glass done") : "") +
+    prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked && !readOnly, false, "All done")).join("") +
     '</div>';
 }
 
@@ -4812,7 +5243,7 @@ function cpPatchSection(j) {
   if (!host || !j || !host.querySelectorAll) return;
   const sum = host.querySelector(".cpsum");
   if (sum) sum.textContent = cpSummaryHtml(j);
-  const on = state.edit && !j.done;
+  const on = state.edit && !j.done && cpWritable();
   host.querySelectorAll("[data-cpline]").forEach(el => {
     const s = itemState(j, el.dataset.cpline);
     if (!s) return;
@@ -4840,6 +5271,7 @@ function cpPatchSection(j) {
 function wireCheckpoints(host, id) {
   const job = byId(id);
   if (!job || job.done) return;                    // read-only while the row is gold
+  if (!cpWritable()) return;                       // ... and while the record cannot be written
   host.querySelectorAll("[data-cp]").forEach(el => el.onclick = () => {
     const j = byId(id); if (!j) return;
     const item = el.dataset.cp, s = itemState(j, item); if (!s) return;
@@ -5361,6 +5793,7 @@ async function start() {
   setInterval(poll, 12000);
   setStationFoot(); setInterval(setStationFoot, 60000);   // "station feed: 3 min ago" keeps counting
   stationTick();                   // the floor's own two lists, kept current by delta
+  cpTick();                        // ... and the record of checkpoint status, every ten seconds
   checkBuild(); setInterval(checkBuild, 120000);
 }
 

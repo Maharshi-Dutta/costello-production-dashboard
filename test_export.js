@@ -166,6 +166,22 @@ function useJobs(list) {
     "state.sort = 'id'; state.desc = false; state.view = 'flat'; state.hidden = {}; ALERTS = {};");
 }
 useJobs([A, B, C, PAST]);
+/* CHANGED 2026-09-11 (spec: status-list-is-truth, step 2). Checkpoint status is
+   the `Dashboard progress` list now, not the Excel colour, so the fixtures'
+   colours are put ON THE RECORD once - which is exactly what the one-time
+   import does on the first load after the switch-over. Everything below then
+   asks the same questions of the same answers. */
+(function record(jobs) {
+  const rows = [];
+  jobs.forEach(j => cpItems(j).forEach(it => {
+    const st = cpFileStatus(j, it.key);
+    if (st !== "done" && st !== "process") return;
+    rows.push({ id: "r" + rows.length, fields: cpRowFields(j.id, it.key,
+      st === "done" ? it.total : 0, it.total, st, "the sheet", "2026-09-01T09:00:00Z", "import") });
+  }));
+  cpRowsSet(cpRowsFrom(rows));
+})([A, B, C, PAST, TALL]);
+vm.runInThisContext("CP_LIST_OK = true; CP_IMPORTED = '2026-09-11T09:00:00Z'; cpImportCheck();");
 /* dashboard comments (one of them deliberately says "phone", to prove free text
    is exported as written) and one alert, so hasComments / hasAlerts have
    something to find. The alert address is fake and only ever exported as a count. */

@@ -118,8 +118,35 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   cp: { win: "", drs: "", glass: {}, prod: { "7000 casement": cpProd || {} } }
 }, extra || {}));
 
+/* CHANGED 2026-09-11 (spec: status-list-is-truth, step 2). Checkpoint status
+   is the `Dashboard progress` list now, not the Excel colour, so a fixture
+   that describes a job by its colours has to be put ON THE RECORD before
+   anything is asked about it - which is exactly what the one-time import does
+   on the first load after the switch-over. `cut` is deliberately not
+   recorded: it is the sheet's own green, nothing writes it to the record, and
+   jobPhase still reads it off the parsed file. */
+function record() {
+  const rows = [];
+  for (let a = 0; a < arguments.length; a++) {
+    const j = arguments[a];
+    if (!j || !j.id) continue;
+    cpItems(j).forEach(it => {
+      const st = cpFileStatus(j, it.key);
+      if (st !== "done" && st !== "process") return;
+      rows.push({ id: "r" + rows.length, fields: cpRowFields(j.id, it.key,
+        st === "done" ? it.total : 0, it.total, st, "the sheet", "2026-09-01T09:00:00Z", "import") });
+    });
+  }
+  cpRowsSet(cpRowsFrom(rows));
+  set("CP_IMPORTED = '2026-09-11T09:00:00Z'; cpImportCheck();");
+  return arguments[0];
+}
+
 (async () => {
   let n = 0; const pass = t => { n++; console.log("  ok  " + t); };
+  /* the record answered: checkpoints are writable, so the drawer draws its
+     controls rather than the "the list is not there yet" state */
+  set("CP_LIST_OK = true;");
 
   /* ---- 1. the pipeline itself ---- */
   assert.deepStrictEqual(PHASES, ["In office", "Sent to floor", "Cutting", "In fabrication",
@@ -127,35 +154,40 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   pass("seven phases, in the order the work happens");
 
   /* 0 - in office: no floor date and nothing coloured */
-  assert.strictEqual(jobPhase(withWork({})), 0);
-  assert.strictEqual(phaseName(withWork({})), "In office");
+  assert.strictEqual(jobPhase(record(withWork({}))), 0);
+  assert.strictEqual(phaseName(record(withWork({}))), "In office");
   /* 1 - sent to floor: the date alone is enough */
-  assert.strictEqual(jobPhase(withWork({}, { dates: { floor: "2026-09-01" } })), 1);
+  assert.strictEqual(jobPhase(record(withWork({}, { dates: { floor: "2026-09-01" } }))), 1);
   /* ...and so is a checkpoint that has moved, with no date at all */
-  assert.strictEqual(jobPhase(withWork({}, { cp: { win: "done", drs: "", glass: {}, prod: {} } })), 1);
+  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "done", drs: "", glass: {}, prod: {} } }))), 1);
   pass("0 In office / 1 Sent to floor: the date, or any checkpoint that has moved");
 
   /* 2 - cutting: the sheet's Cut green on a product cell, nothing fabricated */
-  const cutting = withWork({ f: "cut" }, { dates: { floor: "2026-09-01" } });
+  const cutting = record(withWork({ f: "cut" }, { dates: { floor: "2026-09-01" } }));
   assert.strictEqual(jobPhase(cutting), 2);
-  assert.strictEqual(cpStatus(cutting, "prod:7000 casement:f"), "cut");
+  /* CHANGED: cpStatus is the record now, and the record never carries "cut".
+     The Cut green is read off the parsed file, through cpFileStatus, which is
+     the one reading of it the phase pipeline still makes. */
+  assert.strictEqual(cpFileStatus(cutting, "prod:7000 casement:f"), "cut");
+  assert.strictEqual(cpStatus(cutting, "prod:7000 casement:f"), "",
+    "and the checkpoint itself reads as not started, because nobody has ticked it");
   /* the same job once a frame goes yellow: fabrication outranks cutting */
-  assert.strictEqual(jobPhase(withWork({ f: "cut", s: "process" })), 3);
+  assert.strictEqual(jobPhase(record(withWork({ f: "cut", s: "process" }))), 3);
   pass("2 Cutting, and 3 In fabrication the moment anything goes yellow");
 
   /* 3 - windows or doors in process count as fabrication too */
-  assert.strictEqual(jobPhase(withWork({}, { cp: { win: "process", drs: "", glass: {}, prod: {} } })), 3);
+  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "process", drs: "", glass: {}, prod: {} } }))), 3);
   /* glass on its own does not: that is the glazing end of the job */
-  assert.strictEqual(jobPhase(withWork({}, { cp: { win: "", drs: "", glass: { tg: "process" }, prod: {} } })), 1);
+  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "", drs: "", glass: { tg: "process" }, prod: {} } }))), 1);
   pass("windows/doors in process is fabrication; glass on its own is not");
 
   /* 4 - in glazing: every F/S/T done, the rest of the job not */
-  const glazing = withWork({ f: "done", s: "done", t: "done" },
-    { cp: { win: "process", drs: "", glass: { tg: "" }, prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } });
+  const glazing = record(withWork({ f: "done", s: "done", t: "done" },
+    { cp: { win: "process", drs: "", glass: { tg: "" }, prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } }));
   assert.strictEqual(jobPhase(glazing), 4, "products finished beats windows still in process");
   /* 5 - quality check: everything ticked, nobody has marked it ready yet */
-  const qc = withWork({}, { cp: { win: "done", drs: "", glass: { tg: "done" },
-    prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } });
+  const qc = record(withWork({}, { cp: { win: "done", drs: "", glass: { tg: "done" },
+    prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } }));
   assert.strictEqual(jobPhase(qc), 5);
   assert.strictEqual(jobPhase(mkJob({ done: 1 })), 6, "gold row");
   assert.strictEqual(jobPhase(mkJob({ cat: "past" })), 6, "no longer on the Production sheet");
@@ -164,11 +196,11 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   pass("4 In glazing / 5 Quality check / 6 Fitted - delivered");
 
   /* a job with no countable work at all still reads sensibly */
-  assert.strictEqual(jobPhase(mkJob({})), 0);
-  assert.strictEqual(jobPhase(mkJob({ dates: { floor: "2026-09-01" } })), 1);
+  assert.strictEqual(jobPhase(record(mkJob({}))), 0);
+  assert.strictEqual(jobPhase(record(mkJob({ dates: { floor: "2026-09-01" } }))), 1);
   /* products only, all done: that is everything done, so quality check */
-  assert.strictEqual(jobPhase(mkJob({ prods: [{ n: "x", f: 2, s: 0, t: 0, st: [] }],
-    cp: { win: "", drs: "", glass: {}, prod: { x: { f: "done" } } } })), 5);
+  assert.strictEqual(jobPhase(record(mkJob({ prods: [{ n: "x", f: 2, s: 0, t: 0, st: [] }],
+    cp: { win: "", drs: "", glass: {}, prod: { x: { f: "done" } } } }))), 5);
   pass("a job with no items, and a job that is nothing but products, both read sensibly");
 
   /* ---- 2. the parser reads the Cut colour off the sheet's own legend ---- */
@@ -222,6 +254,7 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
     "a cut cell adds nothing to the product status the Python reader also produces");
   assert.strictEqual(j.done, 0);
   assert.strictEqual(j.wnd, 4);
+  record(j);
   assert.strictEqual(itemState(j, "prod:7000 casement:f").status, "",
     "cut is not progress you can tick: the checkpoint still reads as not started");
   assert.strictEqual(jobPhase(j), 3, "one yellow frame puts the whole job in fabrication");
@@ -233,6 +266,7 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
   const inProd = withWork({ f: "cut" }, { id: "R0001", dates: { floor: "2026-09-01" }, stage: "floor" });
   const ready = mkJob({ id: "R0002", done: 1, cat: "active", blk: 3, stage: "floor" });
   const collect = mkJob({ id: "R0003", cat: "collect", blk: 2 });
+  record(inProd, ready, collect);
   global.__jobs = [inProd, ready, collect];
   set("ALL = __jobs; CHANGES = []; state.sel = null; state.picked = {}; state.view = 'flat';");
 
@@ -248,6 +282,7 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
      stuck at phase 0 keeps the stage word, which does tell the two apart. */
   const waiting = withWork({}, { id: "R0004", stage: "ready", dates: { ready: "2026-09-02" } });
   const office = withWork({}, { id: "R0005", stage: "office" });
+  record(waiting, office, inProd, ready, collect);
   assert.strictEqual(jobPhase(waiting), 0);
   assert.strictEqual(jobPhase(office), 0);
   assert.ok(rowHtml(waiting, 0, 10).indexOf(">Waiting<") >= 0,
@@ -256,9 +291,9 @@ const withWork = (cpProd, extra) => mkJob(Object.assign({
     "and is not collapsed into In office by the phase word");
   assert.ok(rowHtml(office, 0, 10).indexOf(">In office<") >= 0);
   /* once anything on the sheet has moved, the phase is the better word for both */
-  const waitingCut = withWork({ f: "cut" }, { id: "R0004", stage: "ready", dates: { ready: "2026-09-02" } });
+  const waitingCut = record(withWork({ f: "cut" }, { id: "R0004", stage: "ready", dates: { ready: "2026-09-02" } }));
   assert.ok(rowHtml(waitingCut, 0, 10).indexOf(">Cutting<") >= 0);
-  const officeMoved = withWork({ f: "process" }, { id: "R0005", stage: "office" });
+  const officeMoved = record(withWork({ f: "process" }, { id: "R0005", stage: "office" }));
   assert.ok(rowHtml(officeMoved, 0, 10).indexOf(">In fabrication<") >= 0);
   pass("Waiting and In office stay apart until something on the sheet actually moves");
 

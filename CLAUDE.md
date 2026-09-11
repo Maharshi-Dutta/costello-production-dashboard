@@ -27,6 +27,17 @@ These override any convenience, any "it would be quicker to", any assumption
 about what a feature "should" also do. They apply to every session, not just
 the one that first wrote them down.
 
+> **PENDING (2026-09-11), not in force yet.** Three passages below are marked
+> `[PENDING 2026-09-11]`. They describe the world after
+> `docs/specs/2026-09-11-status-list-is-truth.md` ships — checkpoint status
+> moving out of the Excel colour and into the `Dashboard progress` SharePoint
+> list, for the office's ticks **and** for the colours the floor's work puts
+> into the sheet. That work is **built in the working tree and not committed**;
+> steps 2 and 3 are both done and ship together after the owner has said go. Until the commit lands,
+> the sentence in force is the one printed above each marked passage. Delete
+> the markers and the superseded sentences on the day it ships; if the owner
+> decides against it, delete the marked passages instead.
+
 1. **The master `Production` sheet is only ever changed in two ways:**
    sanctioned fills (single-cell colour writes) and whole-row section moves
    (`moveJobRow` in `graph.js`, which re-finds the row by job number, copies
@@ -37,8 +48,21 @@ the one that first wrote them down.
    gave each of them in a dated spec:
    - **checkpoint colours** — the office ticking work off in the drawer
      (`docs/specs/2026-09-04-checkpoints.md`);
+     > **[PENDING 2026-09-11]** replace that line with: *"**checkpoint
+     > colours** — the office ticking work off in the drawer
+     > (`docs/specs/2026-09-04-checkpoints.md`, and since 2026-09-11
+     > `docs/specs/2026-09-11-status-list-is-truth.md`): the fill is a **copy**
+     > of the `Dashboard progress` list row, written from it and never read
+     > back as status. Painting the cell in Excel by hand does not set
+     > anything — the dashboard notices it and adopts it into the list
+     > instead."* The count of sanctioned reasons does not change: still two.
    - **glass colours from the floor** — the office dashboard painting DG, TG,
      TUFF and NOT TUFF from what the floor has recorded on the tablet
+     > **[PENDING 2026-09-11]** add to this bullet: *"since 2026-09-11 that
+     > paint is a copy too — the floor's colour goes onto the `Dashboard
+     > progress` record first, with `Source = floor`, and the cell is painted
+     > from the record. Whoever spoke last is decided on that row's `When`, and
+     > nothing reads a cell's colour to decide anything."*
      (`docs/specs/2026-09-10-glass-colours-two-way.md`, owner 2026-09-10:
      *"the production sheet is main doc, don't edit that as in text; by colour
      is ok"*). ARCH, ASTRAGAL, FANCY and EXTRA stay hand-ticked and are never
@@ -49,9 +73,20 @@ the one that first wrote them down.
    `Dashboard Views`, `Dashboard Progress`, `Dashboard Alerts`. `Dashboard
    Config` is **read-only** for the dashboard — it is never created or
    written by code, only read.
+   > **[PENDING 2026-09-11]** the list of the dashboard's own sheets becomes
+   > `Dashboard Log`, `Dashboard Views`, `Dashboard Alerts`, and this sentence
+   > is added: *"`Dashboard Progress` was one of them until 2026-09-11. It is
+   > now **frozen**: the counts moved to the `Dashboard progress` SharePoint
+   > list and nothing writes the sheet again. It is parsed out of the
+   > downloaded workbook for **one** reader — the one-time import of the
+   > sheet's colours — and not parsed at all once that import has drained,
+   > which is every load but the first few, ever.
+   > `saveProgress`/`saveProgressMany` stay in `graph.js`, unused."*
 3. **SharePoint lists** hold state that must never go near the workbook at
-   all: `Dashboard phases` (hand-set phase per job, in the workbook's own
-   site) and the floor's three — `Glass station`, `Station people` and
+   all: in the workbook's own site, `Dashboard phases` (hand-set phase per
+   job) and `Dashboard print notes` (John's per-job note, shipped 2026-09-09
+   and missing from this rule until 2026-09-11); and the floor's three —
+   `Glass station`, `Station people` and
    `Station log` — in the separate private site `Floor stations`, which the
    station account can reach and the workbook's site cannot be reached from
    (shipped 2026-09-08). No list is created by code; if one is missing the
@@ -60,9 +95,28 @@ the one that first wrote them down.
    writes the floor's own columns of `Glass station`** (`Cut`, `Hotmelt`,
    `Glazed`, `Tuff` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds
    that list's job-fact columns (which since 2026-09-10 include `TuffTotal`,
-   the sheet's own TUFF quantity, and `OfficeDone`, the office's read-only
-   lock on a job) and reads all three. The tablet, for its part, can never
+   the sheet's own TUFF quantity, and `OfficeDone`, the read-only lock on a
+   job) and reads all three. The tablet, for its part, can never
    write `TuffTotal` or `OfficeDone`: `ST.floorOnly` drops both.
+   > **[PENDING 2026-09-11]** the opening clause becomes *"**SharePoint lists**
+   > hold state the workbook cannot hold safely"*, a fourth list in the
+   > workbook's own site is added — ***`Dashboard progress`, the single record
+   > of checkpoint status, one row per `JOB|ITEM`***
+   > (`docs/specs/2026-09-11-status-list-is-truth.md`) — and this sentence
+   > goes with it: *"`Dashboard progress` is the one list whose content is
+   > deliberately **copied into** the workbook — as a fill and nothing else —
+   > so people can see it in Excel. The copy is never read back as status."*
+   > Everything else in this rule stands unchanged, including "no list is
+   > created by code": a missing `Dashboard progress` makes checkpoints
+   > read-only and writes nothing anywhere.
+   >
+   > One clause moves with it: **`OfficeDone` stops meaning "the office's
+   > read-only lock" and starts meaning "the record says this job's glass is
+   > done"**. It is still a feeder column the tablet can never write, and it
+   > still greys the steppers — but since the floor's own work goes onto the
+   > record too, the floor finishing a job is what locks it, and only an office
+   > row stamped later unlocks it again.
+
    There are **exactly two** exceptions, each granted by the owner in a dated
    spec, each for a named case; a **third** is a new decision for the owner,
    not a judgement call for a session.

@@ -323,6 +323,22 @@ const NAMES = ["Can sell as second hand", "Ready, customer won't take",
 function useJobs(list) {
   global.__jobs = list;
   A("ALL = __jobs; BLOCKNAMES = " + JSON.stringify(NAMES) + "; ALL.blockNames = BLOCKNAMES;");
+  /* CHANGED 2026-09-11 (spec: status-list-is-truth, step 2). Checkpoint status
+     is the `Dashboard progress` list now, not the Excel colour. These fixtures
+     still describe a job by its colours, so the colours go ON THE RECORD here
+     - which is exactly what the one-time import does on the first load after
+     the switch-over. `cut` is not recorded: nothing writes it, and glassCounts
+     still reads that one word off the parsed file so the floor's Cut counter
+     is still seeded from the sheet's green. */
+  const rows = [];
+  (list || []).forEach(j => cpItems(j).forEach(it => {
+    const s = cpFileStatus(j, it.key);
+    if (s !== "done" && s !== "process") return;
+    rows.push({ id: "cp" + rows.length, fields: cpRowFields(j.id, it.key,
+      s === "done" ? it.total : 0, it.total, s, "the sheet", "2026-09-01T09:00:00Z", "import") });
+  }));
+  cpRowsSet(cpRowsFrom(rows));
+  A("CP_LIST_OK = true; CP_IMPORTED = '2026-09-11T09:00:00Z'; cpImportCheck();");
 }
 /* the feeder is meant to run with the list permission already granted; this
    makes that answer yes or no without a sign-in library in the room */
@@ -1516,6 +1532,46 @@ const person = (name, stages, pin, active, station) =>
     "with nobody's name on any of it: the office did this, not the floor");
   pass("a job the office had already ticked off reaches the floor carrying that, not nothing");
 
+  /* ---- THE SWITCH-ON WINDOW (review finding M1, 2026-09-11) ----
+     Checkpoint status moved to the `Dashboard progress` list, and the one-time
+     import of the sheet's colours takes fifteen to twenty-five minutes. While
+     it is running most items have no row - and an item with no row would read
+     as "nothing done", so this feed would write OfficeDone: "No" and a seed of
+     nought across the floor's list, and then write them all back again as the
+     rows landed. Two writes per job, and jobs unlocking and re-locking on the
+     tablet. So while the import is outstanding an item with no row answers
+     from the sheet's own colour, and the plan is identical either way. */
+  const seedOf = () => JSON.stringify(ITEMS.map(x =>
+    [x.fields.Title, x.fields.Cut, x.fields.Hotmelt, x.fields.Glazed, x.fields.OfficeDone,
+     x.fields.Total, x.fields.TuffTotal]));
+  const plannedWithRows = seedOf();
+  ITEMS = []; forget();
+  useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
+                   cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } }),
+           mkJob({ id: "R4942", cust: "Customer Two", glass: { tg: 5 }, blk: 4, seq: 1,
+                   cp: { win: "", drs: "", glass: { tg: "cut" }, prod: {} } })]);
+  /* the morning of the switch-over: the list exists and not one row is in it */
+  A("cpRowsSet({}); CP_ITEMS = []; CP_IMPORTED = ''; cpImportCheck();");
+  assert.strictEqual(A("cpImportPending()"), true, "the switch-on window is open");
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  assert.strictEqual(seedOf(), plannedWithRows,
+    "the feed plans exactly what it plans on any other day: same seed, same lock");
+  /* and it does not flap: a second feed with half the rows imported plans the
+     same again, so no job unlocks and re-locks on the tablet */
+  A("cpRowsSet({}); CP_ITEMS = [];");
+  global.__half = [{ id: "p1", fields: cpRowFields("R4941", "glass:tg", 8, 8, "done",
+                                                   "the sheet", "2026-09-11T09:00:00Z", "import") }];
+  A("CP_ITEMS = __half; cpListRebuild(); cpImportCheck();");
+  assert.strictEqual(A("cpImportPending()"), true, "still open: R4941's DG has no row yet");
+  A("STATION_FEED = { hash: '', at: 0 }");
+  reset();
+  await feedStation();
+  assert.strictEqual(seedOf(), plannedWithRows, "half imported: still the same plan, nothing rewritten");
+  assert.strictEqual(writes().length, 0, "and no write at all went out for it");
+  pass("the switch-on window changes nothing the feeder does: no OfficeDone flap, no seed of nought");
+
 
   /* an untouched row moves with the office's record, on the wire this time */
   useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
@@ -1940,19 +1996,26 @@ const person = (name, stages, pin, active, station) =>
 
   /* ---- and a feed run straight after an un-tick must not put the lock back ----
      This is the other half of the owner's greyed card. The feeder derives
-     OfficeDone from the office's own glass checkpoints, read through the
-     PENDING-applied job - and the un-tick is held in PENDING from the moment
-     of the click. So a feed running in the ~36 s before the downloaded file
-     agrees still sees "not complete" and writes No, or writes nothing. Never
-     Yes: that would re-lock the card the clear has just freed. */
+     OfficeDone from the office's own glass checkpoints - and since 2026-09-11
+     those are the `Dashboard progress` record, written at the click. So a feed
+     running in the ~36 s before the downloaded file agrees still sees "not
+     complete" and writes No, or writes nothing. Never Yes: that would re-lock
+     the card the clear has just freed.
+
+     CHANGED: this used to be proved with a `cp` PENDING hold, because the
+     un-tick lived in one until the file caught up. There is no such hold any
+     more; the un-tick is on the record from the click, which is stronger - it
+     survives a reload and the desk next door sees it too. */
   ITEMS = []; forget();
   useJobs([mkJob({ id: "R4941", cust: "Customer One", glass: { tg: 8, dg: 4 }, blk: 4, seq: 0,
                    cp: { win: "", drs: "", glass: { tg: "done", dg: "done" }, prod: {} } })]);
   A("STATION_FEED = { hash: '', at: 0 }");
   await feedStation();
   assert.strictEqual(ITEMS[0].fields.OfficeDone, "Yes", "locked, because the office has ticked it off");
-  /* the office un-ticks it: held at the click, long before the file agrees */
-  A("PENDING = {}; savePending(); pend('R4941', { cp: { 'glass:tg': 0, 'glass:dg': 0 } });");
+  /* the office un-ticks it: on the record at the click, long before the file agrees */
+  A("PENDING = {}; savePending();");
+  A("cpRowNow('R4941', 'glass:tg', 0, 8, '', 'the admin');");
+  A("cpRowNow('R4941', 'glass:dg', 0, 4, '', 'the admin');");
   A("ALL = applyPending(ALL, true);");
   A("STATION_FEED = { hash: '', at: 0 }");
   reset();

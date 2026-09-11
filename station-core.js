@@ -589,6 +589,11 @@ function buildJobs(items, keep) {
                 /* the first tap writes this and nothing else ever does, so it is
                    the one honest answer to "has the floor touched this row" */
                 doneAt: stTxt(f.DoneAt),
+                /* who made that last touch. Read only - the office writes this
+                   field on a clear and the tablet on every tap, and since
+                   2026-09-11 the colour writer needs a name to put in the
+                   record's `Who` when it carries the floor's work up. */
+                doneBy: stTxt(f.DoneBy),
                 by: {}, at: {}, bars: {} };
     ALL_STAGE_KEYS.forEach(k => {
       const t2 = Math.max(0, Math.round(stNum(g[STAGE_TOTAL_ROW[k]], 0)));

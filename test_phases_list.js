@@ -437,6 +437,13 @@ function useJobs(list) {
   /* ---- 9. effectivePhase: the sheet is always the floor ---- */
   clearHolds();
   const sheet3 = withWork({ f: "cut", s: "process" }, { id: "R0001", dates: { floor: "2026-09-01" } });
+  /* CHANGED 2026-09-11: a yellow cell is not status any more - the record is.
+     So the fixture's colours go on the record first, exactly as the one-time
+     import puts them there on the first load. The Cut green is not recorded
+     (nothing writes it) and jobPhase still reads that one off the file. */
+  cpRowsSet(cpRowsFrom([{ id: "r1", fields: cpRowFields("R0001", "prod:7000 casement:s", 0, 2, "process",
+                                                        "the sheet", "2026-09-01T09:00:00Z", "import") }]));
+  vm.runInThisContext("CP_IMPORTED = '2026-09-11T09:00:00Z'; cpImportCheck();");
   assert.strictEqual(jobPhase(sheet3), 3, "the sheet's own reading of this job");
   setPhases({});
   assert.strictEqual(effectivePhase(sheet3), 3);

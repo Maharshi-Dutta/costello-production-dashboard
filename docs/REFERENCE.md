@@ -6,7 +6,7 @@ where, and which tests cover it. Read this before touching anything; read the
 spec in `docs/specs/` for the full brief of a feature. Names of people and
 addresses are placeholders throughout ("the admin", "the colleague").
 
-Last updated 2026-09-10 (glass colours into the Production sheet, the tuff counter, the office's lock, and an office clear reaching the floor's counters).
+Last updated 2026-09-11 (checkpoint status moved out of the Excel colour and into the `Dashboard progress` SharePoint list — §19, which rewrites §5 and takes the hold machinery out of §17 and §18).
 
 ---
 
@@ -127,14 +127,24 @@ Dates are never touched. `markReady` in `app.js`.
 **What.** Per-job counts for windows, doors, each glass type and each
 product's F/S/T, ticked from the drawer, shown as bars.
 
-**How.** Excel gets **only the colour** in the item's own cell (white 0 /
-yellow part / gold done). Exact counts live in `Dashboard Progress`
-(Job|Item|Done|Total|Who|When) plus a `Dashboard Log` line. On refresh the
-Excel colour wins over a stored count. Pure logic (`cpItems`, `itemState`,
-write ordering progress→fill→log, bursts and a replayable queue) is in
-`checkpoints.js`; the drawer UI is `cpSectionHtml`/`cpPatchSection`.
-**Clearing a job's glass also clears the floor's counters** since 2026-09-10 —
-see §18. Tests: `test_checkpoints.js`.
+**How, since 2026-09-11 — read §19, which replaced the mechanism.** Status
+lives in the SharePoint list **`Dashboard progress`**, one row per `JOB|ITEM`,
+and `itemState`/`cpStatus` answer from it and from nothing else. A click
+writes that row first, then paints the Excel cell (white 0 / yellow part /
+gold done), then writes the `Dashboard Log` line. There is no `PENDING` hold
+for a checkpoint and nothing to reconcile.
+
+**How it used to work, until 2026-09-11.** Excel got only the colour and the
+colour WAS the status; exact counts lived in the `Dashboard Progress` *sheet*;
+a refresh let the Excel colour win over a stored count; and a `PENDING` hold
+kept the office's own click alive for up to three minutes while the ~36 s-old
+download caught up. That sheet is no longer written by anything and is left
+exactly as it stands.
+
+Pure logic (`cpItems`, `itemState`, `cpRow`, write ordering record→fill→log,
+bursts and a replayable queue) is in `checkpoints.js`; the drawer UI is
+`cpSectionHtml`/`cpPatchSection`. **Clearing a job's glass also clears the
+floor's counters** since 2026-09-10 — see §18. Tests: `test_checkpoints.js`.
 
 ---
 
@@ -563,6 +573,21 @@ tablet has no access to the workbook at all and that is the actual security
 boundary; this is the feeder in reverse — the office watches the floor's list
 and paints the cells.
 
+> **CHANGED 2026-09-11 by §19, step 3. Everything below about holds, stamps
+> and settling is history.** The writer now puts the floor's colour on the
+> **`Dashboard progress` record** first (`Source = "floor"`, `When` = the
+> floor's own stamp, `Who` from `DoneBy`) and paints Excel from it, through the
+> same `cpSaveRow` → fill → log path an office click uses. Last-writer-wins is
+> two fields of one row: the floor does not write when an `office` or `excel`
+> row's `When` is at or after `ST.floorStamp(g)`. Gone with it:
+> `glassOfficeStamp`, `glassOfficeJobStamp`, `officeSettling`, `glassLogStamps`,
+> `OFFICE_FLOOR_AT`, `glassCellNow`, the `gc` `PENDING` holds and the whole
+> "a hold is never let go into a stale copy" mechanism — about 510 lines. What
+> survives unchanged: the colour rule itself (`ST.glassColours`), the four
+> columns, ARCH/ASTRAGAL/FANCY/EXTRA never written, the 60-cell cap and its
+> follow-up, the per-job backoff, and the rule that a colour this feature does
+> not own is never painted over.
+
 **What reaches Production.** A single-cell **fill**, and nothing else, ever:
 no value, no row, no formula, no number format, no other sheet. Not even a
 `Dashboard Progress` row or a `Dashboard Log` line — the first would be an
@@ -751,6 +776,17 @@ proves over its own run that the tablet still touches no workbook.
 ---
 
 ## 18. An office clear reaches the floor's counters
+
+> **CHANGED 2026-09-11 by §19, step 3.** The clear itself is unchanged — seven
+> fields, the confirmation, the four locks, the owed retry. What is gone is
+> everything this section says about the *contest* around it: `OFFICE_FLOOR_AT`
+> (the clear zeroes the counters, so the colours the writer derives from them
+> already say what the office's own rows say), `officeSettling` and the
+> stand-down window, `glassOfficeJobStamp`, and `glassVoidPaint`. An office
+> click now simply writes a row stamped at the click, and a floor colour older
+> than that row never reaches the sheet. The "known gap" about a second
+> dashboard inside the download lag is closed by the same thing: the record is
+> shared, so there is no second dashboard that cannot see the office's action.
 
 **Spec.** `docs/specs/2026-09-10-office-clears-the-floor.md`. Changes
 `CLAUDE.md` rule 3, by the owner, on 2026-09-10.
@@ -950,3 +986,167 @@ clearing a job. Persisting the answer was rejected — it would put a
 hand-editable token in `localStorage` on the one path that writes a floor
 column. The recovery, in `docs/SUPPORT.md`: tick the glass done again, then
 clear it again. Not forty-nine taps.
+
+---
+
+## 19. Status lives in a list; the Excel colour is a copy
+
+Built 2026-09-11. Spec: `docs/specs/2026-09-11-status-list-is-truth.md`. This
+is **step 2 of three** in that spec: checkpoints read and write the list, and
+the glass colour writer is not changed (step 3 does that). Read the spec
+before touching any of it.
+
+**The problem it answers.** The dashboard never read the truth, it read
+copies: a download of the workbook about 36 s behind, and a poll of the
+floor's list about 10 s behind. A tick never makes those copies disagree, so
+it looked instant; an un-tick makes every copy disagree with the office for
+about a minute. Four mechanisms existed only to keep believing the office over
+the copies — the `PENDING` hold, the 45 s reconcile, the colour writer's
+last-writer-wins and the feeder's `OfficeDone` derivation — and each of them
+failed in turn in the week of 2026-09-08. **No mechanism can make a copy
+true.** So status stopped being read from a copy.
+
+**The rule.** The SharePoint list `Dashboard progress` — in the workbook's own
+site, one row per `JOB|ITEM`, Title the dedupe key, columns
+`Title, Job, Item, Done, Total, Status, Who, When, Source` — is the single
+record of checkpoint status. The Excel colour is written **from** it so people
+can see it in Excel, and is never read back to decide anything. **One rule the
+office must accept: checkpoint colours are set in the dashboard, not by
+painting cells in Excel** — and a hand-painted cell is adopted rather than
+obeyed (the safeguard, below).
+
+**What reads what now.**
+
+| asked | answered by |
+|---|---|
+| `itemState(j, item)` / `cpStatus(j, item)` — the status and the count | `cpRow(job, item)`, the list. Return shape unchanged, so the drawer, `cpSummaryHtml`, `cpInProgress`, `glassCounts`, `exportCheckpoints` and the export's checkpoint filter all follow it with no change of their own |
+| `cpFileStatus(j, item)` — the **parsed colour** | `j.cp`, which the parser still fills exactly as before. Three readers only: the phase pipeline's Cut green, the one-time import, and the safeguard |
+| `jobPhase(j)` | the list for done/process, `cpFileStatus` for the sheet's own Cut green — nothing writes that colour, so the list can never carry it |
+| `glassCounts(j)` → `ST.officeSeed` / `ST.officeComplete` → the feeder's `OfficeDone` | the list, with the same Cut-green exception |
+| `glassCellNow(j, type)` — the colour writer's idempotence test | still `j.cp.glass`, deliberately: it asks what the **cell** is showing, not what is done |
+
+**The write, in order: record, fill, log.** `cpSaveRow` puts the row in this
+dashboard's copy of the list at the click (so the row moves before the request
+goes out), then writes it — `listPatch` on a row whose id is known, otherwise
+`listUpsert`, which dedupes on Title. Then `cpWriteItem`/`cpWriteGroup` paints
+the cell and writes the `Dashboard Log` line, exactly as they did. A refused
+**record** write is a click that did not take and the row goes back; a refused
+**fill** leaves the record standing and says so — the office decided, and Excel
+is behind, which is the direction this change chose.
+
+**No holds.** `PENDING` no longer carries a `cp` entry: the map updated at the
+click is the optimistic state and the next 10 s delta confirms it. `PENDING`
+still holds row moves, mark-ready, phases and the colour writer's own `gc`
+paints (step 3 retires the last of those). What the `cp` hold also did — void
+the writer's un-landed paint of a cell the office has just acted on, the fix of
+the morning of 2026-09-11 — is now an explicit `glassVoidPaint()` at the click.
+
+**The floor's work goes down the same path (step 3).** `glassColourRun`
+watches the floor's list, derives the colour with `ST.glassColours`, and writes
+one record row per DG/TG/TUFF/NOT TUFF item with `Source = "floor"`, `When` =
+the floor's own stamp and `Who` from the row's `DoneBy` — then paints Excel
+from it and writes the `Floor glass colours` log line **between the record and the
+fill**, so a colour that was recorded reaches Changes even when the workbook
+refuses the paint. Last-writer-wins is the row's `When` against
+`ST.floorStamp(g)`, and only an `office` or `excel` row can block; ties go to
+the office. One floor row can block a floor write: its own, when it is newer
+than the copy of the list in hand, which is a list read that has gone
+backwards. If the record already says what the floor
+says, nothing happens at all, which is what lets the writer be called six times
+a minute.
+
+**Kept current.** A full read at boot (only when the list has not answered
+yet), then `listDelta` every 10 s on its own clock (`cpTick`, `CP_POLL_MS`) and
+again 1.5 s after this dashboard's own write. It is a third entry in
+`STATION_FEEDS` and uses the floor's own delta machinery — the token, the 410
+resync, the five-minute "delta off" — but on its own timer, because the floor's
+poll drops to a minute when nobody is looking at the floor and a colleague's
+tick has to arrive in ten seconds whatever is on screen.
+
+**Missing list.** No list is created by code. `listItems` answering null puts
+`CP_LIST_OK = false`, the drawer's Checkpoints section says which list is
+missing and every control on it is dead, and nothing is written anywhere —
+not the list, not the workbook, not the log.
+
+**The switch-on window.** The import takes fifteen to twenty-five minutes on
+the real sheet, and until it has drained an item with no row would read as
+"nothing done" — which would collapse every job's phase, make the feeder write
+`OfficeDone` twice per job as rows land, zero the floor's seeds and print "all
+checkpoints are complete" over a gold row's zeroes. So while it is outstanding
+(a per-browser marker, `cw_cpimported`, set the first time the import plan
+comes back empty), an item **with no row** answers from the sheet's own colour
+and every screen reads exactly what it read before the switch-over. An item
+that has a row always answers from the row, so an un-tick made inside the
+window is still absolute. Once the marker is set the fallback is unreachable.
+An unreadable list falls back the same way.
+
+**The one-time import.** A job+item with no row and a colour in the sheet
+adopts that colour once: `Source = "import"`, `Done` = the total for gold, the
+`Dashboard Progress` **sheet's** own count for yellow (the last thing that
+sheet is for) and nought when it has none, `Who = "the sheet"`. Lazy, capped at
+60 rows a load over three lanes (the feeder's numbers), with a 30 s follow-up
+when the cap cuts it short, and one summary `Dashboard Log` line per load
+("Imported 40 checkpoints from the sheet's colours"). **A blank cell is
+deliberately never imported**: no row already means nothing done, and importing
+every blank would be a row per checkpoint of every job on the sheet.
+
+**The safeguard: a colour changed in Excel by hand is adopted (spec §4a).**
+There is no waiting period. `PAINTED[job][item]` (in `localStorage`, key
+`cw_painted`) remembers the colour this dashboard last painted into every
+managed cell — which is **every checkpoint item the drawer shows**, not only
+the four glass columns. On every download, a managed cell whose parsed colour
+differs from `PAINTED` is a *candidate*; each candidate is confirmed with one
+Excel API read of that cell's fill (`range/format/fill`, batched 20 per
+`$batch` through `CW.batchGet`, plus one values read per job to prove the row
+has not moved), and the API reads the live file with no lag. API agrees with
+the download → a real outside change, adopted at once (`Source = "excel"`,
+`Who` = the file's last editor, one log line naming the item and saying
+"adopted from Excel"). API says what we painted → the download was stale,
+ignored silently. Capped at 60 candidates a download. Once the import has
+drained, a cell with **no** row and a colour is a candidate too — that is a
+hand-paint, not something the import missed. **The open drawer's job is checked
+on the 10 s pass**, at most every 30 s, and only for cells the download already
+disagrees about: the download DISCOVERS, the API CONFIRMS. A drawer left open
+on a job nobody is touching sends no request at all. The colour writer records
+its own paints in `PAINTED` too, or its work would read as somebody else's.
+
+**Putting the Excel copy right.** It covers the four glass columns too since
+step 3 — they are ordinary managed cells now. A fill the workbook refuses leaves the record
+saying one thing and the sheet another, and the safeguard cannot see it — it
+compares the file with `PAINTED`, and after a refused fill those agree. So each
+load also compares the **record** with `PAINTED` (both in memory, no read) and
+repaints the difference through the ordinary fill path, on the job's own
+`cpChain`, capped at 20 cells and never looping inside one load. `PAINTED` only
+moves when a fill lands, so one success ends it. It never concludes from the
+**download** that the sheet is already right: the download is ~36 s old and
+this runs precisely when something did not land, so a stale file agreeing with
+the record proves nothing (review finding F1). A cell carrying a colour this
+feature does not own — the sheet's own Cut green — is left alone, in either
+direction.
+
+**Honest limits.** A hand-paint on the job in the open drawer no longer shows
+in ten seconds; it shows on the same ~40–50 s as everywhere else, which is what
+the review traded for a drawer that costs nothing to leave open. Excel is now a second or two behind the dashboard rather
+than the other way round. Hand-painting a checkpoint cell no longer *sets*
+status, it is *adopted* as one. The list grows (about 30 rows per job that has
+work started on it) and pruning is a later chore. The import trusts today's
+colours once. A first click on an item that has no row yet costs one full read
+of the list (`listUpsert`, for the dedupe); every click after it is one PATCH.
+Step 3 closed the last of it: the glass colour writer writes the record, so the
+floor's work reaches the drawer's glass checkpoint rows, `OfficeDone` and the
+sheet from one place.
+
+**Tests.** `test_checkpoints.js` (53): the switch-on window and its end; the record decides and the colour does
+not; eight stale gold downloads leaving every checkpoint white with no
+`PENDING` entry; a refresh; the write order record→fill→log for an item and for
+a group; a refused record write and a refused fill, told apart; a missing list;
+the import, its cap and that nothing is imported twice; the safeguard adopting
+a confirmed hand-paint, ignoring a stale download, never adopting our own
+paint, the drawer's live check, and 25 candidates in whole batches.
+`test_glasscolour.js` (76) rewrites its hold section as the same properties
+without a hold. the repaint after a refused fill; an open drawer costing nothing; a background
+write never asking for consent; and a group write that fails half way naming
+both halves. `test_station.js` (246) proves `OfficeDone` follows the record and
+does not flap during the switch-on window.
+Reproduced in a stubbed browser with `scratchpad/untick_repro_reload.js` +
+`stub_office_reload.js`, cases R1–R8.
