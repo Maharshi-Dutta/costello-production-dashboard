@@ -147,13 +147,28 @@ function cpFileState(j, item, total) {
   return { done: 0, total: total, status: "" };
 }
 
-/* ---- item keys: "win", "drs", "glass:<type>", "prod:<name>:<f|s|t>" ----
+/* ---- item keys: "win", "drs", "door:<slot>", "glass:<type>",
+       "prod:<name>:<f|s|t>" ----
    Product names come from the sheet's own headers, normalised to lower case
-   words, so they can never contain a colon and the split is unambiguous. */
+   words, so they can never contain a colon and the split is unambiguous.
+
+   DOORS, since 2026-09-14 (docs/specs/2026-09-11-doors-and-window-types.md):
+   one item per DOORS DONE cell that has text in it, total 1, its label the
+   type code the office typed there. A door has two stages, not three: blank,
+   yellow "in fabrication", gold "done".                                    */
+/** A job's doors as the parser read them, and one of them by slot. */
+function cpDoors(j) { return (j && j.doors) || []; }
+function cpDoorAt(j, slot) {
+  const n = Number(slot);
+  const a = cpDoors(j);
+  for (let i = 0; i < a.length; i++) if (Number(a[i].slot) === n) return a[i];
+  return null;
+}
 function cpTotal(j, item) {
   const p = String(item).split(":");
   if (item === "win") return j.wnd || 0;
   if (item === "drs") return j.drs || 0;
+  if (p[0] === "door") return cpDoorAt(j, p[1]) ? 1 : 0;
   if (p[0] === "glass") return (j.glass || {})[p[1]] || 0;
   if (p[0] === "prod") { const x = (j.prods || []).find(q => q.n === p[1]); return x ? (x[p[2]] || 0) : 0; }
   return 0;
@@ -173,6 +188,9 @@ function cpFileStatus(j, item) {
   const cp = (j && j.cp) || {}, p = String(item).split(":");
   if (item === "win") return cp.win || "";
   if (item === "drs") return cp.drs || "";
+  /* a door's parsed colour lives on j.doors beside its code, not in j.cp -
+     same rule though: this is the copy in the cell, and it is not status */
+  if (p[0] === "door") { const d = cpDoorAt(j, p[1]); return d ? (d.status || "") : ""; }
   if (p[0] === "glass") return (cp.glass || {})[p[1]] || "";
   if (p[0] === "prod") return ((cp.prod || {})[p[1]] || {})[p[2]] || "";
   return "";
@@ -188,30 +206,87 @@ function cpColumn(item, map) {
   const p = String(item).split(":");
   if (item === "win") return (map.qty || {}).wnd || 0;
   if (item === "drs") return (map.qty || {}).drs || 0;
+  if (p[0] === "door") return (map.doors || {})[p[1]] || 0;
   if (p[0] === "glass") return (map.glass || {})[p[1]] || 0;
   if (p[0] === "prod") return ((map.prod || {})[p[1]] || {})[p[2]] || 0;
   return 0;
 }
-/** The log's name for an item: "Windows", "Glass TG", "7000 CASEMENT frames". */
+/** The log's name for an item: "Windows", "Glass TG", "7000 CASEMENT frames",
+    "Door 3". Deliberately NOT "Door 3 (CD)": diffJobs names the same change
+    from the file with this function too, and dropMine folds the two into one
+    line by comparing those names - so the name has to be the same whether or
+    not the job object is at hand. The code is in the drawer and in the log
+    line's own words. */
 function cpLabel(item) {
   const p = String(item).split(":");
   if (item === "win") return "Windows";
   if (item === "drs") return "Doors";
+  if (p[0] === "door") return "Door " + p[1];
   if (p[0] === "glass") return "Glass " + p[1].toUpperCase();
   if (p[0] === "prod") return p[1].toUpperCase() + " " + (CP_SUB[p[2]] || p[2]);
   return String(item);
 }
 
-/** Every countable thing on a job, in drawer order. Only totals > 0 exist. */
+/** Every countable thing on a job, in drawer order. Only totals > 0 exist.
+    The doors sit in a group of their own ("door"), NOT in "drs": "drs" is the
+    derived Windows/Doors quantity line and has no group write of its own, and
+    putting the doors in with it would hand setGroupDone something it must
+    never write. */
 function cpItems(j) {
   const out = [];
   const add = (key, label, total, group, groupLabel) => { if (total > 0) out.push({ key, label, total, group, groupLabel }); };
   add("win", "Windows", j.wnd || 0, "win", "Windows");
   add("drs", "Doors", j.drs || 0, "drs", "Doors");
+  cpDoors(j).forEach(d => add("door:" + d.slot, d.code, 1, "door", "Doors"));
   Object.keys(j.glass || {}).forEach(k => add("glass:" + k, k.toUpperCase(), j.glass[k], "glass", "Glass"));
   (j.prods || []).forEach(p => ["f", "s", "t"].forEach(s =>
     add("prod:" + p.n + ":" + s, CP_SUB[s], p[s], "prod:" + p.n, p.n)));
   return out;
+}
+
+/* ---- Windows and Doors: their own tick AND what is under them -------------
+   (2026-09-14, the doors spec, amendment 1. The first build of that spec made
+   M and N purely derived and took their tick away; the owner withdrew that:
+   "already golden means it finished even if all the cell or component has no
+   ticked. u should not change anything in the excel sheet.")
+
+   So Windows and Doors are ticked in their own right, exactly as they always
+   were, AND they answer for the window types and the doors below them. What
+   the drawer shows is the HIGHER of the two: a line the office has marked done
+   stays done however little is ticked underneath, and a line nobody has
+   touched still goes yellow the moment one window type or one door moves.
+
+   The paint follows that shown status UPWARDS ONLY. The aggregate may take a
+   cell to yellow or to gold; it never takes one back to white. The only thing
+   that whitens M or N is the office's own Clear on that line, as it always
+   was - which is what keeps a gold M cell gold on a job whose components were
+   never ticked off one by one. */
+const cpDerived = item => item === "win" || item === "drs";
+const CP_RANK = { "": 0, process: 1, done: 2 };
+/** The items one derived line stands for. */
+function cpChildren(j, item) {
+  return cpItems(j).filter(x => item === "win"
+    ? x.group.indexOf("prod:") === 0
+    : x.group === "door");
+}
+/** "done" (every child done) / "process" (any child started) / "" (none). */
+function cpDerivedOf(j, item) {
+  const kids = cpChildren(j, item);
+  if (!kids.length) return "";
+  const words = kids.map(x => { const s = cpOwnState(j, x.key); return s ? s.status : ""; });
+  if (words.every(w => w === "done")) return "done";
+  return words.some(w => w === "done" || w === "process") ? "process" : "";
+}
+
+/** The doors quantity against the codes actually typed in the five cells.
+    "" when they agree, or when there is neither (amendment 6; owner: "that
+    mean the quantity is wrong and should give a warning"). It changes no
+    paint and blocks nothing - it is a sentence, and that is all. */
+function cpDoorWarning(j) {
+  const want = Math.max(0, Math.round(Number((j && j.drs) || 0)));
+  const have = cpDoors(j).length;
+  if (want === have || (!want && !have)) return "";
+  return "quantity says " + want + " · " + have + " door" + (have === 1 ? "" : "s") + " listed";
 }
 
 /* ---- the phase pipeline ----
@@ -277,7 +352,10 @@ const cpClamp = (v, total) => {
     drawer, cpSummaryHtml, glassCounts, the export, jobPhase - is unchanged:
     { done, total, status }, with done null for "in progress, count unknown".
     Returns null when the job has no such item. */
-function itemState(j, item) {
+/** What one item's OWN record row says, with no aggregate in it. This is what
+    every ordinary item answers, and it is the half of a derived line that the
+    office set by hand. Returns null when the job has no such item. */
+function cpOwnState(j, item) {
   const total = cpTotal(j, item);
   if (!(total > 0)) return null;
   const row = cpRow(j && j.id, item);
@@ -291,6 +369,20 @@ function itemState(j, item) {
     return { done: (d > 0 && d < total) ? d : null, total: total, status: "process" };
   }
   return { done: 0, total: total, status: "" };
+}
+
+function itemState(j, item) {
+  const own = cpOwnState(j, item);
+  if (!own || !cpDerived(item)) return own;
+  /* Windows and Doors answer for what is under them as well as for their own
+     row, and the higher of the two is what is shown. A count cannot be worked
+     out from the aggregate - the sheet's quantity and the number of window
+     types are two different numbers - so a line the aggregate is carrying
+     reads "in progress" with no number of its own. */
+  const agg = cpDerivedOf(j, item);
+  if (CP_RANK[agg] <= CP_RANK[own.status]) return own;
+  return agg === "done" ? { done: own.total, total: own.total, status: "done" }
+                        : { done: null, total: own.total, status: "process" };
 }
 
 /* cpWithHeld() lived here until 2026-09-11. It rewrote a job's parsed colours
@@ -325,7 +417,7 @@ function cpWordForHex(hex) {
     per checkpoint of every job on the sheet - tens of thousands of rows
     carrying no information - and the cap would never catch up. A blank cell
     somebody colours later is caught by the safeguard, not by this. */
-function cpImportPlan(jobs, storedFor, cap) {
+function cpImportPlan(jobs, storedFor, cap, kind) {
   const out = [];
   for (let i = 0; i < (jobs || []).length; i++) {
     const j = jobs[i];
@@ -333,6 +425,12 @@ function cpImportPlan(jobs, storedFor, cap) {
     const items = cpItems(j);
     for (let k = 0; k < items.length; k++) {
       const it = items[k];
+      /* `kind` narrows the pass to one sort of item. It exists for the doors,
+         which arrived three days after the one-time import had already drained
+         in every browser: they need an import of their own, behind their own
+         marker, or every coded door cell would be read as a hand-paint and
+         adopted under whoever last saved the file (amendment 2, 2026-09-14). */
+      if (kind === "door" && it.key.indexOf("door:") !== 0) continue;
       if (cpRow(j.id, it.key)) continue;                       // already imported, or clicked
       const st = cpFileStatus(j, it.key);
       if (st !== "done" && st !== "process") continue;         // blank, or a colour we do not own
@@ -365,7 +463,10 @@ function cpQueue() {
   [CPBURST, CPSEND].forEach(m => Object.keys(m).forEach(k => {
     const b = m[k];
     out.push({ key: k, job: b.job, item: b.item, col: b.col, from: b.from, to: b.to,
-               total: b.total, at: b.at, who: b.who, sent: b.sent ? 1 : 0 });
+               total: b.total, at: b.at, who: b.who, sent: b.sent ? 1 : 0,
+               /* a door carries the status word instead of a count, so the
+                  replayed tap writes the same thing the click meant */
+               status: b.status == null ? null : b.status, was: b.was == null ? null : b.was });
   }));
   return out;
 }
@@ -397,6 +498,9 @@ function cpBurst(key, o, flush, ms) {
      list already says what it says. */
   const b = CPBURST[key] || (CPBURST[key] = { key: key, from: o.from, prev: o.prev });
   b.job = o.job; b.item = o.item; b.col = o.col; b.total = o.total; b.to = o.to; b.who = o.who;
+  /* doors only: the word this tap means, and the word it started from */
+  b.status = o.status == null ? null : o.status;
+  if (b.was === undefined) b.was = o.was == null ? null : o.was;
   b.at = Date.now(); b.flush = flush; b.sent = 0;
   if (b.t) clearTimeout(b.t);
   b.t = setTimeout(() => cpFire(key), ms == null ? CP_DEBOUNCE_MS : ms);
@@ -439,7 +543,8 @@ function cpReplay(flush, who) {
     const key = x.key || (x.job + "|" + x.item);
     if (CPBURST[key] || CPSEND[key]) return;        // this session already has something newer
     const b = { key: key, job: x.job, item: x.item, col: x.col, from: x.from, to: x.to,
-                total: x.total, at: x.at, who: x.who, sent: 1, flush: flush };
+                total: x.total, at: x.at, who: x.who, sent: 1, flush: flush,
+                status: x.status == null ? null : x.status, was: x.was == null ? null : x.was };
     CPSEND[key] = b;
     cpChain(b.job, () => Promise.resolve(flush(b)).then(() => {}, () => {}));
   });
@@ -465,13 +570,20 @@ function cpReplay(flush, who) {
    caller is told, and o.paint is not called, so the safeguard goes on knowing
    what is really in the cell.                                              */
 async function cpWriteItem(o) {
+  /* `o.status` is given only where the count cannot say it: a DOOR is one
+     thing with three states, so "in fabrication" is not 0 < n < 1. Everything
+     else derives the word from the count exactly as it always did. */
+  const st = o.status == null ? cpStatusFor(o.done, o.total) : o.status;
   await o.save({ job: o.job, item: o.item, done: o.done, total: o.total,
-                 status: cpStatusFor(o.done, o.total), who: o.who });
+                 status: st, who: o.who });
   try {
     const row = await CW.rowForJob(CP_PROD_SHEET, o.job);
-    await CW.setFill(CP_PROD_SHEET, CW.A1(o.col) + row, cpColour(o.done, o.total));
-    if (o.paint) o.paint(o.job, o.item, cpStatusFor(o.done, o.total));
-    if (o.log) o.log(o.job, cpLabel(o.item), o.from + " of " + o.total, o.done + " of " + o.total);
+    await CW.setFill(CP_PROD_SHEET, CW.A1(o.col) + row,
+                     o.status == null ? cpColour(o.done, o.total) : CP_WORD_HEX[st]);
+    if (o.paint) o.paint(o.job, o.item, st);
+    if (o.log) o.log(o.job, cpLabel(o.item),
+                     o.fromText == null ? o.from + " of " + o.total : o.fromText,
+                     o.toText == null ? o.done + " of " + o.total : o.toText);
     return row;
   } catch (e) {
     /* the record landed and the colour did not. The caller must NOT put the
@@ -522,6 +634,7 @@ async function cpWriteGroup(o) {
 
 if (typeof window !== "undefined") window.CP = {
   itemState, cpItems, cpTotal, cpStatus, cpFileStatus, cpColumn, cpLabel, cpColour, cpStatusFor, cpClamp,
+  cpDoors, cpDoorAt, cpDerived, cpChildren, cpDerivedOf, cpOwnState, cpDoorWarning, CP_RANK,
   jobPhase, phaseName, PHASES, effectivePhase, setPhaseHook,
   CP_LIST, CP_LIST_FIELDS, cpTitle, cpRow, cpRowPut, cpRowsSet, cpRowsAll, cpRowsFrom, cpRowFields,
   cpImportPlan, cpWordForHex, CP_WORD_HEX, cpSetImportPending, cpImportPending, cpFileState,

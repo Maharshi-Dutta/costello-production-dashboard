@@ -102,6 +102,17 @@ every other workbook sheet the job appears on. Row colours and chips mirror
 the sheet's own colouring where relevant. Ticking the box on the left of one
 or more rows arms the selection wheel (§3.5).
 
+**The window and door counts carry their own colour.** In the `9 / 3` cell,
+each number is coloured by how far that half of the job has got: **gold** when
+it is done, **yellow** once anything has started, and plain when nothing has
+— taking both the line's own tick and what is under it, whichever says more.
+Hovering the cell says which: *"Windows: Polaris 85 in progress · 4000
+Casement not started — Doors: CD done · CD in fabrication · SS not started"*,
+and it carries the quantity warning too when the DRS number and the coded door
+cells disagree. A job with nothing under either line and no quantity to
+disagree with shows plain numbers and nothing to hover. There is no new
+column: the detail is in the job card, as always.
+
 **The colour chip after a job number.** The Production sheet says four things
 with the colour of a job row's *text*, and the dashboard reads them back and
 writes them out in words, so nobody has to tell red from green to know what a
@@ -159,11 +170,60 @@ the sheet's own evidence always wins if it later shows the job further along.
 
 **Dates.** The job's key dates, read-only here.
 
-**Checkpoints.** Tick boxes for windows, doors, each glass type and each
-product's frame/sash/transom counts. Ticking a checkpoint writes **only a
-colour** to that item's own cell in the `Production` sheet (white for
-nothing done, yellow for part done, gold for done) — the exact count behind
-that colour is kept in a separate dashboard sheet, not in the cell itself.
+**Checkpoints.** Steppers for each glass type and each window type's
+frame/sash/transom counts, and one row per door. Ticking a checkpoint writes
+**only a colour** to that item's own cell in the `Production` sheet (white
+for nothing done, yellow for part done, gold for done) — the count behind
+that colour is kept in the `Dashboard progress` list, not in the cell.
+
+The window types sit under one **Windows** heading and the doors under
+**Doors**. Both start closed; click the heading to open one, and the
+dashboard remembers how you left it on this computer.
+
+**Doors.** A job's doors are the five **DOORS DONE** cells of its row. Each
+one that has something typed in it is a door, and what is typed is its type
+code — `CD`, `SS`, `SFCD`, and so on, shown exactly as the office wrote it.
+A door has two stages rather than a count, so instead of a stepper it has two
+buttons and a Clear:
+
+- **In fabrication** — paints that door's own cell yellow.
+- **Done** — paints it gold.
+- **Clear** — paints it white again.
+
+The one the door is on is highlighted. Nothing else on the row is written,
+and **the code you typed in the cell is never changed** — only its colour.
+If somebody colours a door cell in Excel by hand instead, the dashboard
+notices within about a minute, takes it as what that door says, and records
+who last edited the file.
+
+**Windows and Doors are still ticked the way they always were** — and they
+now also follow what is under them. Whichever says more is what you see: a
+Windows cell you have marked done stays done however few of its types are
+ticked off one by one, and a line nobody has touched goes yellow the moment
+one window type or one door moves, and gold once every one of them is done.
+
+That only ever goes **one way**. Ticking something underneath can take the
+WND or DRS cell to yellow or to gold; nothing underneath ever takes it back.
+Un-ticking the last door does not clear the DRS cell — only pressing **Clear**
+on the Doors line itself does that. A cell you have already coloured gold in
+Excel is never repainted by this.
+
+**When the quantity does not match.** If the DRS quantity says three and only
+two of the five DOORS DONE cells have a code typed in them, the Doors line
+says so in red — *"quantity says 3 · 2 doors listed"* — and the same words
+appear when you hover the numbers in the job list. It is a warning and nothing
+more: nothing is blocked, and no colour in the sheet changes because of it.
+Either the quantity is wrong or a code has not been typed yet; the dashboard
+will not guess which.
+
+**A door is its cell, not its code.** Each of the five cells is one door, in
+its own place. If you type a different code over one, that door keeps the
+status it had — the card simply shows the new code. Two doors of one job can
+carry the same code, and often do.
+
+**If the quantity says 0 and codes are typed**, the DRS cell is left alone
+entirely: with no doors on the sheet there is nothing for the dashboard to
+colour. The warning still appears.
 
 **Details.** Other job facts read from the sheet.
 

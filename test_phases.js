@@ -158,8 +158,10 @@ function record() {
   assert.strictEqual(phaseName(record(withWork({}))), "In office");
   /* 1 - sent to floor: the date alone is enough */
   assert.strictEqual(jobPhase(record(withWork({}, { dates: { floor: "2026-09-01" } }))), 1);
-  /* ...and so is a checkpoint that has moved, with no date at all */
-  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "done", drs: "", glass: {}, prod: {} } }))), 1);
+  /* ...and so is a checkpoint that has moved, with no date at all. Glass, not
+     windows: Windows is DERIVED from the job's window types since 2026-09-14
+     (the doors spec), so colouring M on its own no longer says anything. */
+  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "", drs: "", glass: { tg: "done" }, prod: {} } }))), 1);
   pass("0 In office / 1 Sent to floor: the date, or any checkpoint that has moved");
 
   /* 2 - cutting: the sheet's Cut green on a product cell, nothing fabricated */
@@ -175,8 +177,13 @@ function record() {
   assert.strictEqual(jobPhase(record(withWork({ f: "cut", s: "process" }))), 3);
   pass("2 Cutting, and 3 In fabrication the moment anything goes yellow");
 
-  /* 3 - windows or doors in process count as fabrication too */
-  assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "process", drs: "", glass: {}, prod: {} } }))), 3);
+  /* 3 - windows or doors in process count as fabrication too. Both of those
+     are derived since 2026-09-14: a window TYPE part way through is what makes
+     Windows read "in fabrication", and one door part way through is what makes
+     Doors read it. */
+  assert.strictEqual(jobPhase(record(withWork({ f: "process" }))), 3);
+  assert.strictEqual(jobPhase(record(withWork({}, { drs: 1,
+    doors: [{ slot: 1, code: "CD", status: "process" }] }))), 3);
   /* glass on its own does not: that is the glazing end of the job */
   assert.strictEqual(jobPhase(record(withWork({}, { cp: { win: "", drs: "", glass: { tg: "process" }, prod: {} } }))), 1);
   pass("windows/doors in process is fabrication; glass on its own is not");
@@ -184,7 +191,7 @@ function record() {
   /* 4 - in glazing: every F/S/T done, the rest of the job not */
   const glazing = record(withWork({ f: "done", s: "done", t: "done" },
     { cp: { win: "process", drs: "", glass: { tg: "" }, prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } }));
-  assert.strictEqual(jobPhase(glazing), 4, "products finished beats windows still in process");
+  assert.strictEqual(jobPhase(glazing), 4, "every F/S/T done, the glass not: the job is at the glazing end");
   /* 5 - quality check: everything ticked, nobody has marked it ready yet */
   const qc = record(withWork({}, { cp: { win: "done", drs: "", glass: { tg: "done" },
     prod: { "7000 casement": { f: "done", s: "done", t: "done" } } } }));

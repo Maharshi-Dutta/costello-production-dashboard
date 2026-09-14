@@ -112,7 +112,7 @@ const mkJob = o => Object.assign({
   id: "R0000", cust: "", area: "", off: "", colour: "", wnd: 0, drs: 0,
   ph3: PH3, eir: EIR, ph: PHONE,            // present on every job; only John carries the phone
   flag: "", flagHex: "",                    // the colour of the row's own text on Production
-  glass: {}, prods: [], notes: [], sheets: ["Production"], src: {},
+  glass: {}, prods: [], doors: [], notes: [], sheets: ["Production"], src: {},
   dates: { sold: null, stamp: null, ivana: null, ready: null, floor: null },
   cp: { win: "", drs: "", glass: {}, prod: {} },
   cat: "active", blk: 4, seq: 1, stage: "office", done: 0, urg: 0
@@ -122,6 +122,10 @@ const A = mkJob({
   id: "R1001", cust: "Customer One", area: "Cork", off: "OF-101", colour: "White",
   wnd: 12, drs: 4, glass: { tg: 8, dg: 6 },
   prods: [{ n: "7000 casement", f: 24, s: 18, t: 6, st: ["process"] }],
+  /* the job's own doors, one per DOORS DONE cell (2026-09-14). One is in
+     fabrication and one has not been started, which is what makes the derived
+     Doors line read "in fabrication". */
+  doors: [{ slot: 1, code: "CD", status: "process" }, { slot: 2, code: "SS", status: "" }],
   cp: { win: "done", drs: "process", glass: { tg: "done", dg: "" },
         prod: { "7000 casement": { f: "done", s: "process" } } },
   dates: { sold: "2026-01-05", stamp: "2026-01-20", ivana: null, ready: "2026-02-10", floor: "2026-03-01" },
@@ -380,9 +384,15 @@ function pdfRunsPerPage(buf) {
   assert.deepStrictEqual(only({ urgent: true }), ["R1002"]);
   pass("ready to deliver and urgent");
 
+  /* Windows and Doors keep their own tick AND answer for what is under them,
+     and the HIGHER of the two is what the filter sees (the doors spec,
+     amendment 1). R1001's M is gold on the sheet, so it filters as done even
+     though its sashes are only part way; its N is yellow, and its doors say
+     the same, so it filters as in fabrication. */
   assert.deepStrictEqual(only({ cp: { win: "done" } }), ["R1001", "R1002"]);
   assert.deepStrictEqual(only({ cp: { drs: "process" } }), ["R1001"]);
-  assert.deepStrictEqual(only({ cp: { drs: "none" } }), ["R1003"], "doors on the sheet with no colour yet");
+  assert.deepStrictEqual(only({ cp: { drs: "none" } }), ["R1003"],
+    "doors on the sheet with no codes in the DOORS DONE cells yet");
   assert.deepStrictEqual(only({ cp: { glass: "done" } }), ["R1002"]);
   assert.deepStrictEqual(only({ cp: { glass: "process" } }), ["R1001"], "one unit done and one not is in progress");
   assert.deepStrictEqual(only({ cp: { prod: "done" } }), ["R1002"]);
@@ -484,8 +494,15 @@ function pdfRunsPerPage(buf) {
   /* ---- 6. checkpoints per group ---- */
   const cpA = exportCheckpoints(A);
   assert.deepStrictEqual(cpA.map(g => g.label), ["Windows", "Doors", "Glass", "7000 casement"]);
+  /* Windows is done: its own cell is gold on the sheet, and a gold M outranks
+     whatever its window types add up to */
   assert.deepStrictEqual(cpA[0], { group: "win", label: "Windows", done: 12, total: 12, unknown: false,
     items: [{ item: "win", label: "Windows", done: 12, total: 12, status: "done" }], status: "done" });
+  /* the doors are listed on the Doors line by their own codes, and are NOT
+     counted into its total: that line is already their aggregate */
+  assert.deepStrictEqual(cpA[1].items.map(x => x.item + " " + x.label + " " + x.status),
+    ["drs Doors process", "door:1 CD process", "door:2 SS "]);
+  assert.strictEqual(cpA[1].total, 4, "the Doors total is the sheet's own quantity, counted once");
   assert.strictEqual(cpA[2].total, 14, "glass groups both unit types");
   assert.strictEqual(cpA[2].done, 8);
   assert.strictEqual(cpA[2].status, "process");
@@ -630,8 +647,11 @@ function pdfRunsPerPage(buf) {
   assert.deepStrictEqual(headerRow(chk, 1), ["Job", "Group", "Item", "Done", "Total", "Status"]);
   assert.deepStrictEqual(chk.getRow(2).values.slice(1), ["R1001", "Windows", "Windows", 12, 12, "done"]);
   assert.strictEqual(fillOfCell(chk.getCell("F2")), "FFFFE699");
-  assert.strictEqual(chk.getRow(3).values[6], "in fabrication");
-  assert.strictEqual(fillOfCell(chk.getCell("F3")), "FFFFFF00");
+  /* then the Doors line, and under it the job's own doors by their codes */
+  assert.deepStrictEqual(chk.getRow(3).values.slice(1), ["R1001", "Doors", "Doors", "", 4, "in fabrication"]);
+  assert.deepStrictEqual(chk.getRow(4).values.slice(1), ["R1001", "Doors", "CD", "", 1, "in fabrication"]);
+  assert.strictEqual(fillOfCell(chk.getCell("F4")), "FFFFFF00");
+  assert.deepStrictEqual(chk.getRow(5).values.slice(1), ["R1001", "Doors", "SS", 0, 1, "not started"]);
   pass("Checkpoints sheet: one line per item, with the word as well as the colour");
 
   const info = back.getWorksheet("Export info");
@@ -764,6 +784,8 @@ function pdfRunsPerPage(buf) {
   assert.strictEqual(bars[0].canvas[1].w, bars[0].canvas[0].w, "windows are 12 of 12: the bar is full");
   assert.ok(allCardText.indexOf("12 of 12  ·  done") >= 0, '"done of total" is written out too');
   assert.ok(allCardText.indexOf("8 of 14") >= 0, "glass is 8 of 14");
+  /* the PDF card stays one line per GROUP, as it always was - the individual
+     doors are in the Excel Checkpoints sheet, which is where the detail lives */
   pass("glass blocks are sized by quantity and checkpoints get a bar and a count");
 
   const hdr = def.header(2, 5), ftr = def.footer(2, 5);

@@ -242,6 +242,13 @@ function setRecord(rows) {
 function settled(yes) {
   vm.runInThisContext("CP_IMPORTED = " + (yes ? "'2026-09-11T09:00:00Z'" : "''") + "; cpImportCheck();");
 }
+/** The doors' own marker, which is a separate question from the general one:
+    the doors shipped three days after the general import had drained. */
+function doorsSettled(yes) {
+  vm.runInThisContext("CP_DOORS_IMPORTED = " + (yes ? "'2026-09-14T09:00:00Z'" : "''") + ";");
+  if (yes) localStorage.setItem("cw_cpimported_doors", "2026-09-14T09:00:00Z");
+  else localStorage.removeItem("cw_cpimported_doors");
+}
 /** ... and the same for the colours this dashboard remembers having painted. */
 function setPainted(map) {
   global.__painted = map || {};
@@ -261,10 +268,27 @@ const PMAP = { qty: { wnd: 13, drs: 14 }, glass: { tg: 51, tuff: 52 },
                prod: { "7000 casement": { f: 20, s: 21, t: 22 } }, prodOrder: ["7000 casement"] };
 const mkJob = (cp, extra) => Object.assign({
   id: "R0001", cust: "Ann", area: "Cork", wnd: 10, drs: 2, glass: { tg: 25, tuff: 11 },
-  prods: [{ n: "7000 casement", f: 12, s: 8, t: 0, st: [] }], notes: [], sheets: ["Production"], src: {},
-  dates: {}, cat: "active", blk: 3, seq: 1, stage: "floor", done: 0, urg: 0,
+  prods: [{ n: "7000 casement", f: 10, s: 8, t: 0, st: [] }], notes: [], sheets: ["Production"], src: {},
+  doors: [], dates: {}, cat: "active", blk: 3, seq: 1, stage: "floor", done: 0, urg: 0,
   cp: JSON.parse(JSON.stringify(cp))
 }, extra || {});
+
+/* ---- the item the machinery tests tick -------------------------------------
+   It used to be "win", the Windows quantity in column M. Since 2026-09-14
+   (docs/specs/2026-09-11-doors-and-window-types.md) Windows is DERIVED from
+   the job's window types and cannot be ticked at all, so the generic item is
+   one of those types instead: the 7000 casement's frames, ten of them, in
+   column T. Nothing about the machinery under test depends on which item it
+   is - the debounce, the queue, the record-then-fill-then-log order, the
+   safeguard and the repaint are the same for every counted item. */
+const IT = "prod:7000 casement:f", ITCOL = 20, ITADDR = "T7";
+/** A fixture whose generic item carries `word` as the colour in its cell. */
+const mkIt = (word, extra) => mkJob({ win: "", drs: "", glass: {},
+                                      prod: { "7000 casement": { f: word } } }, extra);
+/** Move that colour on a fixture already made, the way a download would. */
+const setFileCp = (j, word) => { (j.cp.prod["7000 casement"] = j.cp.prod["7000 casement"] || {}).f = word; };
+/** The colours this browser remembers painting, for the generic item. */
+const paintedIt = word => { const m = {}; m.R0001 = {}; m.R0001[IT] = word; return m; };
 /* put one job on the fake Production sheet at row 7 and in the app's list */
 function useJob(job, map) {
   BOOK["Production"] = { v: {}, fill: {} };
@@ -275,6 +299,10 @@ function useJob(job, map) {
   global.__j = job; global.__m = map === undefined ? PMAP : map;
   vm.runInThisContext("ALL = [__j]; PRODMAP = __m; CHANGES = []; state.sel = null; " +
     "PENDING = {}; savePending();");
+  /* and a clean slate for the colours this browser remembers painting: a
+     fixture is a different job from the one before it, and a leftover PAINTED
+     would make the derived Windows/Doors cells look as though they had moved */
+  setPainted({});
   return byId(job.id);
 }
 /** The record as the fixture's Excel colours would have it - what the one-time
@@ -300,42 +328,81 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   let j = mkJob({ win: "done", drs: "done", glass: { tg: "process", tuff: "done" },
                   prod: { "7000 casement": { f: "process", s: "done", t: "" } } });
   setRecord([
-    { job: "R0001", item: "win", done: 10, total: 10, status: "done" },
+    { job: "R0001", item: IT, done: 10, total: 10, status: "done" },
     { job: "R0001", item: "glass:tg", done: 6, total: 25, status: "process" },
-    { job: "R0001", item: "glass:tuff", done: 0, total: 11, status: "process" },
-    { job: "R0001", item: "prod:7000 casement:f", done: 6, total: 12, status: "process" }
+    { job: "R0001", item: "glass:tuff", done: 0, total: 11, status: "process" }
   ]);
-  assert.deepStrictEqual(itemState(j, "win"), { done: 10, total: 10, status: "done" });
+  assert.deepStrictEqual(itemState(j, IT), { done: 10, total: 10, status: "done" });
   pass("a row saying done is done, whatever the cell is coloured");
   assert.deepStrictEqual(itemState(j, "glass:tg"), { done: 6, total: 25, status: "process" });
   pass("a row part way there carries its own count: 6 of 25, in process");
   assert.deepStrictEqual(itemState(j, "glass:tuff"), { done: null, total: 11, status: "process" });
   pass("in process with no count on the row: in progress, count unknown");
-  /* the two that matter: a GOLD cell with no row, and a gold cell whose row
-     says nothing. Before 2026-09-11 both read as "done" off the colour. */
-  assert.deepStrictEqual(itemState(j, "drs"), { done: 0, total: 2, status: "" },
-    "a gold cell with no row in the record is nothing done");
-  assert.strictEqual(cpFileStatus(j, "drs"), "done", "even though the file plainly says gold");
+  /* the one that matters: a GOLD cell whose row says nothing. Before
+     2026-09-11 it read as "done" off the colour. */
   assert.deepStrictEqual(itemState(j, "prod:7000 casement:s"), { done: 0, total: 8, status: "" });
+  assert.strictEqual(cpFileStatus(j, "prod:7000 casement:s"), "done", "even though the file plainly says gold");
   pass("a gold cell the record says nothing about is NOT done: the colour is not status");
   assert.strictEqual(itemState(j, "prod:7000 casement:t"), null, "an item with no total does not exist");
-  assert.deepStrictEqual(itemState(j, "prod:7000 casement:f"), { done: 6, total: 12, status: "process" });
-  pass("product F/S/T items behave the same");
-  assert.strictEqual(cpStatus(j, "win"), "done");
-  assert.strictEqual(cpStatus(j, "drs"), "", "and cpStatus answers from the record too");
+  assert.strictEqual(cpStatus(j, IT), "done");
   assert.deepStrictEqual(cpItems(j).map(x => x.key),
-    ["win", "drs", "glass:tg", "glass:tuff", "prod:7000 casement:f", "prod:7000 casement:s"]);
+    ["win", "drs", "glass:tg", "glass:tuff", IT, "prod:7000 casement:s"]);
   pass("only items with a total exist, in drawer order");
+
+  /* ---- 1b. WINDOWS AND DOORS ARE DERIVED (2026-09-14, the doors spec) ------
+     M and N stopped being ticks of their own. Windows says what the job's
+     window types say and Doors says what its doors say, and neither reads a
+     row of its own - so a gold M with nothing ticked under it is not done. */
+  assert.deepStrictEqual(itemState(j, "win"), { done: null, total: 10, status: "process" },
+    "one window type part way, one not started: Windows is in fabrication");
+  assert.strictEqual(cpFileStatus(j, "win"), "done", "even though M is gold in the file");
+  assert.deepStrictEqual(itemState(j, "drs"), { done: 0, total: 2, status: "" },
+    "no door codes on the row at all: Doors is blank, whatever N is coloured");
+  assert.strictEqual(cpFileStatus(j, "drs"), "done", "and N is gold in the file");
+  pass("Windows and Doors are the aggregate of what is under them, not a row of their own");
+
+  /* the same job with its five DOORS DONE cells filled in */
+  const dj = mkJob({ win: "", drs: "", glass: {}, prod: {} },
+    { wnd: 0, glass: {}, prods: [],
+      drs: 3, doors: [{ slot: 1, code: "CD", status: "done" },
+                      { slot: 2, code: "1 DOOR", status: "process" },
+                      { slot: 4, code: "SFCD", status: "" }] });
+  setRecord([
+    { job: "R0001", item: "door:1", done: 1, total: 1, status: "done" },
+    { job: "R0001", item: "door:2", done: 0, total: 1, status: "process" }
+  ]);
+  assert.deepStrictEqual(cpItems(dj).map(x => [x.key, x.label, x.total, x.group]),
+    [["drs", "Doors", 3, "drs"], ["door:1", "CD", 1, "door"],
+     ["door:2", "1 DOOR", 1, "door"], ["door:4", "SFCD", 1, "door"]]);
+  pass("one item per door, total 1, its label the code the office typed, in its own group");
+  assert.deepStrictEqual(itemState(dj, "door:1"), { done: 1, total: 1, status: "done" });
+  assert.deepStrictEqual(itemState(dj, "door:2"), { done: null, total: 1, status: "process" });
+  assert.deepStrictEqual(itemState(dj, "door:4"), { done: 0, total: 1, status: "" });
+  assert.strictEqual(itemState(dj, "door:3"), null, "a slot with no text in it is not a door");
+  assert.deepStrictEqual(itemState(dj, "drs"), { done: null, total: 3, status: "process" },
+    "one done, one in fabrication, one not: the Doors line is in fabrication");
+  /* every door done makes the line done; clearing one takes it back */
+  setRecord([{ job: "R0001", item: "door:1", done: 1, total: 1, status: "done" },
+             { job: "R0001", item: "door:2", done: 1, total: 1, status: "done" },
+             { job: "R0001", item: "door:4", done: 1, total: 1, status: "done" }]);
+  assert.deepStrictEqual(itemState(dj, "drs"), { done: 3, total: 3, status: "done" });
+  setRecord([]);
+  assert.deepStrictEqual(itemState(dj, "drs"), { done: 0, total: 3, status: "" },
+    "and with nothing recorded under it, the line is blank again");
+  pass("the Doors line follows its doors: all done, part way, nothing");
+  assert.strictEqual(cpColumn("door:2", { doors: { 1: 72, 2: 73, 3: 74, 4: 75, 5: 76 } }), 73,
+    "a door's cell is its own DOORS DONE column and nothing else");
+  assert.strictEqual(cpLabel("door:2"), "Door 2");
 
   /* a row for a job or an item the sheet does not have is simply not asked
      about, and a Status the list does not know reads as blank */
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "rubbish" }]);
-  assert.deepStrictEqual(itemState(j, "win"), { done: 0, total: 10, status: "" },
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "rubbish" }]);
+  assert.deepStrictEqual(itemState(j, IT), { done: 0, total: 10, status: "" },
     "a Status nobody recognises is not a status");
   /* Total comes from the SHEET, never from the row: the sheet is still the
      master for how much work there is */
-  setRecord([{ job: "R0001", item: "win", done: 99, total: 99, status: "done" }]);
-  assert.deepStrictEqual(itemState(j, "win"), { done: 10, total: 10, status: "done" },
+  setRecord([{ job: "R0001", item: IT, done: 99, total: 99, status: "done" }]);
+  assert.deepStrictEqual(itemState(j, IT), { done: 10, total: 10, status: "done" },
     "the sheet's own quantity is the total, and done is clamped to it");
   pass("the record carries the status and the count; the sheet still carries the quantity");
 
@@ -355,7 +422,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   setRecord([]);                                          // the office has un-ticked everything
   for (let i = 0; i < 8; i++) {
     vm.runInThisContext("ALL = applyPending([__j], true);");   // the 36 s-behind file, again and again
-    assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 0, total: 10, status: "" },
+    assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 0, total: 10, status: "" },
       "sample " + (i + 1) + ": still white");
     assert.deepStrictEqual(itemState(byId("R0001"), "glass:tg"), { done: 0, total: 25, status: "" },
       "sample " + (i + 1) + ": glass still white");
@@ -367,28 +434,32 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   /* the same job seen by a second dashboard, or by this one after a refresh:
      the record is read back from SharePoint, so it is in the same place */
   vm.runInThisContext("CP_ITEMS = []; cpRowsSet({});");
-  setRecord([{ job: "R0001", item: "win", done: 0, total: 10, status: "" }]);
+  setRecord([{ job: "R0001", item: IT, done: 0, total: 10, status: "" }]);
   vm.runInThisContext("ALL = applyPending([__j], true);");
-  assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 0, total: 10, status: "" },
+  assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 0, total: 10, status: "" },
     "a fresh page reads the record, not the colour, and is in exactly the same place");
   pass("a refresh changes nothing: the record does not live in this browser");
 
   /* ---- 3. five rapid taps make one write: record, then fill, then log ---- */
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 1, total: 10, status: "process" }]);
+  useJob(mkIt("process"));
+  setRecord([{ job: "R0001", item: IT, done: 1, total: 10, status: "process" }]);
   reset();
   for (let i = 0; i < 5; i++) {
-    const cur = itemState(byId("R0001"), "win");
-    setItemProgress(byId("R0001"), "win", (cur.done == null ? 0 : cur.done) + 1);
+    const cur = itemState(byId("R0001"), IT);
+    setItemProgress(byId("R0001"), IT, (cur.done == null ? 0 : cur.done) + 1);
   }
-  assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 6, total: 10, status: "process" },
+  assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 6, total: 10, status: "process" },
     "the screen is already at 6 before anything is written");
   assert.strictEqual(CALLS.length, 0, "nothing is written while the taps are still coming");
   assert.strictEqual(queued().length, 1, "the unsent tap is remembered in case the tab closes");
   await settle(1400);
-  assert.strictEqual(fills().length, 1, "exactly one fill written");
-  assert.strictEqual(fills()[0].addr, "M7", "written on the job's own row, in the WND column only");
+  /* two fills: this item's own cell, and the Windows cell above it, which
+     since 2026-09-14 is a copy of the aggregate of the job's window types */
+  assert.strictEqual(fills().length, 2, "the item's own fill, and the derived Windows cell");
+  assert.strictEqual(fills()[0].addr, ITADDR, "written on the job's own row, in this item's column only");
   assert.strictEqual(fills()[0].color, "#FFFF00", "6 of 10 is yellow");
+  assert.deepStrictEqual([fills()[1].addr, fills()[1].color], ["M7", "#FFFF00"],
+    "and M goes yellow because a window type is part way through");
   assert.strictEqual(progressWrites().length, 0,
     "the Dashboard Progress SHEET is never written again by anything");
   const wrote3 = listWrites();
@@ -396,13 +467,15 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(wrote3[0].method, "PATCH", "a row that already exists is patched by its id");
   assert.deepStrictEqual([wrote3[0].body.Job, wrote3[0].body.Item, wrote3[0].body.Done,
                           wrote3[0].body.Total, wrote3[0].body.Status, wrote3[0].body.Source],
-    ["R0001", "win", 6, 10, "process", "office"], "with the job, the item, the count and who set it");
+    ["R0001", IT, 6, 10, "process", "office"], "with the job, the item, the count and who set it");
   assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(wrote3[0].body.When),
     "and a full ISO stamp to the second: " + wrote3[0].body.When);
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 6, "the record really says six");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 6, "the record really says six");
   assert.strictEqual(logWrites().length, 1, "exactly one log line");
-  assert.deepStrictEqual(logWrites()[0].values[0].slice(2, 6), ["R0001", "Windows", "1 of 10", "6 of 10"],
-    "the from value is what it was before the burst of taps");
+  assert.deepStrictEqual(logWrites()[0].values[0].slice(2, 6),
+    ["R0001", "7000 CASEMENT frames", "1 of 10", "6 of 10 · Windows cell painted yellow"],
+    "the from value is what it was before the burst of taps, and the ONE line " +
+    "also says what happened to the Windows cell above it (amendment 3)");
   assert(!CALLS.some(c => c.sheet === "Production" && c.kind !== "fill" && c.kind !== "readRange"),
     "the Production sheet gets fills and a row lookup, nothing else");
   assert.strictEqual(queued().length, 0, "the queue is empty once the write has gone");
@@ -410,28 +483,29 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
     "and no PENDING entry was ever made for the tick");
   /* THE ORDER, which is the whole change: the record is written first, and
      the sheet is coloured from it. */
-  assert.deepStrictEqual(SEQ, ["record", "fill", "log"],
-    "record first, then the colour, then the log line: " + JSON.stringify(SEQ));
-  pass("5 rapid + taps: one record write, one fill, one log line, 1 of 10 -> 6 of 10, and no hold");
+  assert.deepStrictEqual(SEQ, ["record", "fill", "fill", "log"],
+    "record first, then the colours, then the log line: " + JSON.stringify(SEQ));
+  assert.strictEqual(SEQ[0], "record", "nothing has happened until the record says so");
+  pass("5 rapid + taps: one record write, the item's fill and its Windows copy, one log line, and no hold");
 
   reset();
-  setItemProgress(byId("R0001"), "win", 7);
+  setItemProgress(byId("R0001"), IT, 7);
   await settle(1400);
   assert.strictEqual(fills().length, 1, "a tap after the window is its own write");
   assert.strictEqual(listWrites().length, 1);
-  assert.deepStrictEqual(logWrites()[0].values[0].slice(3, 6), ["Windows", "6 of 10", "7 of 10"]);
+  assert.deepStrictEqual(logWrites()[0].values[0].slice(3, 6), ["7000 CASEMENT frames", "6 of 10", "7 of 10"]);
   pass("a tap after the debounce window makes a second write, counting from 6");
 
   /* ---- 3b. a refused RECORD write is a click that did not take ---- */
   reset(); FAIL_LIST = 1;
-  setItemProgress(byId("R0001"), "win", 9);
-  assert.strictEqual(itemState(byId("R0001"), "win").done, 9, "the row moves at the click");
+  setItemProgress(byId("R0001"), IT, 9);
+  assert.strictEqual(itemState(byId("R0001"), IT).done, 9, "the row moves at the click");
   await settle(1400);
   assert.strictEqual(fills().length, 0, "nothing was painted: the record refused, so nothing happened");
   assert.strictEqual(logWrites().length, 0, "and nothing is logged for a click that did not take");
   assert(TOASTS.some(t => t.err), "the person is told");
-  assert.strictEqual(itemState(byId("R0001"), "win").done, 7, "the screen goes back to seven");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 7, "and the record still says seven");
+  assert.strictEqual(itemState(byId("R0001"), IT).done, 7, "the screen goes back to seven");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 7, "and the record still says seven");
   assert.strictEqual(queued().length, 0, "a failed write is not owed for ever");
   pass("record refused: nothing is painted, nothing is logged, the row goes back");
 
@@ -440,40 +514,40 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      decided, the record says so, and Excel is behind. Putting the record back
      would be the second lie. */
   reset(); FAIL_FILL = 1;
-  assert.strictEqual(paintedOf("R0001", "win"), "process",
+  assert.strictEqual(paintedOf("R0001", IT), "process",
     "the last colour this dashboard really painted into that cell was yellow");
-  setItemProgress(byId("R0001"), "win", 10);          // 10 of 10 would be gold, if it landed
+  setItemProgress(byId("R0001"), IT, 10);          // 10 of 10 would be gold, if it landed
   await settle(1400);
   assert.strictEqual(fills().length, 0, "the fill was refused");
   assert.strictEqual(listWrites().length, 1, "but the record was written, and stands");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 10, "the office's decision is on the record");
-  assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 10, total: 10, status: "done" },
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 10, "the office's decision is on the record");
+  assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 10, total: 10, status: "done" },
     "and on the screen");
   assert.strictEqual(logWrites().length, 0, "nothing is logged for a colour that did not land");
   assert(TOASTS.some(t => t.err && /colour could not be written/.test(t.m)),
     "the person is told the record took it and the sheet did not");
-  assert.strictEqual(paintedOf("R0001", "win"), "process",
+  assert.strictEqual(paintedOf("R0001", IT), "process",
     "and the dashboard does not claim to have painted a cell it did not paint");
   pass("fill refused: the record stands, Excel is behind, and PAINTED is not fooled");
 
   /* ---- 4. Dashboard Progress upsert and its queue ---- */
   CP.cpSetProgress({});
   reset();
-  const r1 = await CW.saveProgress("R0001", "win", 7, 10, "abin");
-  const r2 = await CW.saveProgress("R0001", "win", 8, 10, "abin");
+  const r1 = await CW.saveProgress("R0001", IT, 7, 10, "abin");
+  const r2 = await CW.saveProgress("R0001", IT, 8, 10, "abin");
   assert.strictEqual(r1, r2, "the same (Job, Item) is updated in place");
   assert.strictEqual(BOOK["Dashboard Progress"].v[kk(r2, 3)], "8");
   const r3 = await CW.saveProgress("R0001", "drs", 1, 2, "abin");
   assert.strictEqual(r3, r2 + 1, "a new (Job, Item) pair appends");
-  const both = await Promise.all([CW.saveProgress("R0002", "win", 1, 4, "abin"),
-                                  CW.saveProgress("R0003", "win", 2, 6, "abin")]);
+  const both = await Promise.all([CW.saveProgress("R0002", IT, 1, 4, "abin"),
+                                  CW.saveProgress("R0003", IT, 2, 6, "abin")]);
   assert.notStrictEqual(both[0], both[1], "two writes at the same moment take two different rows");
   assert.strictEqual(BOOK["Dashboard Progress"].v[kk(both[0], 1)], "R0002");
   assert.strictEqual(BOOK["Dashboard Progress"].v[kk(both[1], 1)], "R0003");
   pass("saveProgress upserts, and two concurrent calls cannot take the same row");
   const nb = BATCHES;
   const wrote = await CW.saveProgressMany("R0001", [
-    { item: "win", done: 10, total: 10 }, { item: "drs", done: 2, total: 2 },
+    { item: IT, done: 10, total: 10 }, { item: "drs", done: 2, total: 2 },
     { item: "glass:tg", done: 25, total: 25 }], "abin");
   assert.strictEqual(wrote, 3);
   assert.strictEqual(BATCHES - nb, 1, "saveProgressMany sends one batch");
@@ -494,22 +568,22 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(cpClamp("rubbish", 10), null);
   pass("0 white, part yellow, all gold; blank or unreadable is not a count");
 
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "process" }]);
+  useJob(mkIt("process"));
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "process" }]);
   reset();
-  setItemProgress(byId("R0001"), "win", "");
-  setItemProgress(byId("R0001"), "win", "abc");
+  setItemProgress(byId("R0001"), IT, "");
+  setItemProgress(byId("R0001"), IT, "abc");
   await settle(1400);
   assert.strictEqual(CALLS.length, 0, "a blank or unreadable box writes nothing");
   assert.strictEqual(listWrites().length, 0, "not to the record either");
-  assert.strictEqual(itemState(byId("R0001"), "win").done, 4, "and changes nothing");
+  assert.strictEqual(itemState(byId("R0001"), IT).done, 4, "and changes nothing");
   pass("clearing the number box writes nothing at all");
 
   /* ---- 5b. an item that is not on the sheet ---- */
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }), null);   // no PRODMAP
+  useJob(mkIt("process"), null);   // no PRODMAP
   setRecord([]);
   reset();
-  setItemProgress(byId("R0001"), "win", 5);
+  setItemProgress(byId("R0001"), IT, 5);
   await settle(900);
   assert.strictEqual(CALLS.length, 0, "nothing is written when the column is unknown");
   assert.strictEqual(listWrites().length, 0, "and nothing is put on the record either");
@@ -519,8 +593,8 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   /* ---- 5b2. and if the list is not there, nothing is written anywhere ----
      CLAUDE.md rule 3: no list is created by code. A missing one is a plain
      message and checkpoints are read-only. */
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 3, total: 10, status: "process" }]);
+  useJob(mkIt("process"));
+  setRecord([{ job: "R0001", item: IT, done: 3, total: 10, status: "process" }]);
   vm.runInThisContext("CP_LIST_OK = null; CP_LIST_WHY = ''; CP_ITEMS = null; cpRowsSet({}); " +
                       "cpListWarned = false; CW._resetListIds();");
   localStorage.removeItem("cw_listids");        // a list id is never cached when it is missing
@@ -537,7 +611,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(shutControls, (shut.match(/ disabled/g) || []).length,
     "and every control on it is dead");
   reset();
-  setItemProgress(byId("R0001"), "win", 5);
+  setItemProgress(byId("R0001"), IT, 5);
   await setGroupDone(byId("R0001"), "glass", true);
   await settle(1400);
   assert.strictEqual(CALLS.length, 0, "no workbook write of any kind");
@@ -562,7 +636,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("no list: checkpoints are read-only, the message names it, and nothing is written anywhere");
 
   /* ---- 5c. a whole group in one go ---- */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   reset();
   await setGroupDone(byId("R0001"), "glass", true);
@@ -597,7 +671,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert(!/>Clear</.test(html), "nothing invites clearing a finished row");
   const controls = (html.match(/<button/g) || []).length + (html.match(/<input/g) || []).length;
   assert.strictEqual(controls, (html.match(/ disabled/g) || []).length, "every control is disabled");
-  setItemProgress(byId("R0001"), "win", 3);
+  setItemProgress(byId("R0001"), IT, 3);
   await setGroupDone(byId("R0001"), "glass", false);
   await settle(900);
   assert.strictEqual(CALLS.length, 0, "and clicking writes nothing");
@@ -606,7 +680,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
 
   /* ---- 5e. the open drawer is patched, not rebuilt ---- */
   useJob(mkJob({ win: "process", drs: "", glass: { tg: "done", tuff: "done" }, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 6, total: 10, status: "process" },
+  setRecord([{ job: "R0001", item: IT, done: 6, total: 10, status: "process" },
              { job: "R0001", item: "glass:tg", done: 25, total: 25, status: "done" },
              { job: "R0001", item: "glass:tuff", done: 11, total: 11, status: "done" }]);
   const mkLine = item => {
@@ -615,7 +689,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
              querySelector: sel => sel === ".cpnum" ? num : sel === ".cpbar i" ? bar
                : sel === ".cpin" ? inp : sel === ".cpall[data-cp]" ? all : null };
   };
-  const sum = { textContent: "" }, line = mkLine("win"), tgLine = mkLine("glass:tg");
+  const sum = { textContent: "" }, line = mkLine(IT), tgLine = mkLine("glass:tg");
   const grpBtn = { textContent: "", dataset: { cpgrp: "glass", alltext: "All glass done" } };
   const host = { querySelector: sel => (sel === ".cpsum" ? sum : null),
                  querySelectorAll: sel => sel === "[data-cpline]" ? [line, tgLine] : sel === "[data-cpgrp]" ? [grpBtn] : [] };
@@ -629,11 +703,13 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(line._all.textContent, "All done");
   assert.strictEqual(tgLine._bar.style.background, "var(--done)", "a finished item is gold");
   assert.strictEqual(grpBtn.textContent, "Clear", "the glass group is complete");
-  assert.strictEqual(sum.textContent, "Windows 6/10 · Doors 0/2 · Glass 36/36 · Frames/Sashes/Transoms 0/20");
+  assert.strictEqual(sum.textContent, "Windows 0/10 · Doors 0/2 · Glass 36/36 · Frames/Sashes/Transoms 6/18",
+    "Windows counts nothing of its own now - it is in progress with no number of " +
+    "its own - and the six frames are counted where they are actually recorded");
   document.activeElement = line._inp;                    // someone is typing in that box
   line._inp.value = "4";
   /* CHANGED 2026-09-11: what moves the row is the record, not a hold */
-  vm.runInThisContext("cpRowNow('R0001', 'win', 8, 10, 'process', 'the admin');");
+  vm.runInThisContext("cpRowNow('R0001', '" + IT + "', 8, 10, 'process', 'the admin');");
   cpPatchSection(byId("R0001"));
   assert.strictEqual(line._inp.value, "4", "the box being typed into is left alone");
   assert.strictEqual(line._num.textContent, "8 of 10", "everything else still updates");
@@ -641,14 +717,15 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("a tap patches the open section in place instead of rebuilding it");
 
   /* ---- 6. unsent taps survive the tab closing ---- */
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 1, total: 10, status: "process" }]);
+  useJob(mkIt("process"));
+  setRecord([{ job: "R0001", item: IT, done: 1, total: 10, status: "process" }]);
   reset();
-  setItemProgress(byId("R0001"), "win", 3);
+  setItemProgress(byId("R0001"), IT, 3);
   assert.strictEqual(queued().length, 1);
   CP.cpFireAll();                                  // what pagehide does
   await settle(60);
-  assert.strictEqual(fills().length, 1, "the write goes out at once, not 800 ms later");
+  assert.strictEqual(fills().length, 2,
+    "the write goes out at once, not 800 ms later (this item, and its Windows copy)");
   assert.strictEqual(logWrites().length, 1);
   assert.strictEqual(queued().length, 0);
   pass("leaving the page sends the taps that were still waiting");
@@ -656,7 +733,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   reset();
   localStorage.setItem("cw_cpqueue", JSON.stringify([
     { key: "R0001|glass:tg", job: "R0001", item: "glass:tg", col: 51, from: 0, to: 12, total: 25, at: Date.now() - 60000 },
-    { key: "R0009|win", job: "R0009", item: "win", col: 13, from: 0, to: 2, total: 4, at: Date.now() - 7200000 }
+    { key: "R0009|win", job: "R0009", item: IT, col: ITCOL, from: 0, to: 2, total: 4, at: Date.now() - 7200000 }
   ]));
   assert.strictEqual(cpReplayQueue(), 1, "only the entry from within the hour is replayed");
   await settle(120);
@@ -671,7 +748,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("a tap left over from a previous visit is sent on the next load");
 
   /* ---- 6b. two group taps in a row ---- */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   reset();
   const p1 = setGroupDone(byId("R0001"), "glass", true);
@@ -694,48 +771,51 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("two group taps: strictly one after the other, the second one wins in both places");
 
   /* ---- 6c. the column is worked out when the write goes, not when it was tapped ---- */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   reset();
-  setItemProgress(byId("R0001"), "win", 3);
-  global.__m2 = { qty: { wnd: 15, drs: 16 }, glass: { tg: 51, tuff: 52 }, prod: {}, prodOrder: [] };
+  setItemProgress(byId("R0001"), IT, 3);
+  global.__m2 = { qty: { wnd: 13, drs: 14 }, glass: { tg: 51, tuff: 52 },
+                  prod: { "7000 casement": { f: 15, s: 16, t: 17 } }, prodOrder: ["7000 casement"] };
   vm.runInThisContext("PRODMAP = __m2");            // someone inserted two columns in Excel
   await settle(1400);
-  assert.strictEqual(fills().length, 1);
   assert.strictEqual(fills()[0].addr, "O7", "the fill goes to the column the sheet has now");
+  assert.strictEqual(fills()[1].addr, "M7", "and the Windows copy to the column M is at now");
   pass("a column inserted between the tap and the write does not send the fill astray");
 
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   reset();
-  setItemProgress(byId("R0001"), "win", 4);
+  setItemProgress(byId("R0001"), IT, 4);
   vm.runInThisContext("PRODMAP = null");            // the sheet could not be read
   await settle(1400);
   assert.strictEqual(CALLS.length, 0, "nothing is written when the column cannot be worked out");
   assert.strictEqual(listWrites().length, 0, "and nothing reaches the record either");
   assert(TOASTS.some(t => t.err && /not a column/.test(t.m)));
-  assert.strictEqual(itemState(byId("R0001"), "win").done, 0,
+  assert.strictEqual(itemState(byId("R0001"), IT).done, 0,
     "and the row goes back: the record must not say something the sheet has no cell for");
   pass("no PRODMAP when the write goes: nothing written anywhere, the row put back, a message");
 
   /* ---- 6d. what is replayed and what is not ---- */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   reset();
   const at = Date.now() - 30000;
   localStorage.setItem("cw_cpqueue", JSON.stringify([
-    { key: "R0001|win", job: "R0001", item: "win", col: 13, from: 0, to: 3, total: 10, at: at, sent: 1 },
-    { key: "R0001|drs", job: "R0001", item: "drs", col: 14, from: 0, to: 1, total: 2, at: at, sent: 0 },
+    { key: "R0001|" + IT + "", job: "R0001", item: IT, col: ITCOL, from: 0, to: 3, total: 10, at: at, sent: 1 },
+    /* NOT "drs": Windows and Doors are derived since 2026-09-14 and have no row
+       of their own, so nothing can ever be queued against one */
+    { key: "R0001|glass:tuff", job: "R0001", item: "glass:tuff", col: 52, from: 0, to: 1, total: 11, at: at, sent: 0 },
     { key: "R0001|glass:tg", job: "R0001", item: "glass:tg", col: 51, from: 0, to: 5, total: 25, at: at, who: "someone.else@example.test" }
   ]));
   assert.strictEqual(cpReplayQueue(), 1, "only the unsent entry belonging to this person");
   await settle(120);
   assert.strictEqual(fills().length, 1);
-  assert.strictEqual(fills()[0].addr, "N7", "the doors tick, nothing else");
+  assert.strictEqual(fills()[0].addr, "AZ7", "that one tuff tick, nothing else");
   pass("a write already sent is never replayed, nor one left by another account");
 
   /* ---- 6e. undoing ready to deliver paints white ---- */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }, { done: 1 }));
+  useJob(mkIt("", { done: 1 }));
   setRecord([]);
   reset();
   await markReady(byId("R0001"), false);
@@ -745,7 +825,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("undo of mark ready paints the row white instead of clearing the fill");
 
   /* ---- 6f. the list keeps its section names, and a group tick is not reported twice ---- */
-  const withNames = [mkJob({ win: "", drs: "", glass: {}, prod: {} })];
+  const withNames = [mkIt("")];
   withNames.blockNames = ["Second hand", "In production"];
   assert.deepStrictEqual(applyPending(withNames).blockNames, ["Second hand", "In production"]);
   pass("applyPending keeps the section names on the list");
@@ -775,6 +855,9 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
     put(2, 13, "QUANTITY"); put(3, 13, "WND"); put(3, 14, "DRS");
     put(2, 20, "7000 CASEMENT"); put(3, 20, "F"); put(3, 21, "S"); put(3, 22, "T");
     put(2, 51, "GLASS UNITS"); put(3, 51, "TG"); put(3, 52, "TUFF");
+    /* DOORS DONE, five sub-columns numbered 1..5 (BT-BX on the real sheet) */
+    put(2, 72, "DOORS DONE");
+    for (let i = 0; i < 5; i++) put(3, 72 + i, String(i + 1));
   };
   const ws = wb.addWorksheet("Production"), ws2 = wb.addWorksheet("Production (2)");
   head(ws); head(ws2);
@@ -788,12 +871,17 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   put(ws, 6, 13, 10, "FFFF00"); put(ws, 6, 14, 2, "FFE699");
   put(ws, 6, 20, 12, "FFFF00"); put(ws, 6, 21, 8, "FFE699"); put(ws, 6, 22, 3, "FFFFFF");
   put(ws, 6, 51, 25, "FFE699"); put(ws, 6, 52, 11, "FFFFFF");
+  /* and its doors: CD gold, "1 DOOR" yellow, SFCD uncoloured, one slot empty
+     and one holding a stray word - ANY text is a door, whitespace alone is not */
+  put(ws, 6, 72, "CD", "FFE699"); put(ws, 6, 73, "1 DOOR", "FFFF00");
+  put(ws, 6, 74, "   "); put(ws, 6, 75, "sfcd"); put(ws, 6, 76, "n/a");
   /* the same job on Production (2), still yellow where Production has been cleared */
   put(ws2, 6, 3, "R0001"); put(ws2, 6, 13, 10, "FFFF00"); put(ws2, 6, 52, 11, "FFFF00");
   put(ws2, 6, 20, 12, "FFE699");
   /* R0002: the whole Production row is gold */
   put(ws, 7, 3, "R0002"); put(ws, 7, 13, 4); put(ws, 7, 20, 5); put(ws, 7, 51, 6);
-  for (let c = 1; c <= 60; c++) put(ws, 7, c, undefined, "FFE699");
+  put(ws, 7, 14, 1); put(ws, 7, 72, "DD");
+  for (let c = 1; c <= 80; c++) put(ws, 7, c, undefined, "FFE699");
   const jobs = parseWorkbook(wb);
   const a = jobs.find(x => x.id === "R0001"), b = jobs.find(x => x.id === "R0002");
   assert.strictEqual(a.cp.win, "process");
@@ -809,6 +897,23 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(cpFileStatus(a, "prod:7000 casement:t"), "");
   assert.deepStrictEqual(a.prods[0].st.sort(), ["done", "process"], "the old product status still works");
   pass("parser: cp colours for M, N, the glass columns and F/S/T, still read, still parsed");
+  /* ---- 7b. the DOORS DONE cells ---- */
+  const m7 = mapSheet(ws);
+  assert.deepStrictEqual(m7.doors, { 1: 72, 2: 73, 3: 74, 4: 75, 5: 76 },
+    "the five sub-columns are mapped by their own numbers");
+  assert.ok(!Object.keys(m7.prod).some(k => k.indexOf("doors done") >= 0),
+    "and DOORS DONE is still kept out of the product groups, where it has no F/S/T");
+  assert.deepStrictEqual(a.doors, [
+    { slot: 1, code: "CD", status: "done" },
+    { slot: 2, code: "1 DOOR", status: "process" },
+    { slot: 4, code: "SFCD", status: "" },
+    { slot: 5, code: "N/A", status: "" }
+  ], "any non-empty text is a door, trimmed and upper-cased; whitespace alone is not");
+  assert.strictEqual(cpFileStatus(a, "door:1"), "done");
+  assert.strictEqual(cpFileStatus(a, "door:2"), "process");
+  assert.strictEqual(cpFileStatus(a, "door:4"), "");
+  assert.strictEqual(cpTotal(a, "door:3"), 0, "slot 3 held nothing but spaces");
+  pass("parser: one door per DOORS DONE cell, its text the code and its fill the status");
   pass("a colour on Production (2) never overrides Production, so un-ticking sticks");
   setRecord([]);
   cpItems(a).forEach(x => assert.strictEqual(cpStatus(a, x.key), "",
@@ -816,8 +921,25 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   pass("and not one of those colours is status: with no record, nothing on that job is ticked");
   /* the import is what turns them into a record, once */
   recordFromColours(a);
+  assert.deepStrictEqual(itemState(a, IT), { done: null, total: 12, status: "process" });
+  /* Windows and Doors keep their own record rows (amendment 1) AND answer for
+     what is under them - the higher of the two is what is shown. M is yellow
+     in the file, so its own row says in fabrication; its window types say the
+     same, so in fabrication is what it reads. */
   assert.deepStrictEqual(itemState(a, "win"), { done: null, total: 10, status: "process" });
-  assert.deepStrictEqual(itemState(a, "drs"), { done: 2, total: 2, status: "done" });
+  /* N is GOLD in the file, so its own row says done - and it stays done even
+     though two of the four doors under it have not been started. That is the
+     owner's rule: "already golden means it finished even if all the cell or
+     component has no ticked." */
+  assert.strictEqual(cpFileStatus(a, "drs"), "done");
+  assert.deepStrictEqual(itemState(a, "drs"), { done: 2, total: 2, status: "done" },
+    "a gold N stays done however little is ticked under it");
+  assert.strictEqual(cpDerivedOf(a, "drs"), "process", "even though its doors only add up to in fabrication");
+  /* and the aggregate still takes a line UP: clear N's own row and the doors
+     carry it to in fabrication on their own */
+  vm.runInThisContext("cpRowPut('R0001', 'drs', null);");
+  assert.deepStrictEqual(itemState(a, "drs"), { done: null, total: 2, status: "process" },
+    "with no row of its own, N reads what its doors say");
   assert.strictEqual(b.done, 1, "the gold row is a finished job");
   assert.strictEqual(b.cp.win, "done");
   assert.strictEqual(b.cp.glass.tg, "done");
@@ -828,14 +950,21 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
 
   /* ---- 8. what the Changes list says about a colour that moved in Excel ---- */
   const before2 = JSON.parse(JSON.stringify(a)), after = JSON.parse(JSON.stringify(a));
-  after.cp.win = "done";
+  setFileCp(after, "done");
   const d = diffJobs([before2], [after], "someone", "2026-09-04T10:00:00Z");
-  assert.deepStrictEqual(d.map(x => [x.what, x.from, x.to]), [["Windows", "in fabrication", "done"]]);
+  assert.deepStrictEqual(d.map(x => [x.what, x.from, x.to]),
+    [["7000 CASEMENT frames", "in fabrication", "done"]]);
+  /* and a door's cell moving in Excel is listed by the door's own name */
+  const afterD = JSON.parse(JSON.stringify(a));
+  afterD.doors[1].status = "done";
+  assert.deepStrictEqual(diffJobs([JSON.parse(JSON.stringify(a))], [afterD], "someone", "2026-09-04T10:00:00Z")
+    .map(x => [x.what, x.from, x.to]), [["Door 2", "in fabrication", "done"]]);
   pass("a colour change is listed by the item's own name, the way the log names it");
 
   /* ================= 9. THE ONE-TIME IMPORT (spec section 4) ================= */
   const impJob = mkJob({ win: "done", drs: "process", glass: { tg: "process", tuff: "" },
-                         prod: { "7000 casement": { f: "done", s: "" } } });
+                         prod: { "7000 casement": { f: "done", s: "" } } },
+                       { doors: [{ slot: 1, code: "CD", status: "process" }] });
   useJob(impJob);
   setRecord([]);
   /* the exact count behind the yellow TG, off the Dashboard Progress SHEET -
@@ -846,27 +975,34 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   reset();
   const imported = await cpImportRun();
   await settle(150);                       // the log line is written without being awaited
-  assert.strictEqual(imported, 4, "four cells say something: win, drs, glass:tg and the F frames");
+  assert.strictEqual(imported, 5,
+    "five cells say something: win, drs, glass:tg, the F frames and the job's one door");
   assert.strictEqual(fills().length, 0, "the import paints nothing: the colours are already there");
   const impRows = listWrites();
   assert.ok(impRows.every(w => w.method === "POST"), "every imported row is created, none patched");
   assert.ok(impRows.every(w => w.body.fields.Source === "import"), "and every one says where it came from");
   assert.deepStrictEqual(impRows.map(w => w.body.fields.Item).sort(),
-    ["drs", "glass:tg", "prod:7000 casement:f", "win"]);
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 10, "a gold cell imports at the total");
+    ["door:1", "drs", "glass:tg", IT, "win"]);
+  /* Windows and Doors are ticked in their own right again (amendment 1), so
+     they are imported like any other item - and the general pass covers the
+     doors too, which is why it also settles the doors marker */
+  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 10, "M imports at the total");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 10, "a gold cell imports at the total");
   assert.strictEqual(cpSrvRow("R0001", "glass:tg").fields.Done, 9,
     "a yellow cell imports the exact count the sheet had for it");
-  assert.strictEqual(cpSrvRow("R0001", "drs").fields.Done, 0,
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Done, 0,
     "and a yellow cell with no count imports as in progress, count unknown");
-  assert.strictEqual(itemState(byId("R0001"), "drs").done, null, "which is how it reads back");
+  assert.strictEqual(itemState(byId("R0001"), "door:1").done, null, "which is how it reads back");
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: null, total: 2, status: "process" },
+    "so the derived Doors line reads in fabrication, from that one door");
   assert.strictEqual(cpSrvRow("R0001", "glass:tuff"), null,
     "a BLANK cell gets no row at all: no row IS nothing done, and importing every blank would " +
     "be a row per checkpoint of every job on the sheet");
-  assert.strictEqual(paintedOf("R0001", "win"), "done",
+  assert.strictEqual(paintedOf("R0001", IT), "done",
     "and the colour it imported is remembered as the one that is in the cell");
   const impLog = logWrites();
   assert.strictEqual(impLog.length, 1, "one summary line, not one per row");
-  assert.ok(/Imported 4 checkpoints from the sheet's colours/.test(impLog[0].values[0][5]),
+  assert.ok(/Imported 5 checkpoints from the sheet's colours/.test(impLog[0].values[0][5]),
     "saying how many, in plain words: " + impLog[0].values[0][5]);
   pass("the import adopts today's colours once, with Source = import and one summary line");
 
@@ -915,7 +1051,7 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   global.__boom = async () => { throw new Error("stub: the lane runner fell over"); };
   vm.runInThisContext("cpSend = __boom;");
   settled(false);
-  useJob(mkJob({ win: "done", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt("done"));
   setRecord([]); settled(false);
   await cpImportRun().catch(() => {});
   assert.ok(vm.runInThisContext("!!cpImportAgainT"), "a pass that throws still comes back");
@@ -926,28 +1062,28 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   /* ============ 10. THE SAFEGUARD: a colour changed in Excel by hand ========
      Spec section 4a. The download FINDS a candidate; the Excel API - which
      reads the live file with no lag - CONFIRMS it. */
-  const sg = mkJob({ win: "process", drs: "", glass: {}, prod: {} }, { src: { Production: 7 } });
+  const sg = mkIt("process", { src: { Production: 7 } });
   useJob(sg);
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "process" }]);
-  setPainted({ R0001: { win: "process" } });
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "process" }]);
+  setPainted(paintedIt("process"));
   /* somebody has coloured M7 gold in Excel, and the download has caught up */
-  BOOK["Production"].fill[kk(7, 13)] = "#FFE699";
-  sg.cp.win = "done";
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFE699";
+  setFileCp(sg, "done");
   vm.runInThisContext("LASTBY = 'the colleague';");
   reset();
   const adopted = await cpAdoptRun();
   await settle(150);
   assert.strictEqual(adopted, 1, "one cell adopted");
   assert.strictEqual(fills().length, 0, "nothing is painted: Excel already has the colour");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Status, "done", "the record now says done");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 10);
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Source, "excel", "and where it came from");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Who, "the colleague",
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Status, "done", "the record now says done");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 10);
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Source, "excel", "and where it came from");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Who, "the colleague",
     "with the file's last editor - never 'painted by', which Excel cannot tell us");
-  assert.strictEqual(paintedOf("R0001", "win"), "done", "and it is not adopted twice");
+  assert.strictEqual(paintedOf("R0001", IT), "done", "and it is not adopted twice");
   const adoptLog = logWrites();
   assert.strictEqual(adoptLog.length, 1, "one log line");
-  assert.deepStrictEqual(adoptLog[0].values[0][3], "Windows", "named the way every other change is");
+  assert.deepStrictEqual(adoptLog[0].values[0][3], "7000 CASEMENT frames", "named the way every other change is");
   assert.ok(/adopted from Excel/.test(adoptLog[0].values[0][5]) &&
             /file last edited by the colleague/.test(adoptLog[0].values[0][5]),
     "saying it came from Excel and who last edited the file: " + adoptLog[0].values[0][5]);
@@ -958,24 +1094,24 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
 
   /* a STALE download: the file we downloaded says gold, the API says what we
      painted. Nothing happens, and nothing is said. */
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "process" }]);
-  setPainted({ R0001: { win: "process" } });
-  BOOK["Production"].fill[kk(7, 13)] = "#FFFF00";        // the LIVE cell is still yellow
-  sg.cp.win = "done";                                     // ... but the download says gold
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "process" }]);
+  setPainted(paintedIt("process"));
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFFF00";        // the LIVE cell is still yellow
+  setFileCp(sg, "done");                                     // ... but the download says gold
   reset();
   assert.strictEqual(await cpAdoptRun(), 0, "nothing is adopted");
   await settle(150);
   assert.strictEqual(listWrites().length, 0, "nothing is written");
   assert.strictEqual(logWrites().length, 0, "nothing is logged");
   assert.strictEqual(TOASTS.length, 0, "and nothing is said: it is not a fault, it is a slow copy");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Status, "process", "the record is untouched");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Status, "process", "the record is untouched");
   pass("a stale download is confirmed away by the API and ignored silently");
 
   /* the dashboard's own paint is never adopted as somebody else's */
-  setRecord([{ job: "R0001", item: "win", done: 10, total: 10, status: "done" }]);
-  setPainted({ R0001: { win: "done" } });
-  BOOK["Production"].fill[kk(7, 13)] = "#FFE699";
-  sg.cp.win = "done";
+  setRecord([{ job: "R0001", item: IT, done: 10, total: 10, status: "done" }]);
+  setPainted(paintedIt("done"));
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFE699";
+  setFileCp(sg, "done");
   reset();
   assert.strictEqual(await cpAdoptRun(), 0, "the file agrees with what we painted: nothing to adopt");
   assert.strictEqual(LISTREQ.length, 0, "and it is not even confirmed: no read is made at all");
@@ -989,10 +1125,10 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      always, so the download is now the DISCOVERY on both paths and the API
      read is only ever the CONFIRMATION. What the drawer still buys is the
      confirmation on the ten-second clock rather than on the next load. */
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "process" }]);
-  setPainted({ R0001: { win: "process" } });
-  BOOK["Production"].fill[kk(7, 13)] = "#FFE699";
-  sg.cp.win = "process";                                  // the download has NOT caught up
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "process" }]);
+  setPainted(paintedIt("process"));
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFE699";
+  setFileCp(sg, "process");                                  // the download has NOT caught up
   vm.runInThisContext("state.sel = 'R0001'; cpDrawerJob = ''; cpDrawerAt = 0;");
   const realQ2 = document.querySelector;
   document.querySelector = () => stubEl();
@@ -1002,12 +1138,12 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(await cpAdoptDrawerJob(), 0,
     "and neither has the drawer: the API is not asked about a cell nothing suggests has moved");
   assert.strictEqual(CALLS.length, 0, "so a drawer left open reads nothing at all");
-  sg.cp.win = "done";                                     // now the download catches up
+  setFileCp(sg, "done");                                     // now the download catches up
   vm.runInThisContext("cpDrawerJob = ''; cpDrawerAt = 0;");
   reset();
   assert.strictEqual(await cpAdoptDrawerJob(), 1,
     "and the drawer's job is confirmed on the ten-second clock, without waiting for a load");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Status, "done");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Status, "done");
   document.querySelector = realQ2;
   vm.runInThisContext("state.sel = null;");
   pass("the drawer confirms on the ten-second clock, and asks the API for nothing else");
@@ -1016,14 +1152,13 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   const bulk = [];
   for (let i = 1; i <= 25; i++) {
     BOOK["Production"].v[kk(20 + i, 3)] = "R" + (3000 + i);
-    BOOK["Production"].fill[kk(20 + i, 13)] = "#FFE699";
-    bulk.push(mkJob({ win: "done", drs: "", glass: {}, prod: {} },
-                     { id: "R" + (3000 + i), src: { Production: 20 + i } }));
+    BOOK["Production"].fill[kk(20 + i, ITCOL)] = "#FFE699";
+    bulk.push(mkIt("done", { id: "R" + (3000 + i), src: { Production: 20 + i } }));
   }
   global.__bulk = bulk;
   vm.runInThisContext("ALL = __bulk; PRODMAP = __m; state.sel = null;");
-  setRecord(bulk.map(x => ({ job: x.id, item: "win", done: 0, total: 10, status: "" })));
-  setPainted(bulk.reduce((m, x) => { m[x.id] = { win: "" }; return m; }, {}));
+  setRecord(bulk.map(x => ({ job: x.id, item: IT, done: 0, total: 10, status: "" })));
+  setPainted(bulk.reduce((m, x) => { m[x.id] = {}; m[x.id][IT] = ""; return m; }, {}));
   reset();
   const nBatch = BATCHES;
   const bulkAdopted = await cpAdoptRun();
@@ -1073,14 +1208,14 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
     "and the drawer's summary line is the same, so a gold row does not read 0");
   /* an item that DOES have a row always answers from the row, window or not:
      an un-tick made during the window is still absolute */
-  vm.runInThisContext("cpRowNow('R0001', 'win', 0, 10, '', 'the admin');");
-  assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 0, total: 10, status: "" },
+  vm.runInThisContext("cpRowNow('R0001', '" + IT + "', 0, 10, '', 'the admin');");
+  assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 0, total: 10, status: "" },
     "an un-tick inside the window is the record's word, not the sheet's gold");
   /* and once the import has drained, the fallback is dead */
   settled(true);
   setRecord([]);
   assert.strictEqual(cpImportPending(), false);
-  assert.deepStrictEqual(itemState(byId("R0001"), "win"), { done: 0, total: 10, status: "" },
+  assert.deepStrictEqual(itemState(byId("R0001"), IT), { done: 0, total: 10, status: "" },
     "a gold cell with no row is nothing done again");
   assert.strictEqual(jobPhase(byId("R0001")), 0, "and the colour is never consulted again");
   pass("the switch-on window reads the sheet's colours, an un-tick still wins, and it ends");
@@ -1090,28 +1225,30 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      and the safeguard cannot see it: it compares the FILE with what we
      painted, and those two agree. So the record is compared with PAINTED as
      well, and a disagreement is painted again on the next load. */
-  useJob(mkJob({ win: "process", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 4, total: 10, status: "process" }]);
-  setPainted({ R0001: { win: "process" } });
-  BOOK["Production"].fill[kk(7, 13)] = "#FFFF00";
+  useJob(mkIt("process"));
+  setRecord([{ job: "R0001", item: IT, done: 4, total: 10, status: "process" }]);
+  setPainted(paintedIt("process"));
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFFF00";
   settled(true);
   reset(); FAIL_FILL = 1;
-  setItemProgress(byId("R0001"), "win", 10);                 // gold, if it would land
+  setItemProgress(byId("R0001"), IT, 10);                 // gold, if it would land
   await settle(1400);
   assert.strictEqual(fills().length, 0, "the fill was refused");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Status, "done", "the record says done");
-  assert.strictEqual(paintedOf("R0001", "win"), "process", "the sheet still has yellow");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Status, "done", "the record says done");
+  assert.strictEqual(paintedOf("R0001", IT), "process", "the sheet still has yellow");
   reset();
   assert.strictEqual(await cpAdoptRun(), 0,
     "the safeguard cannot see it: the file and what we painted agree");
   assert.strictEqual(CALLS.filter(c => c.kind === "readFill").length, 0, "so it reads nothing");
-  /* the next load puts it right */
+  /* the next load puts it right - BOTH cells the refused write owed: this
+     item's own, and the derived Windows copy above it that never landed either */
   const painted1 = await cpRepaintRun();
-  assert.strictEqual(painted1, 1, "one cell repainted");
-  assert.strictEqual(fills().length, 1, "through the ordinary fill path");
-  assert.deepStrictEqual([fills()[0].addr, fills()[0].color], ["M7", "#FFE699"],
-    "the job's own cell, the colour the record asks for");
-  assert.strictEqual(paintedOf("R0001", "win"), "done", "and PAINTED catches up, so it stops");
+  assert.strictEqual(painted1, 2, "two cells repainted: the item, and its Windows copy");
+  assert.strictEqual(fills().length, 2, "through the ordinary fill path");
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color).sort(),
+    ["M7 #FFFF00", "T7 #FFE699"],
+    "the job's own cell gold, and M yellow because its sashes are not started");
+  assert.strictEqual(paintedOf("R0001", IT), "done", "and PAINTED catches up, so it stops");
   assert.strictEqual(logWrites().length, 0, "nothing is logged: this is a copy put right, not a change");
   reset();
   assert.strictEqual(await cpRepaintRun(), 0, "a second load has nothing to do");
@@ -1125,27 +1262,27 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      concluded "the file already shows it, remember that and skip" wrote
      PAINTED = "done" and the cell was never a candidate again: Excel white,
      record done, for ever. There is no such shortcut. */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
-  setRecord([{ job: "R0001", item: "win", done: 10, total: 10, status: "done", source: "floor" }]);
-  setPainted({ R0001: { win: "" } });          // the office's white is what really landed
-  byId("R0001").cp.win = "done";               // ... and the 36 s-old download still says gold
-  BOOK["Production"].fill[kk(7, 13)] = "#FFFFFF";
+  useJob(mkIt("", { wnd: 0 }));                // no Windows cell in play: one cell, one question
+  setRecord([{ job: "R0001", item: IT, done: 10, total: 10, status: "done", source: "floor" }]);
+  setPainted(paintedIt(""));                   // the office's white is what really landed
+  setFileCp(byId("R0001"), "done");            // ... and the 36 s-old download still says gold
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFFFFF";
   reset();
   assert.strictEqual(await cpRepaintRun(), 1,
     "the cell is repainted: a stale download agreeing with the record proves nothing");
-  assert.deepStrictEqual([fills()[0].addr, fills()[0].color], ["M7", "#FFE699"]);
-  assert.strictEqual(paintedOf("R0001", "win"), "done",
+  assert.deepStrictEqual([fills()[0].addr, fills()[0].color], [ITADDR, "#FFE699"]);
+  assert.strictEqual(paintedOf("R0001", IT), "done",
     "and PAINTED moves only now, because a fill actually landed");
   pass("the repaint never concludes from the download that the sheet is already right");
 
   /* a workbook that keeps refusing: once per load, never a loop inside one */
-  setPainted({ R0001: { win: "process" } });
+  setPainted(paintedIt("process"));
   reset(); FAIL_FILL = 9;
   const tried = await cpRepaintRun();
   assert.strictEqual(tried, 0, "nothing was painted");
   assert.strictEqual(CALLS.filter(c => c.kind === "fillRefused").length, 1,
     "and it was tried exactly once, not in a loop");
-  assert.strictEqual(paintedOf("R0001", "win"), "process", "PAINTED does not move on a refusal");
+  assert.strictEqual(paintedOf("R0001", IT), "process", "PAINTED does not move on a refusal");
   FAIL_FILL = 0;
   assert.strictEqual(await cpRepaintRun(), 1, "the next load tries again, and this time it lands");
   pass("a persistent refusal is retried once per load and never loops inside one");
@@ -1192,8 +1329,8 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(CALLS.length, 0, "not one request of any kind");
   /* somebody paints a cell in Excel and the download shows it: now it reads,
      once, and not again for thirty seconds */
-  byId("R0001").cp.drs = "";
-  BOOK["Production"].fill[kk(7, 14)] = "#FFFFFF";
+  setFileCp(byId("R0001"), "");                   // somebody cleared the frames cell in Excel
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFFFFF";
   reset();
   assert.strictEqual(await cpAdoptDrawerJob(), 1, "the change is adopted");
   const readsOnce = CALLS.filter(c => c.kind === "readFill").length;
@@ -1210,21 +1347,21 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      record afterwards is a hand-paint, and belongs to the safeguard - with the
      API confirming it and a log line naming it, not swallowed as
      Source = "import", Who = "the sheet", unconfirmed and unlogged. */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   setPainted({});
   settled(true);
   vm.runInThisContext("LASTBY = 'the colleague';");
-  byId("R0001").cp.win = "done";                    // painted gold in Excel, by hand
-  BOOK["Production"].fill[kk(7, 13)] = "#FFE699";
+  setFileCp(byId("R0001"), "done");                 // painted gold in Excel, by hand
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFE699";
   await settle(200);                                // let the last test's log line land first
   reset();
   assert.strictEqual(await cpImportRun(), 0, "the import does not touch it: its work is done");
   assert.strictEqual(await cpAdoptRun(), 1, "the safeguard does");
   await settle(150);
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Source, "excel", "recorded as an Excel change");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Who, "the colleague");
-  assert.strictEqual(cpSrvRow("R0001", "win").fields.Done, 10);
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Source, "excel", "recorded as an Excel change");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Who, "the colleague");
+  assert.strictEqual(cpSrvRow("R0001", IT).fields.Done, 10);
   assert.ok(CALLS.some(c => c.kind === "readFill"), "and confirmed through the Excel API first");
   assert.strictEqual(logWrites().length, 1, "with a log line of its own");
   assert.ok(/adopted from Excel/.test(logWrites()[0].values[0][5]));
@@ -1236,14 +1373,14 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   let consents = 0;
   const realConsent = CW.listConsent;
   CW.listConsent = async () => { consents++; return "t"; };
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   /* a cancelled burst left a row with only a local id and no item on the server */
-  vm.runInThisContext("cpRowNow('R0001', 'win', 4, 10, 'process', 'the admin');");
-  assert.ok(String(cpRow("R0001", "win").id).indexOf("local:") === 0, "the row has no real id");
-  setPainted({ R0001: { win: "process" } });
-  byId("R0001").cp.win = "done";
-  BOOK["Production"].fill[kk(7, 13)] = "#FFE699";
+  vm.runInThisContext("cpRowNow('R0001', '" + IT + "', 4, 10, 'process', 'the admin');");
+  assert.ok(String(cpRow("R0001", IT).id).indexOf("local:") === 0, "the row has no real id");
+  setPainted(paintedIt("process"));
+  setFileCp(byId("R0001"), "done");
+  BOOK["Production"].fill[kk(7, ITCOL)] = "#FFE699";
   settled(true);
   reset();
   const skipped = await cpAdoptRun();
@@ -1252,14 +1389,14 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(listWrites().length, 0, "nothing was written");
   /* the next click fixes it, and a click MAY ask */
   reset();
-  setItemProgress(byId("R0001"), "win", 6);
+  setItemProgress(byId("R0001"), IT, 6);
   await settle(1400);
   assert.ok(listWrites().length >= 1, "the click writes the row properly");
   CW.listConsent = realConsent;
   pass("a background adoption never opens a consent window: it leaves the cell to the next click");
 
   /* ============ 16. A GROUP WRITE THAT FAILS HALF WAY (review finding M7) = */
-  useJob(mkJob({ win: "", drs: "", glass: {}, prod: {} }));
+  useJob(mkIt(""));
   setRecord([]);
   settled(true);
   reset(); FAIL_LIST = 1;                          // the FIRST of the two rows is refused
@@ -1285,6 +1422,257 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
     "and says which is which: " + half);
   assert.strictEqual(fills().length, 0, "and nothing is painted for a half-written group");
   pass("a group write that fails half way says which items took and which did not");
+
+  /* ============ 17. DOORS: THE WRITE (2026-09-14, the doors spec) ==========
+     A door is one thing with three states, so the write carries the WORD, not
+     a count. The only new cell this feature may ever colour is that door's own
+     DOORS DONE cell, and the code text in it is never touched. */
+  const DMAP = { qty: { wnd: 13, drs: 14 }, glass: {}, prod: {}, prodOrder: [],
+                 doors: { 1: 72, 2: 73, 3: 74, 4: 75, 5: 76 } };
+  const doorJob = () => mkJob({ win: "", drs: "", glass: {}, prod: {} },
+    { wnd: 0, glass: {}, prods: [], drs: 2,
+      doors: [{ slot: 1, code: "CD", status: "" }, { slot: 3, code: "SS", status: "" }] });
+  useJob(doorJob(), DMAP);
+  BOOK["Production"].v[kk(7, 72)] = "CD";                 // the code, as the office typed it
+  BOOK["Production"].v[kk(7, 74)] = "SS";
+  setRecord([]);
+  reset();
+  setDoorStatus(byId("R0001"), "door:1", "process");
+  assert.deepStrictEqual(itemState(byId("R0001"), "door:1"), { done: null, total: 1, status: "process" },
+    "the drawer says in fabrication before anything has been written");
+  await settle(1400);
+  const dw = listWrites();
+  assert.strictEqual(dw.length, 1, "exactly one write to the record");
+  assert.deepStrictEqual([dw[0].body.fields.Job, dw[0].body.fields.Item, dw[0].body.fields.Done,
+                          dw[0].body.fields.Total, dw[0].body.fields.Status, dw[0].body.fields.Source],
+    ["R0001", "door:1", 0, 1, "process", "office"], "one row per door, total 1, the word as the status");
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color),
+    ["BT7 #FFFF00", "N7 #FFFF00"],
+    "that door's own cell yellow, and N yellow as the copy of the Doors aggregate");
+  assert.strictEqual(BOOK["Production"].v[kk(7, 72)], "CD", "and the code text is untouched");
+  assert.strictEqual(BOOK["Production"].v[kk(7, 74)], "SS");
+  assert(!CALLS.some(c => c.sheet === "Production" && c.kind === "values"),
+    "not one value is written to the Production sheet, ever");
+  assert.deepStrictEqual(logWrites()[0].values[0].slice(2, 6),
+    ["R0001", "Door 1", "not started", "in fabrication"],
+    "and the log line says it in words, because a door has no count");
+  assert.strictEqual(SEQ[0], "record", "record first, as for every checkpoint: " + JSON.stringify(SEQ));
+  assert.strictEqual(SEQ.filter(x => x === "fill").length, 2, "two fills: the door, and the Doors copy");
+  pass("a door set to In fabrication: one record row, its own cell yellow, the code text untouched");
+
+  reset();
+  setDoorStatus(byId("R0001"), "door:1", "done");
+  await settle(1400);
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color), ["BT7 #FFE699"],
+    "Done paints that cell gold - and N is already yellow, so it is not written again");
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Status, "done");
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Done, 1);
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: null, total: 2, status: "process" },
+    "one of the two doors done: the Doors line is still in fabrication");
+
+  reset();
+  setDoorStatus(byId("R0001"), "door:3", "done");
+  await settle(1400);
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color).sort(),
+    ["BV7 #FFE699", "N7 #FFE699"], "the second door gold, and N follows it to gold");
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: 2, total: 2, status: "done" });
+  pass("every door done takes the Doors cell gold, as a copy of the aggregate and nothing else");
+
+  reset();
+  setDoorStatus(byId("R0001"), "door:1", "");
+  await settle(1400);
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color).sort(),
+    ["BT7 #FFFFFF", "N7 #FFFF00"], "Clear paints white, and N comes back off gold");
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Status, "", "the record says so first");
+  assert.deepStrictEqual(logWrites()[0].values[0].slice(3, 6),
+    ["Door 1", "done", "not started · Doors cell painted yellow"],
+    "one line, saying both what the door did and what the Doors cell above it did");
+  pass("Clear is as boring as Done: the record, then white, then the line");
+
+  reset();
+  setDoorStatus(byId("R0001"), "door:1", "");
+  await settle(900);
+  assert.strictEqual(listWrites().length, 0, "setting a door to what it already says writes nothing");
+  setDoorStatus(byId("R0001"), "door:2", "done");
+  await settle(900);
+  assert.strictEqual(listWrites().length, 0, "and there is no door in slot 2 to set");
+  assert.strictEqual(fills().length, 0);
+  pass("nothing is written for a no-op or for a slot with no door");
+
+  /* ---- the Doors LINE is still the office's own tick (amendment 1) ---- */
+  reset();
+  setItemProgress(byId("R0001"), "drs", 2);           // "All done" on the Doors line itself
+  await settle(1400);
+  assert.strictEqual(listWrites().length, 1, "the Doors line has a record row of its own");
+  assert.strictEqual(listWrites()[0].body.fields.Item, "drs");
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color), ["N7 #FFE699"],
+    "and N is painted gold by that tick, once - the aggregate does not write it a second time");
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: 2, total: 2, status: "done" });
+  /* ... and it STAYS done with a door un-ticked under it: the higher wins */
+  reset();
+  setDoorStatus(byId("R0001"), "door:3", "");
+  await settle(1400);
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: 2, total: 2, status: "done" },
+    "a gold N stays done however little is ticked under it (owner, 2026-09-14)");
+  assert.strictEqual(fills().filter(f => f.addr === "N7").length, 0,
+    "and N is not touched: nothing under the line may take it back");
+  pass("the Doors line is ticked in its own right, and the doors under it never lower it");
+
+  /* a door painted by hand in Excel is adopted, like any other managed cell -
+     the owner's "vice versa" */
+  useJob(doorJob(), DMAP);
+  setRecord([{ job: "R0001", item: "door:1", done: 0, total: 1, status: "" }]);
+  setPainted({ R0001: { "door:1": "" } });
+  settled(true);
+  byId("R0001").doors[0].status = "done";             // the download shows it gold
+  BOOK["Production"].fill[kk(7, 72)] = "#FFE699";     // ... and so does the live API
+  vm.runInThisContext("LASTBY = 'the colleague';");
+  reset();
+  assert.strictEqual(await cpAdoptRun(), 1, "the hand-painted door is adopted");
+  await settle(150);
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Status, "done");
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Source, "excel");
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Who, "the colleague");
+  assert.ok(/Door 1/.test(logWrites()[0].values[0][3]) &&
+            /adopted from Excel/.test(logWrites()[0].values[0][5]),
+    "with a log line naming the door: " + logWrites()[0].values[0].slice(3, 6).join(" | "));
+  assert.strictEqual(fills().length, 0, "nothing is painted: Excel already has the colour");
+  pass("a door coloured in Excel by hand is adopted into the record, with who and what");
+
+  /* N painted gold by hand IS adopted: since amendment 1 the Doors line has a
+     record row of its own, so somebody colouring it in Excel is saying
+     something the dashboard can record - "already golden means it finished" */
+  useJob(doorJob(), DMAP);
+  setRecord([]);
+  setPainted({ R0001: { drs: "" } });
+  settled(true);
+  byId("R0001").cp.drs = "done";                      // N painted gold by hand
+  BOOK["Production"].fill[kk(7, 14)] = "#FFE699";
+  vm.runInThisContext("LASTBY = 'the colleague';");
+  reset();
+  assert.strictEqual(await cpAdoptRun(), 1, "a hand-painted N is adopted like any other cell");
+  await settle(150);
+  assert.strictEqual(cpSrvRow("R0001", "drs").fields.Status, "done");
+  assert.deepStrictEqual(itemState(byId("R0001"), "drs"), { done: 2, total: 2, status: "done" },
+    "so the Doors line reads done, with not one of its doors ticked");
+  assert.strictEqual(fills().length, 0, "and nothing is painted: Excel already has the colour");
+  pass("a gold N painted in Excel is adopted, and the line reads done with nothing under it");
+
+  /* ---- amendment 11: a WHOLE GOLD ROW is not a sheet full of hand-paints --- */
+  useJob(doorJob(), DMAP);
+  setRecord([]);
+  setPainted({});
+  settled(true);
+  global.__gold = Object.assign({}, byId("R0001"), { done: 1 });
+  vm.runInThisContext("ALL = [__gold];");
+  /* the parser forces every checkpoint of a gold row to done, which is what
+     "the job is finished" means - and is not 30 people painting 30 cells */
+  cpItems(byId("R0001")).forEach(x => { if (x.key.indexOf("door:") === 0) byId("R0001").doors.forEach(d => { d.status = "done"; }); });
+  byId("R0001").cp.drs = "done"; byId("R0001").cp.win = "done";
+  reset();
+  assert.strictEqual(await cpAdoptRun(), 0, "not one cell of a gold row is adopted");
+  assert.strictEqual(CALLS.length, 0, "and not one request goes out for it");
+  pass("a whole gold row is never read back as a sheet full of hand-paints");
+
+  /* ====== 18. THE DOORS' OWN IMPORT (amendment 2, 2026-09-14) =============
+     The doors arrived three days after the one-time import had drained in
+     every browser, so `cw_cpimported` is already set and the general pass will
+     never look at a door cell again. Without a pass of its own, every coded
+     door cell already carrying a colour would be met by the SAFEGUARD and
+     recorded as somebody's hand-paint under whoever last saved the file. */
+  const impDoorJob = () => mkJob({ win: "", drs: "", glass: {}, prod: {} },
+    { wnd: 0, glass: {}, prods: [], drs: 4,
+      doors: [{ slot: 1, code: "CD", status: "done" }, { slot: 2, code: "CD", status: "done" },
+              { slot: 3, code: "SS", status: "process" }, { slot: 4, code: "DD", status: "" }] });
+  useJob(impDoorJob(), DMAP);
+  setRecord([]);                                   // the general marker is set, as it is in the wild
+  doorsSettled(false);
+  const genMarker = localStorage.getItem("cw_cpimported");
+  reset();
+  assert.strictEqual(await cpImportRun(), 0,
+    "the general import drained on 11 September and never runs again");
+  assert.strictEqual(await cpAdoptRun(), 0,
+    "and the safeguard keeps its hands off the door cells while their own import is owed");
+  assert.strictEqual(CALLS.length, 0, "not one request of any kind goes out for them");
+  const imprt = await cpDoorImportRun();
+  await settle(150);
+  assert.strictEqual(imprt, 3, "the three coloured door cells are imported; the blank one is not");
+  const dRows = listWrites();
+  assert.ok(dRows.every(w => w.method === "POST"), "every row is created, none patched");
+  assert.ok(dRows.every(w => w.body.fields.Source === "import" && w.body.fields.Who === "the sheet"),
+    "every one says it came from the sheet, not from a person");
+  assert.deepStrictEqual(dRows.map(w => w.body.fields.Item).sort(), ["door:1", "door:2", "door:3"]);
+  assert.strictEqual(cpSrvRow("R0001", "door:1").fields.Done, 1, "a gold door imports as done");
+  assert.strictEqual(cpSrvRow("R0001", "door:3").fields.Status, "process",
+    "and a yellow one as in fabrication");
+  assert.strictEqual(cpSrvRow("R0001", "door:4"), null, "a blank cell gets no row, as ever");
+  assert.strictEqual(fills().length, 0, "the import paints nothing: the colours are already there");
+  assert.ok(/Imported 3 doors from the sheet's colours/.test(logWrites()[0].values[0][5]),
+    "one summary line, in plain words: " + logWrites()[0].values[0][5]);
+  assert.ok(!logWrites().some(l => /adopted from Excel/.test(l.values[0][5])),
+    "and NOT one line calling it somebody's hand-paint");
+  assert.strictEqual(paintedOf("R0001", "door:1"), "done",
+    "the colour it imported is remembered as the one in the cell");
+  assert.ok(!!localStorage.getItem("cw_cpimported_doors"), "the doors' own marker is set");
+  assert.strictEqual(localStorage.getItem("cw_cpimported"), genMarker,
+    "and the general marker was never touched");
+  assert.strictEqual(cpImportPending(), false,
+    "nor was the colour fallback reopened for anything else");
+  reset();
+  assert.strictEqual(await cpDoorImportRun(), 0, "a second load imports nothing");
+  assert.strictEqual(listWrites().length, 0, "and writes nothing at all");
+  pass("the doors get one import of their own, behind their own marker, as the sheet");
+
+  /* a browser still working through the GENERAL import has the doors in that
+     pass already: the two must not both POST a row for the same cell */
+  useJob(impDoorJob(), DMAP);
+  setRecord([]);
+  settled(false); doorsSettled(false);
+  reset();
+  assert.strictEqual(await cpDoorImportRun(), 0,
+    "the doors pass stands aside while the general one is still running");
+  assert.strictEqual(listWrites().length, 0);
+  assert.ok(cpImportPlan(ALL, cpStored, 60).some(p => p.item.indexOf("door:") === 0),
+    "because the general pass covers the doors itself");
+  await cpImportRun();
+  await settle(150);
+  assert.ok(!!localStorage.getItem("cw_cpimported_doors"),
+    "and settling the general one settles the doors with it");
+  pass("the two imports never both create a row for one cell");
+  settled(true); doorsSettled(true);
+
+  /* ====== 19. THE AGGREGATE NEVER PAINTS WHITE (amendment 1) ==============
+     The reviewer's reproduction: a gold M cell, PAINTED "done", nothing ticked
+     under it - and cpRepaintPlan planted #FFFFFF into it, because the line had
+     no record of its own and its aggregate said nothing. The owner: "already
+     golden means it finished even if all the cell or component has no ticked.
+     u should not change anything in the excel sheet." */
+  useJob(mkIt("", { wnd: 9, drs: 0, glass: {} }));
+  setRecord([]);                                   // no record row for Windows at all
+  setPainted({ R0001: { win: "done" } });          // and the cell is gold
+  reset();
+  assert.strictEqual(await cpRepaintRun(), 0, "the gold M cell is left exactly as it is");
+  assert.strictEqual(fills().length, 0, "not one fill");
+  assert.deepStrictEqual(cpAggregatePlan("R0001").map(c => c.item), [],
+    "and the aggregate plans nothing for it either: it only ever paints upwards");
+  /* the office's OWN clear of that line is the one thing that whitens it */
+  setRecord([{ job: "R0001", item: "win", done: 0, total: 9, status: "" }]);
+  reset();
+  assert.strictEqual(await cpRepaintRun(), 1, "the office's own Clear is repaired like any other");
+  assert.deepStrictEqual([fills()[0].addr, fills()[0].color], ["M7", "#FFFFFF"]);
+  pass("a gold M with nothing ticked under it is never whitened; the office's own Clear still is");
+
+  /* clearing the LAST door leaves N exactly as the office left it */
+  useJob(doorJob(), DMAP);
+  setRecord([{ job: "R0001", item: "door:1", done: 1, total: 1, status: "done" }]);
+  setPainted({ R0001: { "door:1": "done", drs: "done" } });
+  reset();
+  setDoorStatus(byId("R0001"), "door:1", "");
+  await settle(1400);
+  assert.deepStrictEqual(fills().map(f => f.addr + " " + f.color), ["BT7 #FFFFFF"],
+    "the door's own cell goes white; N is not written at all");
+  assert.strictEqual(paintedOf("R0001", "drs"), "done", "so N is still gold as far as we know");
+  pass("clearing the last door leaves the Doors cell as it was");
 
   console.log("\n" + n + " checks passed");
   process.exit(0);                 // the 45 s reconcile timer would hold the process open

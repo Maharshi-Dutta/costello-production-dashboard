@@ -251,10 +251,46 @@
   .cpbtn:disabled, .cpin:disabled, .cpall:disabled { opacity:.45; cursor:default }
   .cpwho { grid-column:1/-1; font-size:11px; color:var(--ink-4); margin-top:-1px }
   .badge.cpbadge { background:var(--surface-2); color:var(--ink-3) }
+  /* Windows and Doors: one fold each, headed by the derived line. A plain
+     <details>, so it opens with the keyboard and when the card is printed. */
+  .cpfold { border:1px solid var(--line-soft); border-radius:5px; overflow:hidden }
+  /* a plain heading and a count: the Windows and Doors lines themselves sit
+     above their folds, because a click anywhere in a <summary> toggles it */
+  .cpfoldhead { display:grid; grid-template-columns:1fr auto 12px; gap:10px;
+                align-items:center; padding:8px 10px; background:var(--surface-2);
+                cursor:pointer; list-style:none }
+  .cpfoldhead::-webkit-details-marker { display:none }
+  .cpfoldhead .cplab { font-weight:600; font-size:12.5px }
+  .cpfoldhead::after { content:"\25be"; color:var(--ink-4); font-size:11px; transition:transform .15s ease }
+  .cpfold[open] > .cpfoldhead::after { transform:rotate(180deg) }
+  .cpfold[open] > .cpfoldhead { border-bottom:1px solid var(--line-soft) }
+  .cpfoldn { font-size:11px; color:var(--ink-4); white-space:nowrap; text-align:right }
+  /* "quantity says 3 · 2 doors listed": a sentence, on its own line, in the
+     urgent ink. It stops nothing and changes no colour in the sheet. */
+  .cpwarn { grid-column:1/-1; font-size:11px; color:var(--urgent); margin-top:-1px }
+  .cpfoldbody { display:flex; flex-direction:column; gap:8px; padding:8px 10px }
+  /* one door: its code, the word it stands at, and the three buttons that set
+     it. No stepper - "in fabrication" is not a fraction of one door. */
+  .cpdoor { display:grid; grid-template-columns:minmax(64px,auto) minmax(84px,1fr) auto; gap:10px;
+            align-items:center; padding:6px 0; border-bottom:1px solid var(--line-soft) }
+  .cpdoor:last-child { border-bottom:0 }
+  .cpcode { font-weight:600; letter-spacing:.02em }
+  .cpdw { font-size:12px; color:var(--ink-3) }
+  .cpdoorb { min-height:40px; min-width:40px; padding:0 10px; border:1px solid var(--line);
+             border-radius:5px; background:var(--surface); color:var(--ink-2); font-size:12px;
+             white-space:nowrap }
+  .cpdoorb:hover:not(:disabled) { background:var(--surface-2); color:var(--ink) }
+  .cpdoorb:disabled { opacity:.45; cursor:default }
+  .cpdoorb.on { background:var(--fab-bg); border-color:var(--fab); color:var(--fab); font-weight:600 }
+  .cpdoorb.on[data-act="done"] { background:var(--done-bg); border-color:var(--done); color:var(--done) }
+  .cpdoorb.on[data-act=""] { background:var(--surface-2); border-color:var(--line); color:var(--ink-2) }
   @media (max-width:560px){
     .cpline { grid-template-columns:1fr auto }
     .cpbar, .cpctl { grid-column:1/-1 }
     .cpctl { justify-content:flex-start }
+    .cpfoldhead { grid-template-columns:1fr auto 12px }
+    .cpdoor { grid-template-columns:1fr auto }
+    .cpdoor .cpctl { grid-column:1/-1; justify-content:flex-start }
   }
   /* the Glass station board, in the job list's place. Read-only here: one card
      per job, the three counters the floor taps, and who last moved each. */
@@ -649,7 +685,7 @@
       <span class="kick">Glass</span><span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260911-1642</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260914-1141</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -666,11 +702,11 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260911-1642"></script>
-<script src="graph.js?v=20260911-1642"></script>
-<script src="checkpoints.js?v=20260911-1642"></script>
-<script src="station-core.js?v=20260911-1642"></script>
-<script src="export.js?v=20260911-1642"></script>
-<script src="app.js?v=20260911-1642"></script>
+<script src="parser.js?v=20260914-1141"></script>
+<script src="graph.js?v=20260914-1141"></script>
+<script src="checkpoints.js?v=20260914-1141"></script>
+<script src="station-core.js?v=20260914-1141"></script>
+<script src="export.js?v=20260914-1141"></script>
+<script src="app.js?v=20260914-1141"></script>
 </body>
 </html>

@@ -17,6 +17,30 @@ const LABEL = {
 const DATES = { 'sold': 'sold', 'stamp': 'stamp', 'ivana': 'ivana', 'ready to print': 'ready', 'sent to floor': 'floor' };
 const IDENT = { 'comment': 'cm', 'office no': 'off', 'customer': 'cust', 'phone no': 'phone', 'area': 'area', 'eircode': 'eir', 'windows colour': 'colour' };
 const GLASSC = ['dg', 'tg', 'tuff', 'not tuff', 'arch', 'astragal', 'fancy', 'extra'];
+/* DOORS DONE (BT-BX on the sheet as it stands): five cells per job, one door
+   each, sub-headed 1..5. Read since 2026-09-14 - see
+   docs/specs/2026-09-11-doors-and-window-types.md. */
+const DOOR_SLOTS = 5;
+/** A door cell's own text as that door's type code: trimmed, single-spaced and
+    upper-cased. ANY non-empty text is a door. The live sheet carries CD, DD,
+    SS, SD, PVC, DOOR, ACSS, ACSD, SFCD and "1 DOOR" across 160 jobs, and will
+    carry more, so there is deliberately no list of known codes here to fall
+    behind what the office types. Whitespace alone is not a door.
+
+    Two things are not doors, however (amendment 9, 2026-09-14): a cell whose
+    WHOLE text is a number, and one whose whole text is a date. Those are a
+    quantity or a fitting date somebody put in the wrong column, and reading
+    either as a door type would put a number on the job card and, worse, make
+    the dashboard start painting that cell. "1 DOOR" is still a door: it is
+    not a bare number. */
+const DOOR_NUM_RE = /^[-+]?\d*\.?\d+$/;
+const DOOR_DATE_RE = /^\d{1,4}[/.-]\d{1,2}([/.-]\d{1,4})?$/;
+function doorCode(txt) {
+  const s = String(txt == null ? '' : txt).trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!s) return '';
+  if (DOOR_NUM_RE.test(s) || DOOR_DATE_RE.test(s)) return '';
+  return s.slice(0, 24);
+}
 
 /* Excel's default theme palette, indexed as fills reference it.
    accent4 (index 7) at tint .6 is #FFE699 -- the "process done" gold. */
@@ -207,8 +231,9 @@ function headerRows(ws) {
 
 function mapSheet(ws) {
   const [g, s] = headerRows(ws);
-  const m = { hdr: [g, s], ident: {}, dates: {}, qty: {}, prod: {}, prodOrder: [], glass: {}, notes: {} };
+  const m = { hdr: [g, s], ident: {}, dates: {}, qty: {}, prod: {}, prodOrder: [], glass: {}, doors: {}, notes: {} };
   let group = null;
+  const doorCols = [];
   const maxC = ws.columnCount || 150;
   for (let c = 1; c <= maxC; c++) {
     const lab = norm(cellText(ws.getRow(g).getCell(c)));
@@ -221,6 +246,17 @@ function mapSheet(ws) {
       else if (sub === 'drs') m.qty.drs = c;
     }
     if (group && group.indexOf('glass unit') >= 0 && GLASSC.indexOf(sub) >= 0) m.glass[sub] = c;
+    /* DOORS DONE is kept OUT of the product groups below - it has no F/S/T -
+       but it is mapped here on its own, because since 2026-09-14 each of its
+       five cells is a door the office ticks off in its own right. */
+    if (group && group.indexOf('doors done') >= 0) {
+      /* bounded at five, and `group` changes at the next LABELLED column, so
+         the fallback below can never reach past the DOORS DONE group into
+         whatever sits beside it (amendment 5, 2026-09-14) */
+      if (doorCols.length < DOOR_SLOTS) doorCols.push(c);
+      const n = parseInt(sub, 10);
+      if (n >= 1 && n <= DOOR_SLOTS && m.doors[n] === undefined) m.doors[n] = c;
+    }
     if (lab.indexOf('brendan') >= 0) m.notes.brendan = c;
     if (lab.indexOf('notes of specials') >= 0) m.notes.specials = c;
     const skip = ['doors done', 'windows fabricated', 'doors fabricated', 'dates'];
@@ -230,6 +266,11 @@ function mapSheet(ws) {
       m.prod[group][sub] = c;
     }
   }
+  /* a workbook whose DOORS DONE sub-headers are not the numbers 1..5: take the
+     group's own columns in order instead, capped at five. Bounded to that one
+     group, so it can never reach into the columns beside it. */
+  if (!Object.keys(m.doors).length)
+    doorCols.slice(0, DOOR_SLOTS).forEach((c, i) => { m.doors[i + 1] = c; });
   return m;
 }
 
@@ -439,6 +480,7 @@ function parseWorkbook(wb) {
 
       let j = jobs[jid];
       if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, glass: {}, status: {}, notes: [],
+                                  doors: {},
                                   cp: { win: '', drs: '', glass: {}, prod: {} } }; }
       j.src[LABEL[name]] = r;
       if (rowDone) j.done = 1;
@@ -469,6 +511,22 @@ function parseWorkbook(wb) {
         const c = row.getCell(m.glass[k]), v = num(c);
         if (v) j.glass[k] = Math.max(j.glass[k] || 0, v);
         if (cpHere) cpBump(j.cp.glass, k, cpOf(fillOf(c)));
+      }
+
+      /* the job's doors: one per DOORS DONE cell, its text the type code and
+         its fill the status. From the Production sheet alone, like every other
+         checkpoint colour - Production (2) is repainted by hand and would make
+         an un-tick snap back. The code itself is never written by anything. */
+      if (cpHere) {
+        for (const slot in m.doors) {
+          const cell = row.getCell(m.doors[slot]);
+          const code = doorCode(cellText(cell));
+          if (!code) continue;
+          const n = Number(slot), st = cpOf(fillOf(cell));
+          const had = j.doors[n];
+          if (!had) j.doors[n] = { slot: n, code: code, status: st };
+          else if (CPRANK[st] > CPRANK[had.status || '']) had.status = st;
+        }
       }
 
       for (const pname of m.prodOrder) {
@@ -515,7 +573,9 @@ function parseWorkbook(wb) {
         const o = j.cp.prod[p.n] = j.cp.prod[p.n] || {};
         ['f', 's', 't'].forEach(s => { if (p[s]) o[s] = 'done'; });
       });
+      Object.keys(j.doors).forEach(k => { j.doors[k].status = 'done'; });
     }
+    const doors = Object.keys(j.doors).map(Number).sort((a, b) => a - b).map(k => j.doors[k]);
     return {
       id, cust: j.cust || '', area: j.area || '', eir: j.eir || '', off: j.off || '',
       colour: j.colour || '', ph3: ph.length >= 3 ? ph.slice(-3) : '',
@@ -531,6 +591,11 @@ function parseWorkbook(wb) {
       wnd: j.wnd || 0, drs: j.drs || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
       prods: prods, cp: j.cp,
+      /* one entry per DOORS DONE cell that has text in it: { slot, code,
+         status }. The status is the cell's fill, read the same way every other
+         checkpoint colour is - and, like them, it is NOT status: it is the
+         parsed copy, reached only through cpFileStatus(). */
+      doors: doors,
       glass: j.glass, notes: j.notes, sheets: j.sheets, src: j.src,
       /* the word in a comment, or the sheet's own red text: either says urgent */
       urg: (URG_RE.test(cmtxt) || j.flag === 'urgent') ? 1 : 0, done: j.done || 0,
@@ -544,8 +609,9 @@ function parseWorkbook(wb) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { parseWorkbook, parseJohnSheet, mapSheet, fillOf, fontOf, flagOf, blackInk, JOB_RE, URG_RE, blocksFromValues, templateForJob, cutColours };
+if (typeof module !== 'undefined') module.exports = { parseWorkbook, parseJohnSheet, mapSheet, fillOf, fontOf, flagOf, blackInk, JOB_RE, URG_RE, blocksFromValues, templateForJob, cutColours, doorCode, DOOR_SLOTS };
 if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet;
+  window.doorCode = doorCode; window.DOOR_SLOTS = DOOR_SLOTS;
   window.fontOf = fontOf; window.flagOf = flagOf; window.blackInk = blackInk;
   window.parseJohnSheet = parseJohnSheet;
   window.blocksFromValues = blocksFromValues; window.templateForJob = templateForJob;

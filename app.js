@@ -378,6 +378,13 @@ function diffJobs(prev, next, who, at) {
        adopted by the safeguard, which logs it under the same name - so
        dropMine folds the two into one line. */
     cpItems(n).forEach(x => {
+      /* NOT Windows or Doors (amendment 3, 2026-09-14). Since the doors, those
+         two cells are painted from what is under them as well as from their
+         own row, so a tick on one window type moves M as well - and Changes
+         would report the tick AND the M cell as two separate things somebody
+         had done. The tick's own log line says what happened to M; a copy of a
+         copy is never news of its own. */
+      if (cpDerived(x.key)) return;
       const was = cpFileStatus(p, x.key), is = cpFileStatus(n, x.key);
       if (was !== is) add(n.id, cpLabel(x.key), CPWORD[was], CPWORD[is]);
     });
@@ -604,6 +611,35 @@ let CP_IMPORTED = "";
 try { CP_IMPORTED = localStorage.getItem(CP_IMPORTED_KEY) || ""; } catch (e) {}
 const cpImportSettled = () => !!CP_IMPORTED;
 
+/* ---- and a second marker, for the doors alone (amendment 2, 2026-09-14) ----
+   The doors arrived three days after the one-time import had drained in every
+   browser that matters, so `cw_cpimported` is already set and the general
+   import will never look at a door cell again. Without a marker of its own,
+   every coded door cell already carrying a colour - 28 yellow and 18 gold on
+   the live sheet the day this was built, several of them gold through a theme
+   accent tint rather than a literal FFE699 - would be met by the SAFEGUARD
+   instead, adopted one at a time as somebody's hand-paint and recorded under
+   whoever last saved the workbook.
+
+   So the doors get one pass of their own: same planner, same cap, same
+   `Source = "import"` and `Who = "the sheet"`, behind `cw_cpimported_doors`.
+   It does NOT clear `cw_cpimported` and it does NOT reopen the colour
+   fallback - an item with no row still means nothing done for everything
+   else, exactly as it has since the switch-over. */
+const CP_DOORS_IMPORTED_KEY = "cw_cpimported_doors";
+let CP_DOORS_IMPORTED = "";
+try { CP_DOORS_IMPORTED = localStorage.getItem(CP_DOORS_IMPORTED_KEY) || ""; } catch (e) {}
+const cpDoorsImportSettled = () => !!CP_DOORS_IMPORTED;
+function cpDoorsImportDone() {
+  if (CP_DOORS_IMPORTED) return;
+  CP_DOORS_IMPORTED = new Date().toISOString();
+  try { localStorage.setItem(CP_DOORS_IMPORTED_KEY, CP_DOORS_IMPORTED); } catch (e) {}
+}
+/** Which import owns a cell that has no record row yet - and therefore which
+    one the safeguard must keep its hands off until it has drained. */
+const cpImportOwns = key => String(key).indexOf("door:") === 0
+  ? !cpDoorsImportSettled() : !cpImportSettled();
+
 let CP_ITEMS = null;          // the list, as last read - null until the first read answers
 let CP_LIST_OK = null;        // null: not looked yet - false: missing, refused or unreachable - true: read it
 let CP_LIST_WHY = "";         // which of those, in words, for the drawer
@@ -627,6 +663,11 @@ function cpImportCheck() {
   if (!CP_IMPORTED && CP_LIST_OK === true && !cpImportPlan(ALL, cpStored, 1).length) {
     CP_IMPORTED = new Date().toISOString();
     try { localStorage.setItem(CP_IMPORTED_KEY, CP_IMPORTED); } catch (e) {}
+    /* the general pass covers the door items too, so a browser that has just
+       drained it has nothing left for the doors-only pass to do. Marking both
+       here is what stops the two of them creating a row each for the same
+       cell on a browser opening for the first time. */
+    cpDoorsImportDone();
   }
   /* an unreadable list falls back the same way: the sheet's colours are a
      better answer than a screen saying nothing has been ticked */
@@ -874,14 +915,22 @@ function cpAdoptCandidates(jobs) {
     if (!j || !j.id) return;
     const row = j.src && j.src.Production;
     if (!row) return;                                   // not on the Production sheet: no cell to read
+    /* A GOLD ROW SAYS NOTHING ABOUT ITS CELLS (amendment 11, 2026-09-14). The
+       parser forces every checkpoint of a whole-gold row to "done" - that is
+       what "the job is finished" means - so every one of its cells would look
+       like a hand-paint and be adopted, on a row nobody has touched and which
+       the drawer is read-only on anyway. `cpRepaintPlan` already skipped gold
+       rows for the same reason. */
+    if (j.done) return;
     cpItems(j).forEach(it => {
       const rec = cpRow(j.id, it.key);
-      /* No record at all. Until the one-time import has drained, that cell is
-         the import's - it is a colour that was there before the switch-over.
-         Afterwards it is a colour that has APPEARED on a cell nothing had
-         recorded, which is a hand-paint like any other and belongs here, with
-         the API confirming it and a log line of its own (review finding M5). */
-      if (!rec && !cpImportSettled()) return;
+      /* No record at all. Until the import that OWNS this cell has drained,
+         the cell is that import's - it is a colour that was there before the
+         switch-over (or, for a door, before the doors shipped). Afterwards it
+         is a colour that has APPEARED on a cell nothing had recorded, which is
+         a hand-paint like any other and belongs here, with the API confirming
+         it and a log line of its own (review finding M5, amendment 2). */
+      if (!rec && cpImportOwns(it.key)) return;
       if (!cpColumn(it.key, PRODMAP)) return;           // no column on the sheet
       const file = cpFileStatus(j, it.key);
       if (file === "cut") return;                       // a colour checkpoints do not own
@@ -1022,13 +1071,27 @@ function cpRepaintPlan(jobs, cap) {
     const items = cpItems(j);
     for (let k = 0; k < items.length; k++) {
       const it = items[k];
+      /* what the cell OUGHT to say: the record row, and for Windows and Doors
+         the HIGHER of that row and the aggregate of the items below them
+         (amendment 1). Both halves are the record's own answer; neither is
+         read out of the file. */
+      const der = cpDerived(it.key);
       const rec = cpRow(j.id, it.key);
-      if (!rec) continue;
+      const want = der ? ((itemState(j, it.key) || {}).status || "") : (rec ? rec.status : "");
+      if (!der && !rec) continue;
+      /* THE AGGREGATE NEVER PAINTS WHITE (amendment 1; owner 2026-09-14: "u
+         should not change anything in the excel sheet"). A derived line with
+         no record of its own is only ever taken UP, to yellow or to gold, by
+         what is under it - never back to white. White on M or N is the
+         office's own Clear on that line, which leaves a record row saying so,
+         and that is the only case this repairs. */
+      if (der && !rec && !want) continue;
       if (cpFileStatus(j, it.key) === "cut") continue;      // not this feature's colour to paint over
       if (cpPending(j.id + "|" + it.key)) continue;         // its own write is still in the air
+      if (der && cpChildren(j, it.key).some(x => cpPending(j.id + "|" + x.key))) continue;
       const col = cpColumn(it.key, PRODMAP);
       if (!col) continue;
-      if (paintedOf(j.id, it.key) === rec.status) continue; // the sheet has it
+      if (paintedOf(j.id, it.key) === want) continue;       // the sheet has it
       /* THERE USED TO BE A SECOND SHORTCUT HERE, and it was B3's own failure
          class coming back through another door (review finding F1). It said:
          if the DOWNLOAD already shows what the record says, the sheet must be
@@ -1044,7 +1107,7 @@ function cpRepaintPlan(jobs, cap) {
          So the file is not consulted at all. A fill that turns out to have
          been unnecessary is one idempotent write, and it only happens when the
          record and what this dashboard painted already disagree. */
-      out.push({ job: j.id, item: it.key, col: col, want: rec.status });
+      out.push({ job: j.id, item: it.key, col: col, want: want });
       if (cap && out.length >= cap) return out;
     }
   }
@@ -1084,6 +1147,68 @@ async function cpRepaintRun() {
     if (n) scheduleReconcile();
     return n;
   } finally { cpRepainting = false; }
+}
+
+/* ---- the Windows and Doors cells, painted from their aggregate -------------
+   Added 2026-09-14 with the doors (docs/specs/2026-09-11-doors-and-window-types.md).
+   M and N have no record row of their own any more: they say what the items
+   below them say. `cpRepaintRun` already puts any managed cell right once a
+   load, derived ones included - this is the same write done AT THE CLICK, so
+   the office does not watch a job go gold in the drawer and stay white in
+   Excel for a minute.
+
+   It paints nothing at all unless the aggregate differs from what this browser
+   last painted there, so ticking a fifth window type on a job that was already
+   part-way through sends no request. Failures are swallowed: the record is
+   already written, the cell is a copy, and `cpRepaintRun` will try again. */
+const CP_AGG_NAME = { win: "Windows", drs: "Doors" };
+function cpAggregatePlan(job, exclude) {
+  const cells = [];
+  const j = byId(job);
+  if (!cpWritable() || !PRODMAP || !j || j.done) return cells;
+  ["win", "drs"].forEach(item => {
+    if (item === exclude) return;                     // its own write is painting that cell
+    if (!(cpTotal(j, item) > 0)) return;              // quantity 0: the cell stays unpainted
+    const col = cpColumn(item, PRODMAP);
+    if (!col) return;
+    if (cpFileStatus(j, item) === "cut") return;      // a colour this feature does not own
+    const want = (itemState(j, item) || {}).status || "";
+    /* UPWARDS ONLY. A tick under the line may take M or N to yellow or gold;
+       nothing under the line may take one back to white. Clearing the last
+       door therefore leaves N exactly as the office left it. */
+    if (!want) return;
+    if (paintedOf(j.id, item) === want) return;
+    cells.push({ item: item, col: col, want: want });
+  });
+  return cells;
+}
+/** What the child's own log line says about the cell above it: "Doors cell
+    painted gold" (amendment 3 - one line for one change, never two). */
+const cpAggregateWords = cells => cells.map(c =>
+  CP_AGG_NAME[c.item] + " cell painted " + (c.want === "done" ? "gold" : "yellow")).join(" · ");
+
+async function cpAggregatePaint(job, exclude) {
+  const j = byId(job);
+  const cells = cpAggregatePlan(job, exclude);
+  if (!cells.length) return 0;
+  try {
+    await cpChain(j.id, async () => {
+      const row = await CW.rowForJob(CP_PROD_SHEET, j.id);
+      const f = await CW.findFile();
+      const S = f.base + "/worksheets('" + CP_PROD_SHEET + "')";
+      await CW.batchWrite(cells.map(c => ({
+        method: "PATCH",
+        url: S + "/range(address='" + CW.A1(c.col) + row + "')/format/fill",
+        body: { color: CP_WORD_HEX[c.want] }
+      })));
+    });
+    cells.forEach(c => cpPainted(j.id, c.item, c.want));
+    return cells.length;
+  } catch (e) {
+    console.warn("[checkpoints] could not paint " + j.id + "'s Windows/Doors cell: " +
+                 ((e && e.message) || e) + " - cpRepaintRun will try again");
+    return 0;
+  }
 }
 
 /* ---- the one-time import ---------------------------------------------------
@@ -1144,6 +1269,59 @@ async function cpImportRun() {
     if (owed) cpImportAgain();
   }
 }
+
+/* ---- the doors' own one-time import (amendment 2, 2026-09-14) --------------
+   The same pass as above, narrowed to `door:` items and behind its own marker,
+   because the general one had already drained in every browser three days
+   before the doors existed. It runs ONLY in that case - a browser that is
+   still working through the general import has the doors in it already, and
+   letting both run would POST a row each for the same cell.
+
+   It does not touch `cw_cpimported` and it does not reopen the colour
+   fallback: for every other kind of item an unrecorded cell still means
+   nothing done. Until it drains, `cpImportOwns` keeps the safeguard off the
+   door cells, so a door that has carried a colour since before this shipped is
+   recorded as `Source = "import"`, `Who = "the sheet"` - not as somebody's
+   hand-paint under whoever last saved the workbook. */
+let cpDoorImporting = false, cpDoorImportAgainT = null;
+function cpDoorImportAgain() {
+  if (cpDoorImportAgainT) return;
+  cpDoorImportAgainT = setTimeout(() => { cpDoorImportAgainT = null; cpDoorImportRun().catch(() => {}); }, STATION_AGAIN_MS);
+}
+async function cpDoorImportRun() {
+  if (!cpWritable()) return 0;
+  if (!cpImportSettled()) return 0;             // the general pass covers the doors
+  if (cpDoorsImportSettled()) return 0;         // there is nothing left, ever
+  if (cpDoorImporting) { cpDoorImportAgain(); return 0; }
+  const plan = cpImportPlan(ALL, cpStored, CP_IMPORT_MAX, "door");
+  if (!plan.length) { cpDoorsImportDone(); return 0; }
+  cpDoorImporting = true;
+  let owed = true;
+  const when = cpStampNow();
+  try {
+    const work = plan.map(p => () => cpSaveRow({ job: p.job, item: p.item, done: p.done, total: p.total,
+                                                 status: p.status, who: "the sheet", when: when,
+                                                 source: "import", add: true })
+      .then(() => { paintedSet(p.job, p.item, p.status); }));
+    const r = await cpSend(work);
+    if (r.sent) {
+      noteChange(plan[0].job, "Doors imported", "", "Imported " + r.sent + " door" +
+        (r.sent === 1 ? "" : "s") + " from the sheet's colours");
+      cpRedraw();
+    }
+    if (r.failed) console.warn("[checkpoints] " + r.failed + " door import write" +
+      (r.failed > 1 ? "s" : "") + " refused: " + r.err);
+    owed = !!(r.failed || plan.length >= CP_IMPORT_MAX);
+    return r.sent;
+  } finally {
+    cpDoorImporting = false;
+    /* proved empty, not merely "short of the cap": the marker is written once
+       and never looked at again, so it had better be true */
+    if (!owed && !cpImportPlan(ALL, cpStored, 1, "door").length) cpDoorsImportDone();
+    else if (owed) cpDoorImportAgain();
+  }
+}
+
 /** The feeder's lane runner, on this list's own writes: a few at a time, in
     order, every failure counted and the first message kept. */
 async function cpSend(work) {
@@ -2062,6 +2240,9 @@ async function load(reason, force) {
        must run BEFORE the feeder, because OfficeDone and the floor's seed are
        derived from the record and the import is what puts it there. */
     cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
+      /* before the safeguard, always: an unrecorded door cell is the doors
+         import's until it has drained, not a hand-paint (amendment 2) */
+      .then(() => cpDoorImportRun(), () => {})
       .then(() => cpAdoptRun(), () => {})
       .then(() => cpRepaintRun(), () => {})
       .then(() => feedStation(), () => {})
@@ -2219,6 +2400,39 @@ function setItemProgress(j, item, newDone) {
     cpFlushItem);
 }
 
+/** Set one door of one job to a word: "" (not started), "process" (in
+    fabrication) or "done". Doors are the one checkpoint a count cannot
+    describe - one door, three states - so the word goes down the same write
+    path with `status` given explicitly, and the cell it paints is that door's
+    own DOORS DONE cell and nothing else. The code text is never touched.
+
+    Owner's decision, 2026-09-11, recorded in the brief and in CLAUDE.md rule 1:
+    "when updated from dashboad it should update the cell with correct color as
+    well. and vice versa" / "Door doesnt have 3 process so yellow fabrication
+    adn doen Golden should be ok". */
+function setDoorStatus(j, item, status) {
+  if (!j || j.done) return;
+  if (!cpWritable()) { cpRefuse(); return; }
+  const want = CPWORD[status] == null ? null : status;
+  if (want == null) return;                        // not a word this feature knows
+  const s = itemState(j, item);
+  if (!s) return;                                  // no door in that slot
+  if (s.status === want) return;                   // already what it says
+  const col = cpColumn(item, PRODMAP);
+  if (!col) { toast(cpLabel(item) + " is not a column on the Production sheet.", true); return; }
+  const prev = cpSnap(j.id, item);
+  cpRowNow(j.id, item, want === "done" ? 1 : 0, 1, want, whoAmI());
+  cpRefresh(j.id);
+  /* the same burst the counted items use, so two quick taps on one door are
+     one write, a tap survives the tab closing, and the job's writes stay in
+     order. `was` is the word this burst started from, for the log line. */
+  cpBurst(j.id + "|" + item,
+    { job: j.id, item: item, col: col, who: whoAmI(), prev: prev,
+      from: null, to: want === "done" ? 1 : 0, total: 1,
+      status: want, was: s.status },
+    cpFlushItem);
+}
+
 /* glassVoidPaint() lived here for one day, 2026-09-11. It discarded the
    colour writer's un-landed paint of a cell the office had just acted on. The
    writer has no un-landed paint any more - it writes the record, and the
@@ -2241,13 +2455,30 @@ async function cpFlushItem(b) {
       toast(cpLabel(b.item) + " is not a column on the Production sheet - that tick was not saved.", true);
       return;
     }
+    /* a door says its state in a word rather than a count, so it hands the
+       word down and gives the log its own words too: "not started" to "in
+       fabrication", never "0 of 1" to "1 of 1" */
+    const door = b.status != null;
+    /* What the Windows or Doors cell above this item is about to be painted,
+       worked out BEFORE the write because the record already moved at the
+       click. It goes in this line's own words rather than in a second log
+       line: one change, one line (amendment 3). */
+    const agg = cpAggregateWords(cpAggregatePlan(b.job, b.item));
     await cpWriteItem({ job: b.job, item: b.item, col: col, done: b.to, total: total,
                         from: b.from, who: b.who || whoAmI(),
+                        status: door ? b.status : null,
+                        fromText: door ? CPWORD[b.was || ""] : null,
+                        toText: (door ? CPWORD[b.status] : b.to + " of " + total) +
+                                (agg ? " · " + agg : ""),
                         save: cpSaveRow, paint: cpPainted, log: noteChange });
     /* the workbook half landed: if this was a confirmed clear of the job's
        glass, the floor's counters go back to nought too - and only THIS burst's
        own clear, never another burst's on the same job */
     floorClearAfterWrite(b.job, b.key);
+    /* ... and Windows or Doors, whichever this item sits under, is repainted
+       from its new aggregate. Never awaited into the caller's error path: the
+       record is written, and a failure here is cpRepaintRun's to put right. */
+    cpAggregatePaint(b.job, b.item).catch(() => {});
     scheduleReconcile();                                  // the file catches up with the colour
   } catch (e) {
     /* A refused LIST write means the click did not take: the record goes back
@@ -2307,7 +2538,11 @@ async function setGroupDone(j, group, on) {
   CPBUSY[j.id + "|" + group] = 1;                         // no second tap while this one is in the air
   cpRefresh(j.id);
   const what = (items[0].groupLabel === "Glass" ? "Glass" : cap(items[0].groupLabel)) + (on ? ": all done" : ": cleared");
-  const to = items.map(x => x.label.toUpperCase() + " " + (on ? x.total : 0)).join(", ");
+  /* as for a single tick: what the Windows or Doors cell above this group is
+     about to be painted goes in this line's own words, not in a second line */
+  const aggWords = cpAggregateWords(cpAggregatePlan(j.id, group));
+  const to = items.map(x => x.label.toUpperCase() + " " + (on ? x.total : 0)).join(", ") +
+             (aggWords ? " · " + aggWords : "");
   try {
     /* on the job's own chain, like the item writes: two taps on All done must
        land in the order they were made, or Excel and the counts disagree */
@@ -2325,6 +2560,7 @@ async function setGroupDone(j, group, on) {
     /* the workbook half landed: a confirmed clear of the glass now reaches the
        floor's own counters as well, so both sides say the same thing */
     floorClearAfterWrite(j.id, j.id + "|" + group);
+    cpAggregatePaint(j.id, group).catch(() => {});   // Windows follows its window types
     toast(j.id + " · " + what);
     scheduleReconcile();
   } catch (e) {
@@ -4384,9 +4620,59 @@ async function assignMany(jobs, view, group) {
   setStatus("live");
 }
 
+/* ---- the WND / DRS cell, coloured by what is done (2026-09-14) -------------
+   No new column (rule A6): the two numbers that were already there now carry
+   the aggregate colour of the windows and of the doors - gold done, yellow
+   started, plain otherwise - and the words are in the hover, where there is
+   room for them. A job with no doors (or no window types) shows that number
+   plain with nothing to hover, exactly as it looked before this existed. */
+const CP_AGG_COLOUR = { done: "var(--done)", process: "var(--fab)", "": "var(--ink-2)" };
+/** "CD done · DD in fabrication · SS not started", or "" when there is
+    nothing under the line to say anything about. */
+function cpBreakdown(j, item) {
+  const kids = cpChildren(j, item);
+  if (!kids.length) return "";
+  if (item === "drs")
+    return kids.map(x => x.label + " " + (CPWORD[cpStatus(j, x.key)] || "")).join(" · ");
+  /* windows: one phrase per window type rather than per frames/sashes/transoms,
+     because a job with six types would otherwise be eighteen phrases */
+  const seen = [], out = [];
+  kids.forEach(x => {
+    if (seen.indexOf(x.group) >= 0) return;
+    seen.push(x.group);
+    const mine = kids.filter(y => y.group === x.group).map(y => cpStatus(j, y.key));
+    const word = mine.every(s => s === "done") ? "done"
+      : mine.some(s => s === "done" || s === "process") ? "in progress" : "not started";
+    out.push(cap(x.groupLabel) + " " + word);
+  });
+  return out.join(" · ");
+}
+function wndDrsCell(j) {
+  const part = (item, n, name) => {
+    const s = cpTotal(j, item) > 0 ? itemState(j, item) : null;
+    const words = cpBreakdown(j, item);
+    return { html: '<span style="color:' + ((s && CP_AGG_COLOUR[s.status]) || "var(--ink-2)") +
+                   (s && s.status === "done" ? ";font-weight:600" : "") + '">' + n + '</span>',
+             why: words ? name + ": " + words : "" };
+  };
+  const w = part("win", j.wnd, "Windows"), d = part("drs", j.drs, "Doors");
+  /* the same words the drawer's Doors line carries (amendment 6) */
+  const warn = cpDoorWarning(j);
+  const why = [w.why, d.why, warn].filter(Boolean).join(" — ");
+  return '<span class="tab" style="color:var(--ink-2)"' + (why ? ' title="' + esc(why) + '"' : "") + '>' +
+    w.html + " / " + d.html + '</span>';
+}
+
 /** How many of a job's checkpoints are part way through, for the list badge. */
 function cpInProgress(j) {
-  return cpItems(j).filter(x => { const s = itemState(j, x.key); return s && s.status === "process"; }).length;
+  /* the children only (amendment 7, 2026-09-14): Windows and Doors say what
+     is under them, so counting the line AND the three window types part way
+     through it would read "4 in progress" for three real pieces of work */
+  return cpItems(j).filter(x => {
+    if (cpDerived(x.key) && cpChildren(j, x.key).length) return false;
+    const s = itemState(j, x.key);
+    return s && s.status === "process";
+  }).length;
 }
 
 /** The word in a job's status badge, in the list and at the head of the drawer:
@@ -4464,7 +4750,7 @@ function rowHtml(j, i, max) {
     '<span class="ell">' + esc(j.cust || "—") + '</span>' +
     '<span class="ell" style="color:var(--ink-2)">' + esc(j.area || "—") + '</span>' +
     '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + esc(statusWord(j)) + '</span></span>' +
-    '<span class="tab" style="color:var(--ink-2)">' + j.wnd + " / " + j.drs + '</span>' +
+    wndDrsCell(j) +
     '<span style="display:flex;align-items:center;gap:8px"><span class="mini" style="width:110px">' +
       '<i style="width:' + (T ? c.f / T * w : 0) + 'px;background:var(--f)"></i>' +
       '<i style="width:' + (T ? c.s / T * w : 0) + 'px;background:var(--s)"></i>' +
@@ -5158,6 +5444,9 @@ const shortWho = w => String(w || "").split("@")[0];
 function cpSummaryHtml(j) {
   const b = { win: [0, 0], drs: [0, 0], glass: [0, 0], prod: [0, 0] };
   cpItems(j).forEach(x => {
+    /* the doors are already counted by the derived Doors line above them:
+       adding them again would say "Doors 2/2" next to "Doors 0/2" */
+    if (x.group === "door") return;
     const s = itemState(j, x.key); if (!s) return;
     const k = x.group.indexOf("prod:") === 0 ? "prod" : x.group;
     b[k][0] += s.done || 0; b[k][1] += s.total;
@@ -5168,7 +5457,7 @@ function cpSummaryHtml(j) {
 }
 
 /** One countable line: label, count, bar, - + and a number box. */
-function cpLineHtml(j, it, on, withAll) {
+function cpLineHtml(j, it, on, withAll, warn) {
   const s = itemState(j, it.key); if (!s) return "";
   const dis = on ? "" : " disabled";
   const w = cpRow(j.id, it.key);       // who set it and when, off the record itself
@@ -5185,6 +5474,9 @@ function cpLineHtml(j, it, on, withAll) {
     '</span>' +
     (w && w.who ? '<span class="cpwho">' + esc(shortWho(w.who)) +
       (w.when ? ", " + esc(String(w.when).slice(11, 16)) : "") + '</span>' : "") +
+    /* the quantity warning sits on the line it is about, in the warning
+       style, and changes nothing else (amendment 6) */
+    (warn ? '<span class="cpwarn">' + esc(warn) + '</span>' : "") +
     '</div>';
 }
 const cpNumText = s => s.done == null ? "in progress" : s.done + " of " + s.total;
@@ -5192,6 +5484,65 @@ const cpBarPct = s => s.done == null ? 50 : (s.total ? Math.round(s.done / s.tot
 const cpBarVar = s => s.status === "done" ? "--done" : "--fab";
 const cpBusy = (j, group) => !!CPBUSY[j.id + "|" + group];
 const cpGroupDone = (j, items) => items.every(x => { const st = itemState(j, x.key); return st && st.status === "done"; });
+
+/* ---- Windows and Doors: one fold each (2026-09-14, the doors spec) ---------
+   The job card used to list every window type's frames/sashes/transoms flat,
+   which on a job with six product groups was thirty lines before the glass.
+   They now sit inside one **Windows** fold, and the doors inside a **Doors**
+   fold, each headed by its own derived line - the count, the aggregate colour
+   and the bar. Closed by default; whether a person leaves them open is theirs
+   and is remembered in this browser only.
+
+   <details> rather than a class and a click handler: it opens with the
+   keyboard, it opens when the page is printed or searched, and it needs no
+   JavaScript at all to work. The only script on it is the one line that
+   remembers the state. */
+const CP_FOLD_KEY = "cw_cpopen";
+function cpFoldState() {
+  try { return JSON.parse(localStorage.getItem(CP_FOLD_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function cpFoldSet(k, open) {
+  const m = cpFoldState();
+  m[k] = open ? 1 : 0;
+  try { localStorage.setItem(CP_FOLD_KEY, JSON.stringify(m)); } catch (e) {}
+}
+const cpFoldOpen = k => !!cpFoldState()[k];
+
+/** One fold: a plain heading and a count, the real lines as its body. The
+    Windows and Doors LINES sit above their folds and are ticked in their own
+    right (amendment 1) - the summary carries no control, because a click
+    anywhere in a <summary> opens and closes it. */
+function cpFoldHtml(j, item, name, body, n, noun, warn) {
+  const open = cpFoldOpen(item);
+  const count = n + " " + noun + (n === 1 ? "" : "s");
+  return '<details class="cpfold" data-cpfold="' + esc(item) + '"' + (open ? " open" : "") + '>' +
+    '<summary class="cpfoldhead"><span class="cplab">' + esc(name) + '</span>' +
+      '<span class="cpfoldn">' + esc(count) + '</span>' +
+      (warn ? '<span class="cpwarn">' + esc(warn) + '</span>' : "") + '</summary>' +
+    '<div class="cpfoldbody">' + body + '</div></details>';
+}
+
+/** One door: its code, the word it stands at, and the three buttons that set
+    it. A door has two stages and a blank, so there is no stepper and no count
+    - "in fabrication" is not a fraction of one door. */
+const CP_DOOR_ACTS = [["process", "In fabrication"], ["done", "Done"], ["", "Clear"]];
+function cpDoorHtml(j, it, on) {
+  const s = itemState(j, it.key);
+  if (!s) return "";
+  const dis = on ? "" : " disabled";
+  const w = cpRow(j.id, it.key);
+  return '<div class="cpdoor" data-cpline="' + esc(it.key) + '" data-cpgroup="door">' +
+    '<span class="cplab cpcode">' + esc(it.label) + '</span>' +
+    '<span class="cpdw">' + esc(CPWORD[s.status] || "") + '</span>' +
+    '<span class="cpctl">' +
+      CP_DOOR_ACTS.map(a => '<button class="cpdoorb' + (s.status === a[0] ? " on" : "") +
+        '" data-door="' + esc(it.key) + '" data-act="' + esc(a[0]) + '"' +
+        (s.status === a[0] ? ' aria-pressed="true"' : "") + dis + '>' + esc(a[1]) + '</button>').join("") +
+    '</span>' +
+    (w && w.who ? '<span class="cpwho">' + esc(shortWho(w.who)) +
+      (w.when ? ", " + esc(String(w.when).slice(11, 16)) : "") + '</span>' : "") +
+    '</div>';
+}
 
 function cpGroupHtml(j, items, name, on, showBtn, perLineAll, allText) {
   const doneAll = cpGroupDone(j, items);
@@ -5220,6 +5571,9 @@ function cpSectionHtml(j, ed) {
   const g = k => items.filter(x => x.group === k);
   const prodNames = [];
   items.forEach(x => { if (x.group.indexOf("prod:") === 0 && prodNames.indexOf(x.group) < 0) prodNames.push(x.group); });
+  /* "quantity says 3 · 2 doors listed" - the office's own N against the codes
+     actually typed in the five cells. It decides no paint (amendment 6). */
+  const warn = cpDoorWarning(j);
   const hint = locked
     ? "Marked ready to deliver: all checkpoints are complete. Use Undo above to put the job back into production first."
     : readOnly ? cpWhyNot()
@@ -5228,10 +5582,20 @@ function cpSectionHtml(j, ed) {
       '<span class="kick">Checkpoints</span>' +
       '<span class="cpsum">' + esc(cpSummaryHtml(j)) + '</span></div>' +
     (hint ? '<div class="cphint">' + esc(hint) + '</div>' : "") +
+    /* Windows: its own tickable line, and the job's window types folded under
+       it. The line is still the office's to set - a job whose M cell is gold
+       is finished whether or not its components were ever ticked one by one. */
     g("win").map(x => cpLineHtml(j, x, on && !cpBusy(j, "win"), !locked && !readOnly)).join("") +
-    g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly)).join("") +
+    (prodNames.length ? cpFoldHtml(j, "win", "Window types",
+        prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked && !readOnly, false, "All done")).join(""),
+        prodNames.length, "window type") : "") +
+    /* Doors: the same shape, with the quantity warning on whichever of the two
+       the job actually has (amendments 6 and 10) */
+    g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly, warn)).join("") +
+    (g("door").length ? cpFoldHtml(j, "drs", "Each door",
+        g("door").map(x => cpDoorHtml(j, x, on)).join(""),
+        g("door").length, "door", g("drs").length ? "" : warn) : "") +
     (g("glass").length ? cpGroupHtml(j, g("glass"), "Glass", on, !locked && !readOnly, !locked && !readOnly, "All glass done") : "") +
-    prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked && !readOnly, false, "All done")).join("") +
     '</div>';
 }
 
@@ -5256,6 +5620,15 @@ function cpPatchSection(j) {
     if (inp && inp !== document.activeElement) inp.value = s.done == null ? "" : s.done;
     const all = el.querySelector(".cpall[data-cp]");
     if (all) { all.textContent = s.status === "done" ? "Clear" : "All done"; all.dataset.act = s.status === "done" ? "none" : "all"; }
+    /* a door row: the word it stands at, and which of its three buttons is the
+       one it is on */
+    const word = el.querySelector(".cpdw");
+    if (word) word.textContent = CPWORD[s.status] || "";
+    if (el.querySelectorAll) el.querySelectorAll("[data-door]").forEach(b => {
+      const isNow = String(b.dataset.act || "") === s.status;
+      if (b.classList) b.classList.toggle("on", isNow);
+      if (b.setAttribute) b.setAttribute("aria-pressed", isNow ? "true" : "false");
+    });
   });
   host.querySelectorAll("[data-cpgrp]").forEach(b => {
     const items = cpItems(j).filter(x => x.group === b.dataset.cpgrp);
@@ -5269,9 +5642,19 @@ function cpPatchSection(j) {
 
 /** Wire the checkpoint controls of the open drawer. */
 function wireCheckpoints(host, id) {
+  /* the folds first, and before any guard: whether Windows and Doors are open
+     is a reading preference, and it works on a gold row and on a dashboard
+     that cannot write a thing */
+  host.querySelectorAll("[data-cpfold]").forEach(el => {
+    el.ontoggle = () => cpFoldSet(el.dataset.cpfold, !!el.open);
+  });
   const job = byId(id);
   if (!job || job.done) return;                    // read-only while the row is gold
   if (!cpWritable()) return;                       // ... and while the record cannot be written
+  host.querySelectorAll("[data-door]").forEach(el => el.onclick = () => {
+    const j = byId(id); if (!j) return;
+    setDoorStatus(j, el.dataset.door, el.dataset.act || "");
+  });
   host.querySelectorAll("[data-cp]").forEach(el => el.onclick = () => {
     const j = byId(id); if (!j) return;
     const item = el.dataset.cp, s = itemState(j, item); if (!s) return;

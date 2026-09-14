@@ -37,7 +37,7 @@ the one that first wrote them down.
    it, and deletes the original — the only structural write in the app). No
    feature may write a value, a new row, a new sheet, or a colour anywhere
    else on `Production`, ever.
-   There are exactly **two** sanctioned reasons to make a fill, and the owner
+   There are exactly **three** sanctioned reasons to make a fill, and the owner
    gave each of them in a dated spec:
    - **checkpoint colours** — the office ticking work off in the drawer
      (`docs/specs/2026-09-04-checkpoints.md`, and since 2026-09-11
@@ -55,7 +55,31 @@ the one that first wrote them down.
      `Source = floor`, and the cell is painted from the record. Whoever
      spoke last is decided on that row's `When`, and nothing reads a cell's
      colour to decide anything. ARCH, ASTRAGAL, FANCY and EXTRA stay hand-ticked and are never
-     written by that feature. Adding a **third** reason is a new decision for
+     written by that feature;
+   - **the five DOORS DONE cells of a job's row** — the office ticking one
+     door off in the drawer (owner, **2026-09-11**,
+     `docs/specs/2026-09-11-doors-and-window-types.md` §3, approved to build
+     2026-09-14). The owner's words: *"when updated from dashboad it should
+     update the cell with correct color as well. and vice versa"* and *"Door
+     doesnt have 3 process so yellow fabrication adn doen Golden should be
+     ok"*. A door has two stages and a blank — white, yellow "in fabrication",
+     gold "done" — and it joins the record like every other checkpoint: the
+     `Dashboard progress` row is written first and the cell is painted from
+     it, never read back as status. **The code text in the cell (`CD`, `SS`,
+     `SFCD`, `1 DOOR`, whatever the office typed) is never written by
+     anything.** The "vice versa" is the safeguard, not a colour read: a door
+     cell painted in Excel by hand is adopted into the record like any other
+     managed cell.
+     The **Windows (M) and Doors (N)** cells stay ticks of their own, as they
+     have been since 2026-09-04, and from that day they are **also** painted
+     from what is under them — yellow when any window type or any door has
+     started, gold when every one is done. That paint only ever goes
+     **upwards**: nothing under the line may take M or N back to white, and
+     only the office's own Clear on the line itself whitens either
+     (owner 2026-09-14: *"already golden means it finished even if all the cell
+     or component has no ticked. u should not change anything in the excel
+     sheet."*). Still only a fill, still only on the job's own row.
+     Adding a **fourth** reason is a new decision for
      the owner, not a judgement call for a session.
 2. **No other sheet on the workbook is touched** except the dashboard's own
    sheets, created and owned by the dashboard: `Dashboard Log`,

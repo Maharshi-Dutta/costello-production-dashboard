@@ -249,6 +249,48 @@ floor's tap is the later action and it stands, by design. Clear it again if it
 was tapped in error — a clear leaves the job unlocked, so they can also just
 tap it back themselves.
 
+## The job card says "quantity says 3 · 2 doors listed"
+
+Not a fault, and nothing is blocked by it. The DRS quantity on the job's row
+and the number of DOORS DONE cells with a code typed in them do not agree. One
+of the two is wrong — either a code has not been typed yet, or the quantity
+is out — and the dashboard will not guess which, so it says so and leaves it
+to a person. **No colour in the sheet changes because of this message**, and
+the doors that *are* typed go on working normally.
+
+The same words appear when you hover the `9 / 3` numbers in the job list.
+
+Two related things that are also not faults:
+
+- **Quantity 0 with codes typed.** The DRS cell is left completely unpainted:
+  as far as the sheet is concerned the job has no doors, so there is nothing
+  for the dashboard to colour. The warning still shows, and each typed door
+  still ticks off on its own.
+- **A number or a date in a DOORS DONE cell is ignored.** Those are a quantity
+  or a fitting date in the wrong column, not a door type, so no door appears
+  for that cell and the dashboard never paints it.
+
+## A WND or DRS cell went gold and none of its parts are ticked
+
+That is correct, and it is the owner's own rule: a gold cell means the work is
+finished, whether or not each window type or each door was ticked off one by
+one. The line keeps its own tick **and** follows what is under it, and
+whichever says more is what you see.
+
+It only ever goes one way. Ticking a window type or a door can take that cell
+to yellow or gold; **nothing under the line ever takes it back**, and nothing
+under it ever repaints a gold cell white. Un-ticking the last door leaves the
+DRS cell exactly as it was — to clear it, press **Clear** on the Doors line
+itself.
+
+## "Imported n doors from the sheet's colours" in Changes
+
+Once, on the first load after the doors shipped, per browser. The door cells
+already carrying a colour are read into the record so they are not mistaken
+for somebody hand-painting them that morning; the line says `the sheet` as who
+did it, because that is honestly all Excel can tell us. It never happens twice,
+and it paints nothing — the colours are already there.
+
 ## "The sheet still does not show your change to … — it may not have saved"
 
 A change made here is held on screen until the downloaded copy of the workbook

@@ -319,9 +319,18 @@ function exportCheckpoints(j) {
   xpItems(j).forEach(it => {
     const st = (typeof itemState === "function" ? itemState(j, it.key) : null) ||
                { done: 0, total: it.total, status: "" };
-    let g = byGroup[it.group];
-    if (!g) { g = byGroup[it.group] = { group: it.group, label: it.groupLabel, done: 0, total: 0, unknown: false, items: [] }; order.push(g); }
+    /* a door goes on the Doors line rather than into a group of its own: it is
+       one of the things that line is the aggregate of (2026-09-14), and two
+       groups both labelled "Doors" would read as two different things */
+    const key = it.group === "door" ? "drs" : it.group;
+    let g = byGroup[key];
+    if (!g) { g = byGroup[key] = { group: key, label: it.group === "door" ? "Doors" : it.groupLabel,
+                                   done: 0, total: 0, unknown: false, items: [] }; order.push(g); }
     g.items.push({ item: it.key, label: it.label, done: st.done, total: st.total, status: st.status });
+    /* ... and it is NOT counted into that line's totals: the Doors line is
+       already the aggregate of these doors, so adding them would count the
+       same work twice */
+    if (it.group === "door") return;
     g.total += st.total || 0;
     if (st.done == null) g.unknown = true; else g.done += st.done;
   });

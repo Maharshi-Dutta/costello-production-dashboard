@@ -184,8 +184,8 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | module | responsibility |
 |---|---|
 | `graph.js` | MSAL sign-in, token acquisition (with the quiet/popup split above), all Graph HTTP calls (`call()`), workbook session handling and retry-on-`InvalidSession`, `findFile()`/download/version history, the dashboard-owned-sheet upserts, `moveJobRow()` and its supporting row-capture/write/border functions, the SharePoint list layer (`listId`/`listItems`/`listUpsert`/`listDelete`/`listAdd`/`listPatch`/`listDelta`), batching (`batchGet`/`batchWrite`/`batchRun`) |
-| `parser.js` | `parseWorkbook()`: turns a downloaded workbook into the job model; section/divider detection (`blocksFromValues`); fill-colour reading and the Cut/process/done ranking; **font-colour reading and the row colour code** (`fontOf`/`flagOf` → `j.flag`/`j.flagHex`, by hue range, hyperlinks and the two hyperlink theme colours excluded); **`parseJohnSheet()`** — "Production (2)" read on its own terms for the John print sheet, and never merged into the job model; `mapSheet()` header detection; `templateForJob()` (captures formatting for a move) |
-| `checkpoints.js` | pure logic only, no DOM: the record of checkpoint status (`cpRow`/`cpRowsFrom`/`itemState`, the `Dashboard progress` list since 2026-09-11 — **not** the Excel colour, which is `cpFileStatus`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`, record→fill→log), the one-time import (`cpImportPlan`) and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
+| `parser.js` | `parseWorkbook()`: turns a downloaded workbook into the job model; **the five DOORS DONE cells** (`mapSheet().doors`, `doorCode()` — any non-empty text is a door — into `j.doors` as `{slot, code, status}`); section/divider detection (`blocksFromValues`); fill-colour reading and the Cut/process/done ranking; **font-colour reading and the row colour code** (`fontOf`/`flagOf` → `j.flag`/`j.flagHex`, by hue range, hyperlinks and the two hyperlink theme colours excluded); **`parseJohnSheet()`** — "Production (2)" read on its own terms for the John print sheet, and never merged into the job model; `mapSheet()` header detection; `templateForJob()` (captures formatting for a move) |
+| `checkpoints.js` | pure logic only, no DOM: the doors of a job (`cpDoors`/`cpDoorAt`, one item per DOORS DONE cell since 2026-09-14); the Windows/Doors aggregate that sits alongside those two lines' own record rows (`cpOwnState` / `cpDerivedOf`, the higher of the two shown, the paint upwards only) and the doors quantity warning (`cpDoorWarning`); the record of checkpoint status (`cpRow`/`cpRowsFrom`/`itemState`, the `Dashboard progress` list since 2026-09-11 — **not** the Excel colour, which is `cpFileStatus`), colour choice, the per-(job,item) tap debounce and its `localStorage`-backed queue, the two write sequences (`cpWriteItem`/`cpWriteGroup`, record→fill→log), the one-time import and the doors' own (`cpImportPlan`, with its per-kind filter) and the phase pipeline (`jobPhase`, `effectivePhase`, `PHASES`) |
 | `export.js` | pure logic only, no DOM, no network: filtering (`exportFilter`), row shaping, filename/summary text, building an ExcelJS workbook and a pdfmake document definition; §7b holds the fixed **John print sheet** (`exportJohnRows`/`buildJohnWorkbook`/`buildJohnDoc`), built from Production (2)'s own rows and the one export the owner sanctioned to carry a phone number; the eircode exclusion, and the phone exclusion from every other template, live here as hard rules with standing tests |
 | `app.js` | everything with a DOM: rendering the job list/drawer/windows, wiring every tap to a write, `PENDING`/`PENDV`/`PENDA` optimistic holds, sign-in/session boot, the phase-list read/write UI, the Export/Alerts/Versions windows, the radial selection menu, build-freshness polling |
 | `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassTotal`, `officeSeed`, `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `boardFilter`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
@@ -211,6 +211,17 @@ v3 for the binding spec (the code wins over any of them where they disagree).
   `graph.js`) is written with a leading apostrophe, Excel's own way of
   forcing text interpretation, so a job note like `07/04` doesn't silently
   become a date on the next write.
+- **Only fills are ever written to `Production`, for exactly three sanctioned
+  reasons** (repo rule 1): a checkpoint colour, a glass colour from the floor,
+  and — since 2026-09-14 — **one of the five DOORS DONE cells** of a job's
+  row, plus the Windows (M) and Doors (N) cells, which carry the higher of
+  their own record row and what sits under them and are only ever painted
+  upwards — nothing under the line whitens either. Every one of those is a **copy** of a `Dashboard
+  progress` row (or, for M and N, of that row and the aggregate of the rows
+  below it), written
+  after the record and never read back as status. **The door's code text is
+  never written**: the fill of that cell is the only thing this app may touch
+  there.
 - **Contact details leave the app in exactly one place.** The eircode
   (`j.eir`) is never read by any export path, in any format. The phone number
   is carried by the **John print sheet alone**, sanctioned by the owner on
@@ -239,6 +250,7 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | checkpoint status — what is ticked off, per job per item | the SharePoint list `Dashboard progress` (2026-09-11). Read in full at boot, then `listDelta` every 10 s; written at the click, before the Excel colour. Nothing about it lives in this browser |
 | the colour this dashboard last painted into each managed cell | `cw_painted`, so the safeguard can tell a hand-paint in Excel from a stale download, and so a fill the workbook refused is painted again on the next load |
 | whether the one-time import of the sheet's colours has drained in this browser | `cw_cpimported`; until it has, an item with no row reads as the sheet's colour so nothing on any screen changes during the switch-on window |
+| ... and the same question for the door cells alone | `cw_cpimported_doors` — the doors shipped three days after the general import had drained, so they get one pass of their own. It does not reopen the colour fallback; it only keeps the safeguard off an unrecorded door cell until that pass is done |
 | a person's own unconfirmed edit (section move, mark-ready, product status, alert, hand-set phase) | in memory + `localStorage`, for up to 180 s, until the downloaded file (or list) agrees — `cw_pending`, `cw_pendv`, `cw_penda`, and the `phase` field inside `cw_pending`. **Neither a checkpoint tick nor a glass colour is one of them** since 2026-09-11: both go straight onto the record, and `cw_pending` can no longer gain a `cp` or `gc` key at all |
 | exact checkpoint counts | `Dashboard Progress` sheet (Excel keeps only the cell colour) |
 | the audit trail | `Dashboard Log` sheet — every write anywhere in the app appends one line here |
@@ -258,4 +270,5 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | when the master last fed the `Glass station` list, and the hash of what it sent | `cw_stationfeed` — read by `feedStation()` to decide whether a run can be skipped |
 | workbook and list ids, once resolved | `cw_fileref`, `cw_listids`, `cw_stationsite` |
 | export presets (filters/fields/format only, never job data) | `cw_exportpresets` |
+| whether the job card's Windows and Doors folds were left open | `cw_cpopen` — one flag per fold, per browser; nothing about a job is in it |
 | UI-only preferences | `cw_theme`, `cw_hidden`, `cw_collapsed`, `cw_changes`, `cw_stationtheme` (the tablet's own light/dark, dark by default) |
