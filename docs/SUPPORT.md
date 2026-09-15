@@ -64,7 +64,7 @@ up the glass station"). If the dashboard or the tablet says a list is missing:
   the notes typed in the window go into the file, they just are not
   remembered for next time.
 - Check the columns match the spec exactly (see
-  `docs/specs/2026-09-07-phases-list.md` and `docs/STATIONS.md`) — the code
+  [`docs/specs/2026-09-07-phases-list.md`](specs/2026-09-07-phases-list.md) and `docs/STATIONS.md`) — the code
   reads columns by name and will not repair a mis-typed one.
 - List ids are cached in `localStorage` (`cw_listids`) once found; a list
   that didn't exist yet is never cached as missing, so creating it and

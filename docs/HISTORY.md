@@ -13,9 +13,9 @@ Keep it current at every ship: a new feature gets a line in section C, a new
 owner decision gets an entry in section A, and anything that took more than
 one attempt to fix gets an entry in section B.
 
-Related files: `REFERENCE.md` is how the system works today; the briefs in
-`specs/` are how each piece was designed; this file is the history and the
-reasoning. `CLAUDE.md` in the repo root holds the hard rules that came out of
+Related files: [`REFERENCE.md`](REFERENCE.md) is how the system works today; the briefs in
+[`specs/`](specs/README.md) are how each piece was designed; this file is the history and the
+reasoning. [`CLAUDE.md`](../CLAUDE.md) in the repo root holds the hard rules that came out of
 the decisions below.
 
 ---
@@ -292,7 +292,7 @@ In order. Each line is one shipped commit.
 ### 2026-09-14 — doors, and window types under one heading
 | Commit | What it added |
 |---|---|
-| _(this build)_ | **Doors by type.** The five DOORS DONE cells (BT–BX) become one checkpoint each — the cell's text is the door's code, its fill is its status, two stages only — ticked from the job card with In fabrication / Done / Clear, joined to the `Dashboard progress` record like every other checkpoint, and adopted by the safeguard when somebody paints one in Excel (A17). **Windows (M) and Doors (N) keep their own tick and also answer for what is under them** — the higher of the two is shown, and the paint only ever goes upwards, so a gold M or N is never repainted white by anything under it (A18). A doors quantity that disagrees with the coded cells is said in plain words in the card and in the hover (A19). The door cells get a one-time import of their own, behind `cw_cpimported_doors`, because the general one had drained three days before they existed. The window types move under one collapsible **Windows** heading in the card, the doors under **Doors**, both remembered per browser. On the home list the WND / DRS numbers carry the aggregate colour with the breakdown in the hover — no new column (A6). **Repo rule 1 gains its third sanctioned fill in this commit.** Spec: `specs/2026-09-11-doors-and-window-types.md`. Tests: `test_doors.js`, plus doors and derived-aggregate sections in `test_checkpoints.js` |
+| _(this build)_ | **Doors by type.** The five DOORS DONE cells (BT–BX) become one checkpoint each — the cell's text is the door's code, its fill is its status, two stages only — ticked from the job card with In fabrication / Done / Clear, joined to the `Dashboard progress` record like every other checkpoint, and adopted by the safeguard when somebody paints one in Excel (A17). **Windows (M) and Doors (N) keep their own tick and also answer for what is under them** — the higher of the two is shown, and the paint only ever goes upwards, so a gold M or N is never repainted white by anything under it (A18). A doors quantity that disagrees with the coded cells is said in plain words in the card and in the hover (A19). The door cells get a one-time import of their own, behind `cw_cpimported_doors`, because the general one had drained three days before they existed. The window types move under one collapsible **Windows** heading in the card, the doors under **Doors**, both remembered per browser. On the home list the WND / DRS numbers carry the aggregate colour with the breakdown in the hover — no new column (A6). **Repo rule 1 gains its third sanctioned fill in this commit.** Spec: [`specs/2026-09-11-doors-and-window-types.md`](specs/2026-09-11-doors-and-window-types.md). Tests: `test_doors.js`, plus doors and derived-aggregate sections in `test_checkpoints.js` |
 
 ---
 

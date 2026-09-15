@@ -176,7 +176,7 @@ none of the three.
   (`stationTick()`/`stationWatching()`), once a minute otherwise.
 
 See `docs/STATIONS.md` for the full data model, admin setup and
-troubleshooting, and `docs/specs/2026-09-08-glass-station.md` plus its v2 and
+troubleshooting, and [`docs/specs/2026-09-08-glass-station.md`](specs/2026-09-08-glass-station.md) plus its v2 and
 v3 for the binding spec (the code wins over any of them where they disagree).
 
 ## Module map

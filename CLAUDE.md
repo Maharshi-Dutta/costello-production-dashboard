@@ -11,7 +11,7 @@ Two pages ship from this repo:
 - `index.html` + `app.js` — the master dashboard, used by the office.
 - `glass.html` + `station.js` + `station-core.js` — the glass floor station,
   used on a shared tablet, shipped 2026-09-08 — see
-  `docs/specs/2026-09-08-glass-station.md` and its v2 and v3, and
+  [`docs/specs/2026-09-08-glass-station.md`](docs/specs/2026-09-08-glass-station.md) and its v2 and v3, and
   `docs/STATIONS.md` for the built data model and setup. Check
   `docs/specs/README.md` for the status of every spec.
 
@@ -40,15 +40,15 @@ the one that first wrote them down.
    There are exactly **three** sanctioned reasons to make a fill, and the owner
    gave each of them in a dated spec:
    - **checkpoint colours** — the office ticking work off in the drawer
-     (`docs/specs/2026-09-04-checkpoints.md`, and since 2026-09-11
-     `docs/specs/2026-09-11-status-list-is-truth.md`): the fill is a **copy**
+     ([`docs/specs/2026-09-04-checkpoints.md`](docs/specs/2026-09-04-checkpoints.md), and since 2026-09-11
+     [`docs/specs/2026-09-11-status-list-is-truth.md`](docs/specs/2026-09-11-status-list-is-truth.md)): the fill is a **copy**
      of the `Dashboard progress` list row, written from it and never read
      back as status. Painting the cell in Excel by hand does not set
      anything — the dashboard notices it and adopts it into the list
      instead;
    - **glass colours from the floor** — the office dashboard painting DG, TG,
      TUFF and NOT TUFF from what the floor has recorded on the tablet
-     (`docs/specs/2026-09-10-glass-colours-two-way.md`, owner 2026-09-10:
+     ([`docs/specs/2026-09-10-glass-colours-two-way.md`](docs/specs/2026-09-10-glass-colours-two-way.md), owner 2026-09-10:
      *"the production sheet is main doc, don't edit that as in text; by colour
      is ok"*). Since 2026-09-11 that paint is a copy too — the floor's
      colour goes onto the `Dashboard progress` record first, with
@@ -58,7 +58,7 @@ the one that first wrote them down.
      written by that feature;
    - **the five DOORS DONE cells of a job's row** — the office ticking one
      door off in the drawer (owner, **2026-09-11**,
-     `docs/specs/2026-09-11-doors-and-window-types.md` §3, approved to build
+     [`docs/specs/2026-09-11-doors-and-window-types.md`](docs/specs/2026-09-11-doors-and-window-types.md) §3, approved to build
      2026-09-14). The owner's words: *"when updated from dashboad it should
      update the cell with correct color as well. and vice versa"* and *"Door
      doesnt have 3 process so yellow fabrication adn doen Golden should be
@@ -97,7 +97,7 @@ the one that first wrote them down.
    `Dashboard print notes` (John's per-job note, shipped 2026-09-09 and
    missing from this rule until 2026-09-11) and, since 2026-09-11,
    **`Dashboard progress` — the single record of checkpoint status, one row
-   per `JOB|ITEM`** (`docs/specs/2026-09-11-status-list-is-truth.md`); and
+   per `JOB|ITEM`** ([`docs/specs/2026-09-11-status-list-is-truth.md`](docs/specs/2026-09-11-status-list-is-truth.md)); and
    the floor's three —
    `Glass station`, `Station people` and
    `Station log` — in the separate private site `Floor stations`, which the
@@ -132,7 +132,7 @@ the one that first wrote them down.
      again with a one-item read immediately before each such write, not only
      when the plan was made. `Tuff` is **not** seeded.
    - **An office clear** (owner, 2026-09-10,
-     `docs/specs/2026-09-10-office-clears-the-floor.md`): when the office
+     [`docs/specs/2026-09-10-office-clears-the-floor.md`](docs/specs/2026-09-10-office-clears-the-floor.md)): when the office
      **clears a job's glass checkpoints** — the moment its own record of that
      job's DG and TG goes from saying something to saying nothing — it writes
      that job's row's `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus
@@ -162,9 +162,9 @@ the one that first wrote them down.
    account".
 7. **Consult the owner before coding any feature.** State "what I understood
    and what I will do" and get a yes before writing code — every spec in
-   `docs/specs/` records that this happened and when.
+   [`docs/specs/`](docs/specs/README.md) records that this happened and when.
 8. **The manager loop** (see the `agent-manager` skill) is how features get
-   built: brief written to `docs/specs/` → implementer agent → independent
+   built: brief written to [`docs/specs/`](docs/specs/README.md) → implementer agent → independent
    review agent → verify the result yourself → demo to the owner → owner
    approval → push. One build, one review, one fix, then ship — do not loop
    review/fix indefinitely; if a second real problem turns up, that is a new,
@@ -293,21 +293,30 @@ real workbook through real dashboard use.
   C, an owner decision an entry in A, and anything that took more than one
   attempt to fix an entry in B.
 
-## Seeing the code as a graph
+## Two graphs, for two different jobs (both set up 2026-09-15)
 
-`graphify` (Claude Code plugin `graphify@pleaseai`, CLI `graphifyy`) builds a
-navigable graph of this repo — every function and file as a node, with the
-calls between them as edges. The output lands in `graphify-out/` and is
-**gitignored**; `.graphifyignore` keeps the vendored bundles in `vendor/` out
-of it, since minified third-party code produces thousands of useless nodes.
+**`graphify`** (plugin `graphify@pleaseai`, CLI `graphifyy`) graphs the
+**code**: every function and file as a node, real function calls as edges,
+built automatically by parsing `.js`/`.html` with tree-sitter. This is for
+me — it answers "what calls X" without reading five files to find out.
+Output lands in `graphify-out/` and is gitignored; `.graphifyignore` excludes
+`vendor/` so the minified bundles don't drown it.
 
 ```
-graphify update .          # rebuild after code changes (deterministic, no LLM)
-graphify tree              # collapsible file/symbol tree -> graphify-out/GRAPH_TREE.html
-graphify god-nodes         # the most connected functions, i.e. the real hubs
+graphify update . --force   # rebuild after code changes (deterministic, no LLM)
+graphify tree               # collapsible file/symbol tree -> graphify-out/GRAPH_TREE.html
+graphify god-nodes          # the most connected functions, i.e. the real hubs
 graphify query "how does an office un-tick reach the tablet"
 ```
 
-`graphify-out/graph.html` is the interactive graph; `GRAPH_REPORT.md` is the
-plain-language summary. Rebuild it after any sizeable change, or the graph
-quietly describes code that no longer exists.
+**Obsidian**, vault at `docs/` itself, graphs **the documentation**: every
+`.md` file as a note, `[[links]]`/relative markdown links between them as
+edges — this is for the owner, to click from a decision in [`HISTORY.md`](docs/HISTORY.md) to
+the spec that came from it, visually. It does not parse code and cannot
+answer a code-structure question; `graphify` does not know what a spec is.
+Neither replaces the other. `.obsidian/` (the vault's own config folder) is
+gitignored — it is personal browsing state, not project content.
+
+Rebuild the code graph after any sizeable code change, or it quietly
+describes code that no longer exists. The docs vault needs no rebuild step —
+Obsidian reads the files live every time it's opened.

@@ -3,7 +3,7 @@
 One page per feature, in the order they were built. Each entry says what the
 feature does, where the code is, how it works underneath, what it writes and
 where, and which tests cover it. Read this before touching anything; read the
-spec in `docs/specs/` for the full brief of a feature. Names of people and
+spec in [`docs/specs/`](specs/README.md) for the full brief of a feature. Names of people and
 addresses are placeholders throughout ("the admin", "the colleague").
 
 Last updated 2026-09-11 (checkpoint status moved out of the Excel colour and into the `Dashboard progress` SharePoint list — §19, which rewrites §5 and takes the hold machinery out of §17 and §18).
@@ -128,7 +128,7 @@ Dates are never touched. `markReady` in `app.js`.
 one checkpoint per **door**, ticked from the drawer and shown as bars.
 
 **Doors and the two derived lines — since 2026-09-14.** Spec:
-`docs/specs/2026-09-11-doors-and-window-types.md`.
+[`docs/specs/2026-09-11-doors-and-window-types.md`](specs/2026-09-11-doors-and-window-types.md).
 
 - A job's **doors** are the five DOORS DONE cells of its row (BT–BX as the
   sheet stands). Each cell that has text in it is one door: the text is its
@@ -273,7 +273,7 @@ dashboard. The floor cannot see the master.
 `station.js` (tablet UI), `glass.html` (shell + styles), plus the station
 blocks in `app.js` (search `STATIONS`, `feedStation`, `stationPoll`,
 `renderStationLog`, `stationSectionHtml`) and `listDelta`/`stationSite` in
-`graph.js`. Specs: `docs/specs/2026-09-08-glass-station.md` (v1) and
+`graph.js`. Specs: [`docs/specs/2026-09-08-glass-station.md`](specs/2026-09-08-glass-station.md) (v1) and
 `…-v2.md` (both with "Amendments after review" sections) and `…-v3.md`, which
 made it one row per job, one number per job and cards you tap directly. Admin
 guide: `docs/STATIONS.md`.
@@ -383,7 +383,7 @@ caches `ST.jobRecords(items)` on `STATION_ITEMS` array identity — O(rows +
 items) instead of O(rows × items), measured 11–16 ms → 0.71 ms per render.
 **Still no workbook write and no list write:** the one read added is the
 existing shared `stationReadIfNeeded()`, once per session. Spec:
-`docs/specs/2026-09-09-glass-chip-on-job-row.md`.
+[`docs/specs/2026-09-09-glass-chip-on-job-row.md`](specs/2026-09-09-glass-chip-on-job-row.md).
 
 **Since 2026-09-10.** The floor's counters now reach the `Production` sheet's
 four glass columns as fills, painted by the office dashboard; there is a
@@ -485,7 +485,7 @@ demo; commit messages end with the `Co-Authored-By: Claude …` trailer.
 
 ## 16. Row colour code, section select, the John print sheet and print notes
 
-Shipped 2026-09-09. Spec: `docs/specs/2026-09-09-john-template.md`, including
+Shipped 2026-09-09. Spec: [`docs/specs/2026-09-09-john-template.md`](specs/2026-09-09-john-template.md), including
 its "Amendments after review and the owner's second round". Office page only —
 the tablet is untouched by all of it. The owner named the view, the template
 and the file **"John print sheet"**, and that name is his recorded exception to
@@ -597,7 +597,7 @@ sections of `test_export.js`.
 
 ## 17. Glass colours: the floor's work reaches the Production sheet
 
-Built 2026-09-10. Spec: `docs/specs/2026-09-10-glass-colours-two-way.md`,
+Built 2026-09-10. Spec: [`docs/specs/2026-09-10-glass-colours-two-way.md`](specs/2026-09-10-glass-colours-two-way.md),
 including its long "Amendments after review" section, which records the one
 gap in the brief and the twelve decisions taken while building it. **This is
 the first feature in which something done on the floor changes the master
@@ -831,7 +831,7 @@ proves over its own run that the tablet still touches no workbook.
 > dashboard inside the download lag is closed by the same thing: the record is
 > shared, so there is no second dashboard that cannot see the office's action.
 
-**Spec.** `docs/specs/2026-09-10-office-clears-the-floor.md`. Changes
+**Spec.** [`docs/specs/2026-09-10-office-clears-the-floor.md`](specs/2026-09-10-office-clears-the-floor.md). Changes
 `CLAUDE.md` rule 3, by the owner, on 2026-09-10.
 
 **The bug.** The owner spent an afternoon on what looked like three faults and
@@ -1034,7 +1034,7 @@ clear it again. Not forty-nine taps.
 
 ## 19. Status lives in a list; the Excel colour is a copy
 
-Built 2026-09-11. Spec: `docs/specs/2026-09-11-status-list-is-truth.md`. This
+Built 2026-09-11. Spec: [`docs/specs/2026-09-11-status-list-is-truth.md`](specs/2026-09-11-status-list-is-truth.md). This
 is **step 2 of three** in that spec: checkpoints read and write the list, and
 the glass colour writer is not changed (step 3 does that). Read the spec
 before touching any of it.

@@ -2,9 +2,9 @@
 
 Everything in this document describes the **glass station**, the first floor
 station, **shipped 2026-09-08** — built to
-`docs/specs/2026-09-08-glass-station.md` and its second and third iterations
-`docs/specs/2026-09-08-glass-station-v2.md` and
-`docs/specs/2026-09-08-glass-station-v3.md` (each supersedes the one before;
+[`docs/specs/2026-09-08-glass-station.md`](specs/2026-09-08-glass-station.md) and its second and third iterations
+[`docs/specs/2026-09-08-glass-station-v2.md`](specs/2026-09-08-glass-station-v2.md) and
+[`docs/specs/2026-09-08-glass-station-v3.md`](specs/2026-09-08-glass-station-v3.md) (each supersedes the one before;
 see `docs/specs/README.md`). This document is kept accurate to the code
 (`station-core.js`, `station.js`, `glass.html`, and the station parts of
 `app.js`/`graph.js`) — if something here looks wrong, the code wins and this
@@ -140,7 +140,7 @@ It is `ST.officeSeed()`, a pure function, and `test_station.js` covers every
 rule. `Tuff` is not seeded by any of them.
 
 **An office clear, the second exception (owner, 2026-09-10 —
-`docs/specs/2026-09-10-office-clears-the-floor.md`).** Un-ticking a job's glass
+[`docs/specs/2026-09-10-office-clears-the-floor.md`](specs/2026-09-10-office-clears-the-floor.md)).** Un-ticking a job's glass
 in the office cleared the workbook correctly but left the floor's counters
 standing, so the tablet stayed gold for ever and the only way back was somebody
 tapping `−` forty-nine times. So a clear now reaches the list: the office
