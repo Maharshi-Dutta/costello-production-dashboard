@@ -1372,6 +1372,12 @@ const STATION_CHECKING = "checking…";
 
 let STATION_ITEMS = null;      // the Glass station list, as last read - null until the first read answers
 let STATION_LOG = null;        // the Station log list, likewise
+/* the floor's notes: `Station comments`, read here and never written. It is a
+   fourth list that can be missing on its own, so it gets its own three states
+   exactly as the log does. (2026-09-15, docs/specs/2026-09-15-station-comments.md) */
+let STATION_NOTES = null;
+let STATION_NOTES_OK = null;
+let STATION_NOTES_WHY = "";
 let STATION_PEOPLE = null;     // the Station people list, read once for the log window's filters
 let STATION_OK = null;         // null: not looked · false: no site, no list, or no permission · true: read it
 let STATION_WHY = "";          // which of those, in words, for the board and the drawer
@@ -1390,6 +1396,12 @@ const STATION_FEEDS = {
            get: () => STATION_ITEMS, set: v => { STATION_ITEMS = v; }, token: null, off: 0 },
   log: { list: () => ST.LOG_LIST, fields: () => ST.LOG_FIELDS,
          get: () => STATION_LOG, set: v => { STATION_LOG = v; }, token: null, off: 0 },
+  /* the floor's notes ride the floor's own clock - ten seconds while somebody
+     is looking at the floor or has a glass job's drawer open, a minute
+     otherwise. That is what the spec asked for: the drawer's own poll cycle,
+     and no new polling infrastructure. */
+  notes: { list: () => ST.COMMENT_LIST, fields: () => ST.COMMENT_FIELDS,
+           get: () => STATION_NOTES, set: v => { STATION_NOTES = v; NOTES_UNREAD = null; }, token: null, off: 0 },
   /* the third feed, and the odd one out: `Dashboard progress` is in the
      WORKBOOK's site, not the floor's, and it is polled on its own clock
      (cpTick) rather than this one - a colleague's tick has to reach this
@@ -1482,6 +1494,306 @@ async function readStationLog() {
     return null;
   }
 }
+/* ---- the floor's notes, read here -------------------------------------------
+   `Station comments`, shipped 2026-09-15. One row per note, written by a floor
+   tablet against a job, read here in that job's drawer and nowhere else.
+
+   READ-ONLY, in the strongest sense available: there is no code path in this
+   file that POSTs, PATCHes or DELETEs an item of this list, and no export of it
+   either - what leaves this dashboard is governed by export.js and its standing
+   test, and the floor's notes are not part of it. The office does not reply
+   here; the owner asked for floor-to-office, and a reply channel is written
+   down in the spec as not built rather than half-built.                     */
+/* HOW LONG BEFORE ASKING AGAIN. Nothing about this list is ever a final
+   answer, and finding 4 of the review is why: the list does not exist yet. The
+   owner makes it mid-morning, and every dashboard opened before that would
+   otherwise say "not in the floor's site yet" for the rest of the day and
+   report no note at all - which makes SUPPORT.md's "a line the moment it
+   arrives" a lie. So "there is no such list" means ASK AGAIN LATER, on a
+   longer clock than a dropped connection because it changes less often. */
+const NOTES_RETRY_MS = 60000;        // a passing failure: the workshop wifi
+const NOTES_MISS_RETRY_MS = 300000;  // no such list, or no permission yet
+let NOTES_SOFT = 0;                  // when the last read did not answer
+let NOTES_SOFT_MS = 0;               // ... and how long to leave it before asking again
+/** Remember to ask again, and when. */
+function notesAgain(ms) { NOTES_SOFT = Date.now(); NOTES_SOFT_MS = ms; }
+/** Is it time to ask? A channel that has just failed is left alone until its
+    own clock says otherwise - which is what stops the ten-second poll asking a
+    refusing list six times a minute for the rest of the afternoon. */
+function notesDue() { return !NOTES_SOFT || Date.now() - NOTES_SOFT >= NOTES_SOFT_MS; }
+/** What a failed read means, in one place, for the read and for the poll's own
+    delta. It can set the channel's three states and nothing else: not
+    STATION_OK, not STATION_WHY, not STATION_ERR. The board is a different list
+    and a different question. */
+function notesTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  const consent = /permission needed/.test(m);
+  const missing = !!(CW.isMissing && CW.isMissing(e));
+  if (STATION_NOTES_OK !== true) {
+    STATION_NOTES_OK = false;
+    STATION_NOTES_WHY = consent ? STATION_NEED_CONSENT
+      : missing ? ST.COMMENT_MISSING_OFFICE : ST.COMMENT_UNREACHABLE;
+  }
+  notesAgain(consent || missing ? NOTES_MISS_RETRY_MS : NOTES_RETRY_MS);
+  if (!stationWarned) { stationWarned = true; console.warn("[station] could not read the notes list:", m); }
+}
+async function readStationNotes() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  if (typeof ST === "undefined") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      STATION_NOTES_OK = false; STATION_NOTES_WHY = STATION_NEED_CONSENT;
+      notesAgain(NOTES_MISS_RETRY_MS);          // granted later, without a reload
+      return null;
+    }
+    const siteId = await CW.stationSite();
+    if (!siteId) {
+      STATION_NOTES_OK = false; STATION_NOTES_WHY = STATION_SITE_MISSING;
+      notesAgain(NOTES_MISS_RETRY_MS);
+      return null;
+    }
+    const items = await CW.listItems(ST.COMMENT_LIST, { siteId: siteId, fields: ST.COMMENT_FIELDS });
+    if (items == null) {
+      /* THE list-is-not-there PATH, and the one that matters tomorrow: this is
+         not a throw, it is listItems answering null. Ask again in five minutes,
+         so the morning the owner creates the list every open dashboard picks it
+         up on its own. */
+      STATION_NOTES_OK = false; STATION_NOTES_WHY = ST.COMMENT_MISSING_OFFICE;
+      notesAgain(NOTES_MISS_RETRY_MS);
+      return null;
+    }
+    STATION_NOTES = stationNotesRecent(items); NOTES_UNREAD = null;
+    STATION_NOTES_OK = true; STATION_NOTES_WHY = ""; NOTES_SOFT = 0; NOTES_SOFT_MS = 0;
+    stationResetFeed("notes");
+    noteFloorNotes();          // the first read is the baseline, not 400 Changes lines
+    return STATION_NOTES;
+  } catch (e) {
+    /* a note channel that cannot be read must not be able to take the board
+       away, so this failure is its own and never touches STATION_OK */
+    notesTrouble(e);
+    return null;
+  }
+}
+let stationNotesReading = null;
+/** One read shared by every caller - a drawer opening asks once.
+    `then` re-renders the drawer, and the drawer calls this again, so the guard
+    above it has to be one that CANNOT stay open: a read that answered nothing
+    at all (no ST, no CW - a page that never loaded station-core.js) leaves
+    STATION_NOTES_OK null for ever, and without this second guard those two
+    would call each other until the process gave up. Found by test_alerts,
+    which loads app.js without station-core.js and hung. */
+function stationNotesReadIfNeeded(then) {
+  const retry = !!(NOTES_SOFT && Date.now() - NOTES_SOFT >= NOTES_SOFT_MS);
+  if (STATION_NOTES_OK !== null && !retry) return;
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW ||
+      typeof CW.listItems !== "function") return;
+  if (retry) { NOTES_SOFT = 0; NOTES_SOFT_MS = 0; }   // one go, not one per caller
+  if (!stationNotesReading)
+    stationNotesReading = readStationNotes().then(r => { stationNotesReading = null; return r; },
+                                                  () => { stationNotesReading = null; });
+  stationNotesReading.then(() => { if (then) then(); });
+}
+
+/* ---- which notes the office has already been told about ---------------------
+   This has to survive a reload, and review finding 1 is why. `CHANGES` is
+   restored from localStorage, so the LINES survive; if the set of ids did not,
+   then closing the browser overnight with three notes waiting and opening it in
+   the morning would seed all three as "already seen" and announce none of them
+   - which is the whole notification, gone, on every reload rather than only
+   overnight.
+
+   So it is kept in localStorage beside `cw_changes`, newest 500 ids. Three
+   states, and they are different things:
+
+     · the key is ABSENT - this browser has never looked at this list. Today's
+       notes are not news to somebody who has never seen the feature, so they
+       are seeded silently and the key is written;
+     · the key is THERE - anything not in it is news, however old it is, which
+       is exactly the overnight case;
+     · the key is unreadable - fall back to the ids of the floor lines already
+       in the restored CHANGES, so an upgrade or a cleared key still does not
+       re-announce what is plainly on screen.                                 */
+const NOTES_SEEN_KEY = "cw_notesseen";
+const NOTES_SEEN_MAX = 500;
+let NOTES_SEEN = null;         // id -> 1, once restored or seeded
+let NOTES_SEEN_ORDER = [];     // the same ids in the order they were seen, for the cap
+function notesSeenMark(id) {
+  const k = String(id);
+  if (!k || NOTES_SEEN[k]) return false;
+  NOTES_SEEN[k] = 1; NOTES_SEEN_ORDER.push(k);
+  return true;
+}
+function saveNotesSeen() {
+  if (NOTES_SEEN_ORDER.length > NOTES_SEEN_MAX) {
+    /* AN ID OF A ROW THE LIST STILL HOLDS IS NEVER DROPPED, and review bug A is
+       why. The cap used to take the oldest ids whatever they were, while
+       noteFloorNotes walks every row the feed holds every time - so the moment
+       the list passed 500 rows the oldest ones fell out of the memory and were
+       announced again as new, which evicted a different block, which was then
+       announced again on the next pass. It never settles: measured at exactly
+       (rows - 500) false lines per pass, every pass, and noteFloorNotes runs on
+       every successful delta - six times a minute for five minutes whenever a
+       list has refused a delta. The 400-entry Changes panel would fill with
+       ghosts and push every real change out of it.
+
+       So the cap is a cap on MEMORY OF ROWS THAT ARE GONE. An id still in the
+       feed cannot be evicted, which makes re-announcing one impossible; the
+       list can therefore run over NOTES_SEEN_MAX, and a bigger key is the right
+       side to err on. What keeps that bounded is the ninety-day window the feed
+       itself now holds (stationNotesRecent), and an id that has aged out of the
+       window can never come back into it. */
+    const live = {};
+    (STATION_NOTES || []).forEach(it => { if (it && it.id != null) live[String(it.id)] = 1; });
+    let over = NOTES_SEEN_ORDER.length - NOTES_SEEN_MAX;
+    const keep = [];
+    NOTES_SEEN_ORDER.forEach(k => {
+      if (over > 0 && !live[k]) { over--; delete NOTES_SEEN[k]; return; }   // oldest first
+      keep.push(k);
+    });
+    NOTES_SEEN_ORDER = keep;
+  }
+  try { localStorage.setItem(NOTES_SEEN_KEY, JSON.stringify(NOTES_SEEN_ORDER)); } catch (e) {}
+}
+/** Put the set back from where it was left. false = this browser has never
+    looked at this list, and the caller should seed it silently. */
+function notesSeenRestore() {
+  NOTES_SEEN = {}; NOTES_SEEN_ORDER = [];
+  let raw = null;
+  try { raw = localStorage.getItem(NOTES_SEEN_KEY); } catch (e) {}
+  if (raw) {
+    try {
+      const ids = JSON.parse(raw);
+      if (Array.isArray(ids)) { ids.forEach(notesSeenMark); return true; }
+    } catch (e) { /* unreadable: the fallback below */ }
+  }
+  /* no key, or rubbish in it: the floor lines already on screen are the ones
+     this browser has certainly announced */
+  let had = false;
+  (CHANGES || []).forEach(c => { if (c && c.src === "floor" && c.noteId && notesSeenMark(c.noteId)) had = true; });
+  return had;
+}
+function noteFloorNotes() {
+  if (typeof ST === "undefined" || !ST.commentRows) return 0;
+  const rows = ST.commentRows(STATION_NOTES || []);
+  if (NOTES_SEEN === null && !notesSeenRestore()) {
+    /* never looked here before: today's notes are not news */
+    rows.forEach(r => notesSeenMark(r.id));
+    saveNotesSeen();
+    return 0;
+  }
+  let n = 0;
+  rows.forEach(r => {
+    if (!notesSeenMark(r.id)) return;
+    /* the Changes panel, which is the notification (spec, "Notification"): no
+       new column on the job row, no new window, and NOT a Dashboard Log line -
+       the floor's note is already recorded in the floor's own list, and writing
+       it into the workbook from every open dashboard would put the same note in
+       the log as many times as there are screens. */
+    CHANGES.unshift({ at: r.at || new Date().toISOString(), who: r.who || "the floor",
+                      job: r.job, what: ST.commentChangeWords(r),
+                      from: "", to: r.text, src: "floor", noteId: r.id });
+    n++;
+  });
+  saveNotesSeen();
+  if (n) { saveChanges(); updateChangeBtn(); }
+  return n;
+}
+
+/* ---- has anybody at this screen opened this job? (amendment E2) ------------
+   A SECOND memory, deliberately not the first one. `cw_notesseen` answers "has
+   the Changes panel announced this note" and is a set of ids; this one answers
+   "has a person at this screen opened the job", and is one stamp per job: the
+   `At` of the newest note that was on the list when its drawer was opened. One
+   entry a job rather than one an id, so it never needs the cap the other one
+   has, and the two must not be merged - a Changes line scrolling past is not
+   somebody reading the note.
+
+   Per screen on purpose: two office computers each show the icon until each of
+   them opens the job. Nothing is seeded on a fresh browser either - a screen
+   that has never opened a job has genuinely not seen its notes.
+
+   One entry a job: `{ at: <the newest DATED note seen>, ids: [<the id of every
+   UNDATED note seen>] }`. The ids are the fix pass of 2026-09-16: a note with
+   no `At` has no place on a timeline, and the first shape of this key had the
+   stamp standing in for it - which made every undated note typed after the job
+   was first opened invisible from birth. A stamp cannot say "and that one"; an
+   id can. Dated notes still cost nothing per note, and an undated one is a row
+   somebody typed into SharePoint by hand, which is rare by construction.    */
+const NOTES_READ_KEY = "cw_notesread";
+let NOTES_READ = null;                 // JOB -> { at, ids }, the notes seen at this screen
+let NOTES_UNREAD = null;               // the unread rows by job, rebuilt at every paint
+/** One job's entry in the shape the rest of this works in, whatever is in the
+    key - including the bare `"<ISO>"` string the first build of this feature
+    wrote, so a browser that ran that build reads rather than throws. */
+function notesReadValue(v) {
+  if (typeof v === "string") return { at: v, ids: [] };
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { at: "", ids: [] };
+  return { at: v.at == null ? "" : String(v.at),
+           ids: Array.isArray(v.ids) ? v.ids.map(String) : [] };
+}
+function notesReadRestore() {
+  NOTES_READ = {};
+  let raw = null;
+  try { raw = localStorage.getItem(NOTES_READ_KEY); } catch (e) {}
+  if (!raw) return;
+  try {
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object" || Array.isArray(o)) return;
+    Object.keys(o).forEach(k => { NOTES_READ[k] = notesReadValue(o[k]); });
+  } catch (e) { /* unreadable: everything is unread, which is the safe way round */ }
+}
+function saveNotesRead() {
+  try { localStorage.setItem(NOTES_READ_KEY, JSON.stringify(NOTES_READ)); } catch (e) {}
+}
+/** What this screen has seen of one job, `{ at: "", ids: [] }` when nothing. */
+function notesReadEntry(job) {
+  if (NOTES_READ === null) notesReadRestore();
+  return notesReadValue(NOTES_READ[job]);
+}
+/** The unread notes, by job. A dated note is unread while it is NEWER than the
+    stamp - by the moment it names (ST.atCmp), never as text. An undated one
+    (typed into SharePoint by hand) is unread until its own id has been seen. */
+function notesUnreadMap() {
+  const out = {};
+  if (typeof ST === "undefined" || !ST.commentRows) return out;
+  const ent = {};                      // one entry per job, not one per note
+  ST.commentRows(STATION_NOTES || []).forEach(r => {
+    const e = ent[r.job] || (ent[r.job] = notesReadEntry(r.job));
+    const unread = r.at ? ST.atCmp(r.at, e.at) > 0 : e.ids.indexOf(r.id) < 0;
+    if (unread) (out[r.job] = out[r.job] || []).push(r);
+  });
+  return out;
+}
+/** Rebuilt once a paint by whoever is about to draw rows or cards, so a row
+    costs a lookup rather than a walk of the whole notes list. */
+function notesUnreadFresh() { NOTES_UNREAD = notesUnreadMap(); return NOTES_UNREAD; }
+function notesUnreadFor(job) {
+  if (!NOTES_UNREAD) notesUnreadFresh();
+  return NOTES_UNREAD[job] || [];
+}
+/** Opening a job is what "seen" means. true = the entry moved, so the rows are
+    showing an icon that has just stopped being true. */
+function markNotesRead(job) {
+  if (!job || typeof ST === "undefined" || !ST.commentRows) return false;
+  const rows = ST.commentRows(STATION_NOTES || [], { job: job });
+  if (!rows.length) return false;              // nothing to have seen: no entry is written
+  const was = notesReadEntry(job);
+  let at = was.at;
+  const ids = was.ids.slice();
+  rows.forEach(r => {
+    if (r.at) { if (ST.atCmp(r.at, at) > 0) at = r.at; return; }
+    /* an undated note is remembered BY ID and by nothing else. A clock reading
+       in its place would be a stamp newer than every note on screen, which
+       would bury the NEXT undated note somebody types. Ids already here are
+       kept rather than pruned to what the feed holds: a read that came back
+       short would otherwise un-see a note. */
+    if (r.id && ids.indexOf(r.id) < 0) ids.push(r.id);
+  });
+  if (at === was.at && ids.length === was.ids.length) return false;
+  NOTES_READ[job] = { at: at, ids: ids }; saveNotesRead(); NOTES_UNREAD = null;
+  return true;
+}
+
 /** The last ninety days of the log, by At. */
 function stationLogRecent(items, now) {
   const since = ST.logSince(ST.LOG_DAYS, now);
@@ -1489,6 +1801,19 @@ function stationLogRecent(items, now) {
     const at = String(((it && it.fields) || {}).At || "");
     return !at || at >= since;
   });
+}
+/** The same window for the notes, and for the same reason: nothing ever
+    deletes from either list, so after a year each is mostly last spring. A note
+    is about a job that was in production at the time, and no drawer on this
+    screen shows a job from three months ago. A row with no stamp at all is
+    kept, because dropping it would hide a note rather than an old one. */
+function stationNotesRecent(items, now) { return stationLogRecent(items, now); }
+/** What a feed keeps of what it has just read. Two of the four hold a window
+    rather than the lot; the other two hold everything they are given. */
+function feedRows(key, rows) {
+  if (key === "log") return stationLogRecent(rows);
+  if (key === "notes") return stationNotesRecent(rows);
+  return rows;
 }
 
 /** The people the floor picks from, read once - the log window's person filter
@@ -1586,17 +1911,29 @@ let STATION_SITE_GEN = 0;               // which site the tokens in hand belong 
    ROWS_DRAWN is the rows the list last drew, so the second question can be
    asked without filtering and sorting the whole sheet again. */
 let ROWS_GLASS = false, ROWS_CHIPS = "", ROWS_DRAWN = [], ROWS_STALE = false, ROWS_QUIET = false;
+let CHIPS_GLASS = false;               // did the last chipsNow() find any glass on screen?
 
 /** What the chips of the rows on screen say, as one string to compare against.
     A record with no glasses on it is in here too, as nothing: it draws no chip
     today, but a total arriving is a change the list has to show. */
 function chipsNow() {
-  let s = "";
+  let glass = "", notes = "";
+  /* the unread notes are rebuilt here and read a row at a time below, so
+     drawing seven hundred rows walks the notes list once, not once a row */
+  const unread = notesUnreadFresh();
   for (let i = 0; i < ROWS_DRAWN.length; i++) {
     const j = ROWS_DRAWN[i], g = stationForJob(j.id);
-    if (g) s += j.id + ":" + g.cut + "," + g.hotmelt + "," + g.glazed + "/" + g.total + "|";
+    if (g) glass += j.id + ":" + g.cut + "," + g.hotmelt + "," + g.glazed + "/" + g.total + "|";
+    /* the note icon is part of what a row is saying (amendment E2), so a note
+       arriving - or somebody at this screen opening the job - repaints the rows
+       down the same quiet path a counter moving does */
+    const u = unread[j.id];
+    if (u) notes += j.id + ":n" + u.length + "|";
   }
-  return s;
+  /* what the rows are worth to the POLL is still the glass alone: an unread
+     note is no reason to ask the floor's lists for a delta six times a minute */
+  CHIPS_GLASS = glass !== "";
+  return glass + notes;
 }
 /** A repaint the list was too busy for is owed, not lost: the poll's own clock
     takes it as soon as whoever was typing or dragging has finished, so the rows
@@ -1632,8 +1969,16 @@ async function stationFull(key, siteId, gen) {
   const f = STATION_FEEDS[key];
   const all = await CW.listItems(f.list(), { siteId: siteId, fields: f.fields() });
   if (gen !== feedGen(f)) return false;            // somebody replaced it while we read
-  if (all == null) return false;
-  f.set(key === "log" ? stationLogRecent(all) : all);
+  /* NULL, NOT FALSE, and the difference is the whole of review bug B: `false`
+     here meant both "nothing to do" and "there is no such list any more", so a
+     list renamed, deleted, or left behind when the others moved site read as a
+     quiet success - the feed kept reporting healthy, kept showing rows nobody
+     could refresh, and kept asking for the list every ten seconds for ever.
+     `listItems` itself uses null for exactly this and says so; so does this.
+     Every existing caller tests it for truth, where null and false are the
+     same, so only a caller that looks for null sees any difference. */
+  if (all == null) return null;
+  f.set(feedRows(key, all));
   return true;
 }
 /** One list, brought up to date the cheap way. true = something moved. */
@@ -1665,12 +2010,12 @@ async function stationDelta(key, siteId) {
     return await stationFull(key, siteId, gen);
   }
   if (gen !== feedGen(f)) return false;            // a feed or a full read landed while this was in the air
-  if (d == null) return false;                     // the list is not there
+  if (d == null) return null;                      // the list is not there - see stationFull
   f.off = 0;                                       // it served one: it is not a refusing list
   f.token = d.next || null;
   if (!had) {                                      // the first pass enumerates the lot
     const rows = d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
-    f.set(key === "log" ? stationLogRecent(rows) : rows);
+    f.set(feedRows(key, rows));
     return true;
   }
   if (!d.items.length) return false;
@@ -1693,6 +2038,59 @@ async function stationPoll() {
     if (gen !== STATION_SITE_GEN) { stationSiteMoved(gen); }
     let moved = await stationDelta("items", siteId);
     if (STATION_LOG_OK === true && (await stationDelta("log", siteId))) moved = true;
+    /* THE NOTES ARE THEIR OWN LIST, THEIR OWN STATES AND THEIR OWN FAILURES
+       (review finding 2). `stationDelta` only swallows the 4xx that means
+       "start the delta again"; a 503 or a dropped connection is re-thrown. Left
+       in the line with the board's own deltas, one bad answer from the notes
+       list would land in this function's catch, put "cannot reach the floor's
+       lists" over a board that was read perfectly well, and - much worse -
+       return before `glassColourRun()`, so a floor tap made that cycle would
+       not reach the Production sheet. A flapping notes list could stall the
+       glass colours indefinitely.
+
+       So it gets its own try, and nothing inside it can touch `moved` until it
+       has succeeded, or `STATION_ERR` at all. */
+    if (STATION_NOTES_OK === true && notesDue()) {
+      try {
+        const got = await stationDelta("notes", siteId);
+        /* NULL MEANS THE LIST IS NOT THERE ANY MORE (review bug B). It is not a
+           throw and it never was: the list was renamed, or deleted, or left
+           behind in the old site when the others were moved across - which is
+           exactly the migration docs/STATIONS.md describes, and `Station
+           comments` is the one list that postdates those notes. Read as "false,
+           nothing moved", the channel stayed `true` with no clock armed, so
+           this gate was satisfied on every pass for ever: a fresh enumeration
+           of a list that is not there every ten seconds (~8,600 requests a day
+           per open screen), a drawer still rendering rows nobody could refresh
+           with nothing to say they were stale, and no Changes line ever again.
+           It degrades exactly the way readStationNotes does thirty lines up. */
+        if (got === null) {
+          STATION_NOTES_OK = false;
+          STATION_NOTES_WHY = ST.COMMENT_MISSING_OFFICE;
+          notesAgain(NOTES_MISS_RETRY_MS);
+          if (!stationWarned) {
+            stationWarned = true;
+            console.warn("[station] the “" + ST.COMMENT_LIST + "” list is no longer there");
+          }
+        } else if (got) {
+          moved = true;
+          noteFloorNotes();              // one Changes line per note nobody has seen
+        }
+      } catch (e) {
+        /* the channel's own state and nothing else's. A channel that HAS read
+           the list keeps its rows on screen through a blip - blanking a job's
+           notes over one 503 would be worse than showing them a minute stale -
+           and simply stops asking until its own clock comes round. */
+        notesTrouble(e);
+      }
+    } else if (STATION_NOTES_OK !== true) {
+      /* ... and when it is not readable, this is what asks again: a list that
+         did not exist when the page opened is picked up on its own, without a
+         reload and without anybody opening a drawer (review finding 4). Self-
+         guarded by the retry clock, so it costs nothing on the passes in
+         between. */
+      stationNotesReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
+    }
     STATION_ERR = "";
     if (moved) {
       redrawStation();
@@ -1718,8 +2116,8 @@ async function stationPoll() {
     the people who are in it. */
 function stationSiteMoved(gen) {
   STATION_SITE_GEN = gen;
-  stationResetFeed("items"); stationResetFeed("log");
-  STATION_FEEDS.items.off = 0; STATION_FEEDS.log.off = 0;
+  stationResetFeed("items"); stationResetFeed("log"); stationResetFeed("notes");
+  STATION_FEEDS.items.off = 0; STATION_FEEDS.log.off = 0; STATION_FEEDS.notes.off = 0;
   STATION_FEED = { hash: "", at: 0 }; saveStationFeed();
   STATION_PEOPLE = null; stationPeopleReading = null;
   console.log("[station] the floor's lists have moved: feeding and re-reading the new site");
@@ -2071,6 +2469,12 @@ function stationAfterFeed() {
   if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); }
   else renderRows();
   stationReadIfNeeded(() => { if (!state.board) renderRows(); });
+  /* the floor's notes are read once per page here, not when a drawer happens to
+     open: the Changes line is the whole notification, and a note nobody has
+     opened a drawer to look for is exactly the one that needs announcing. The
+     first read is only a baseline (noteFloorNotes seeds itself); every note
+     after it reaches Changes on the ten-second poll. */
+  stationNotesReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
 }
 
 /** What the floor has on one job, whether it is still on their board or not.
@@ -4738,8 +5142,53 @@ function glassChip(j) {
     '">Glass ' + done + '/' + steps + '</span>';
 }
 
+/** The unread-notes icon, on a job row and on a station board card (amendment
+    E2). A read and nothing else: it says how many notes on this job nobody at
+    this screen has opened yet, puts them in the native `title` the flag chip
+    already uses, and opens the drawer at the Floor notes section when clicked.
+    Empty - not a nought, not a grey icon - the moment there is nothing unread,
+    which is every row on a screen that keeps up with the floor. */
+function notesIconHtml(job) {
+  const rows = notesUnreadFor(job);
+  if (!rows.length) return "";
+  const why = rows.map(r => [r.station || "floor", r.who || "—", stWhen(r.at), r.text]
+    .filter(Boolean).join(" · ")).join("\n");
+  return '<span class="badge notesbadge" data-notes="' + esc(job) + '" draggable="false" ' +
+    'role="button" tabindex="0" title="' + esc(why) + '">💬 ' + rows.length + '</span>';
+}
+/** Did this click land on the notes icon rather than on the row under it? */
+const inNotesIcon = t => !!(t && t.closest && t.closest("[data-notes]"));
+/** Open a job at its floor notes. The stamp is written by renderDrawer, so
+    every route into a drawer marks the job seen and this one only has to take
+    the screen there. */
+function openJobNotes(id) {
+  if (!id || !byId(id)) return;
+  state.sel = id; state.edit = false;
+  renderRows(); openDrawer();
+  const sec = $("#floornotes");
+  if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+/** The icon's own handlers, wherever it is drawn. The click must not reach the
+    row - it would open the drawer a second time - and the row is draggable, so
+    a press on a badge must not become the start of a drag either. */
+function wireNotesIcons(scope) {
+  if (!scope || !scope.querySelectorAll) return;
+  scope.querySelectorAll("[data-notes]").forEach(b => {
+    b.onclick = e => {
+      if (e.stopPropagation) e.stopPropagation();
+      if (e.preventDefault) e.preventDefault();
+      openJobNotes(b.dataset.notes);
+    };
+    b.ondragstart = e => {
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      return false;
+    };
+  });
+}
+
 function rowHtml(j, i, max) {
-  const c = comp(j), T = tot(c), w = (T / max) * 110, st = label(j), green = !!j.done;
+  const st = label(j), green = !!j.done;
   const fab = j.prods.some(p => (p.st || []).indexOf("process") >= 0);
   const cpn = cpInProgress(j);
   const picked = !!state.picked[j.id];
@@ -4751,11 +5200,12 @@ function rowHtml(j, i, max) {
     '<span class="ell" style="color:var(--ink-2)">' + esc(j.area || "—") + '</span>' +
     '<span><span class="badge" style="background:var(--surface-2);color:var(' + st.c + ')">' + esc(statusWord(j)) + '</span></span>' +
     wndDrsCell(j) +
-    '<span style="display:flex;align-items:center;gap:8px"><span class="mini" style="width:110px">' +
-      '<i style="width:' + (T ? c.f / T * w : 0) + 'px;background:var(--f)"></i>' +
-      '<i style="width:' + (T ? c.s / T * w : 0) + 'px;background:var(--s)"></i>' +
-      '<i style="width:' + (T ? c.t / T * w : 0) + 'px;background:var(--t)"></i></span>' +
-      '<span class="tab" style="font-size:12px;color:var(--ink-3)">' + T + '</span></span>' +
+    /* the Components F·S·T cell, emptied 2026-09-16 on the owner's word
+       ("no real info comes from this, i might add something later"): the cell
+       and its column stay exactly where they were, so nothing on the row moves
+       and the space is kept for whatever goes in it next. The drawer's own
+       "N components" tile, the exports and the parser are untouched. */
+    '<span></span>' +
     /* the floor's own column, straight from their list - nothing here reads or
        writes anything, on the sheet or off it. It has a cell of its own because
        the badge cell hides what overflows it, and a clipped "Glass 48/48" reads
@@ -4764,6 +5214,10 @@ function rowHtml(j, i, max) {
        placeholder. */
     '<span>' + glassChip(j) + '</span>' +
     '<span style="display:flex;gap:4px;overflow:hidden">' +
+      /* the unread-notes icon, FIRST in this cell because this is the cell that
+         hides what overflows it and an icon nobody can see is no notification.
+         Still not a column of its own (owner's rule, 2026-09-09). */
+      notesIconHtml(j.id) +
       j.sheets.slice(0, 2).map(s => '<span class="stn">' + esc(s) + '</span>').join("") +
       /* the colour-code chip lives here, with the other badges, because this is
          the cell that already handles overflow - in the job-number column it
@@ -4781,9 +5235,11 @@ function rowHtml(j, i, max) {
 }
 
 function wireRows(scope) {
+  wireNotesIcons(scope);
   scope.querySelectorAll(".row[data-id]").forEach(el => {
     el.onclick = e => {
       if (e.target.classList.contains("pick")) return;
+      if (inNotesIcon(e.target)) return;         // the icon has its own way in
       state.sel = el.dataset.id; state.edit = false; renderRows(); openDrawer();
     };
     const cb = el.querySelector(".pick");
@@ -4792,6 +5248,8 @@ function wireRows(scope) {
       el.classList.toggle("picked", cb.checked); renderChips();
     };
     el.ondragstart = e => {
+      /* a press on the notes icon is a click, never the start of a row drag */
+      if (inNotesIcon(e.target)) { if (e.preventDefault) e.preventDefault(); return false; }
       const ids = Object.keys(state.picked).length ? Object.keys(state.picked) : [el.dataset.id];
       e.dataTransfer.setData("text/plain", ids.join(","));
       e.dataTransfer.effectAllowed = "move";
@@ -4888,6 +5346,64 @@ function stLogRowHtml(r) {
     '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>';
 }
 
+/** Every station's notes about one job, oldest first - the office's half of the
+    channel the floor writes from its tablets (2026-09-15).
+
+    Deliberately NOT filtered by station: the tablet shows a station its own
+    notes, and this is the one place where everything anybody on the floor has
+    said about a job comes together. Deliberately not on the job row either
+    (owner's rule, 2026-09-09: per-job detail goes in the card). Read-only -
+    there is no reply box in this build, and no way to edit or remove a note
+    from either side.
+
+    A note wears `class="cmt"`, which is the COMMENTS section's own class and is
+    shared on purpose: the two sections are the same shape of thing and are read
+    one under the other, so whatever look that class is given, both should take
+    it. Neither has a rule in index.html today - both draw as plain stacked
+    blocks inside the section's flex column - and that is the point: the day
+    somebody styles `.cmt`, Floor notes follows Comments rather than drifting
+    away from it. (The tablet's own `.cmt` in glass.html is a different page and
+    a different stylesheet; nothing is shared between them but the name.) */
+/** One note, as the drawer and the station board both draw it (amendment E3):
+    which station, who, when, and what they wrote. One helper, so a card and a
+    drawer can never drift into saying the same note two different ways. */
+function floorNoteLineHtml(r) {
+  return '<div class="cmt"><div style="display:flex;justify-content:space-between;gap:8px;' +
+      'font-size:11px;color:var(--ink-3);margin-bottom:4px">' +
+      '<span><span class="badge" style="background:var(--surface-2);color:var(--ink-2);margin-right:6px">' +
+        esc(r.station || "floor") + '</span>' +
+      '<strong style="color:var(--ink-2)">' + esc(r.who || "—") + '</strong></span>' +
+      '<span class="tab">' + esc(stWhen(r.at)) + '</span></div>' +
+    '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">' + esc(r.text) + '</div></div>';
+}
+function floorNotesHtml(j) {
+  if (typeof ST === "undefined" || !ST.commentRows || !j) return "";
+  /* the id the row's note icon scrolls to (amendment E2) */
+  const head = '<div class="sect" id="floornotes"><span class="kick">Floor notes</span>';
+  const foot = '<div style="font-size:11.5px;color:var(--ink-4);margin-top:6px">Typed on a floor ' +
+    'tablet against this job, kept in the “Station comments” list and read here only. ' +
+    'Nothing in the Excel file is involved.</div></div>';
+  if (STATION_NOTES_OK === null) return head + '<div class="cphint">' + esc(STATION_CHECKING) + '</div>' + foot;
+  if (STATION_NOTES_OK !== true)
+    return head + '<div class="cphint">' + esc(STATION_NOTES_WHY || ST.COMMENT_MISSING_OFFICE) + '</div>' + foot;
+  const rows = ST.commentRows(STATION_NOTES || [], { job: j.id });
+  if (!rows.length)
+    return head + '<div style="font-size:13px;color:var(--ink-4)">' + esc(ST.COMMENT_EMPTY_OFFICE) + '</div>' + foot;
+  return head + rows.map(floorNoteLineHtml).join("") + foot;
+}
+
+/** The same job's notes on a station board card (amendment E3), under the
+    "last:" line: every station's, oldest first, the same line the drawer draws.
+    The channel's three states - checking, missing, unreachable - say NOTHING
+    here: the drawer is where the explained state lives, and a banner across
+    four hundred cards would be the feature shouting about itself. */
+function floorNotesCardHtml(job) {
+  if (typeof ST === "undefined" || !ST.commentRows || STATION_NOTES_OK !== true) return "";
+  const rows = ST.commentRows(STATION_NOTES || [], { job: job });
+  if (!rows.length) return "";
+  return '<div class="stnotes">' + rows.map(floorNoteLineHtml).join("") + '</div>';
+}
+
 /** The stages worth drawing for one record. Tuff is a fourth counter against a
     quantity most jobs do not have, and a "Tuff 0 of 0" line on every card would
     be four hundred rows of nothing: it appears only on the jobs that have tuff
@@ -4924,6 +5440,7 @@ function stationBoardHtml() {
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
      own screen: the two boards are read side by side over the phone */
   const order = board.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
+  notesUnreadFresh();                  // the cards carry the same icon the rows do
   return trouble + order.map(g => {
     const last = ST.logLast(log, g.job);
     return '<div class="stcard' + (g.finished ? " done" : "") + '">' +
@@ -4931,11 +5448,13 @@ function stationBoardHtml() {
         '<span class="cond tab stjob">' + esc(g.job) + '</span>' +
         '<span class="stcust">' + esc(g.customer || "\u2014") + '</span>' +
         '<span class="stcount tab">' + esc(ST.glassWords(g.total)) + '</span>' +
+        notesIconHtml(g.job) +
         '<span class="stfed">' + esc(g.fedAt ? "fed " + agoWords(g.fedAt) : "not fed yet") + '</span>' +
       '</div>' +
       '<div class="stbars">' + stStages(g).map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
       (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(ST.stageLabel(last.stage)) +
         ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
+      floorNotesCardHtml(g.job) +
     '</div>';
   }).join("");
 }
@@ -5087,6 +5606,7 @@ function renderRows() {
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
     host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
+    wireNotesIcons(host);              // the card's note icon opens the job, as the row's does
     const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.jobBoard(STATION_ITEMS || []).length : 0;
     $("#count").textContent = n ? "Showing " + n + " job" + (n > 1 ? "s" : "") + " on the Glass station board"
                                 : "Glass station";
@@ -5102,7 +5622,7 @@ function renderRows() {
   const wasGlass = ROWS_GLASS;
   ROWS_DRAWN = list;
   ROWS_CHIPS = chipsNow();
-  ROWS_GLASS = ROWS_CHIPS !== "";
+  ROWS_GLASS = CHIPS_GLASS;
   ROWS_STALE = false;
   if (ROWS_GLASS !== wasGlass) stationTick();
 
@@ -5761,6 +6281,11 @@ function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dho
 function renderDrawer() {
   const host = $("#dhost"); if (!host) return;
   const j = byId(state.sel); if (!j) return;
+  /* a job whose drawer is open has been seen, by whichever route got here - and
+     the notes often land a poll AFTER it opened, which is why this is here and
+     not in openDrawer(). The rows lose the icon down the quiet path, or owe the
+     repaint if somebody is dragging or typing in them. */
+  if (markNotesRead(j.id)) { if (rowsInUse()) ROWS_STALE = true; else quietRows(); }
   /* the feeder skips a run when nothing has changed, so the station list can
      easily not have been read at all by the time somebody opens a job. Read it
      once, here, or the Glass station section sits on "checking…" for ever. */
@@ -5768,6 +6293,10 @@ function renderDrawer() {
     stationReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
     stationLogReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
   }
+  /* the floor's notes, for EVERY job and not only a glass one: the glass tablet
+     is the only station today, but the channel is every station's and a job
+     with no glass on it can still have had something said about it */
+  stationNotesReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
   const st = label(j), ed = state.edit;
   const isCS = /^[CS]\d/.test(j.id);
   const readyName = isCS ? "Collect & supply only" : "Ready to fit";
@@ -5816,6 +6345,7 @@ function renderDrawer() {
         Object.keys(j.glass).map(k => '<span style="font-size:12.5px;padding:5px 10px;border:1px solid var(--line);border-radius:4px;background:var(--surface-2)">' +
           esc(k.toUpperCase()) + ' <strong class="tab">' + j.glass[k] + '</strong></span>').join("") + '</div></div>' : "") +
       stationSectionHtml(j) +
+      floorNotesHtml(j) +
       (function () {
         const cs = commentsFor(j.id);
         return '<div class="sect"><span class="kick">Comments (' + cs.length + ')</span>' +
@@ -5956,7 +6486,8 @@ function renderChanges() {
     '<div class="logfilters">' +
       '<input class="txt" id="cq" placeholder="Search job, person or field…" value="' + esc(cf.q) + '" style="flex:1;min-width:180px">' +
       '<select class="txt" id="cwho">' + opt("", "Everyone", cf.who) + people.map(p => opt(p, p, cf.who)).join("") + '</select>' +
-      '<select class="txt" id="csrc">' + opt("", "All sources", cf.src) + opt("sheet", "Changed in Excel", cf.src) + opt("dashboard", "Changed here", cf.src) + '</select>' +
+      '<select class="txt" id="csrc">' + opt("", "All sources", cf.src) + opt("sheet", "Changed in Excel", cf.src) +
+        opt("dashboard", "Changed here", cf.src) + opt("floor", "From the floor", cf.src) + '</select>' +
     '</div>' +
     '<div class="loghead"><span class="kick">When</span><span class="kick">Who</span><span class="kick">Job</span>' +
       '<span class="kick">What changed</span><span class="kick">From &rarr; to</span></div>' +
@@ -5967,7 +6498,10 @@ function renderChanges() {
       '<span style="font-weight:600;font-size:12.5px">' + esc(c.who) + '</span>' +
       '<span><button class="stn jump" data-j="' + esc(c.job) + '" style="border:0;cursor:pointer">' + esc(c.job) + '</button></span>' +
       '<span><span class="badge" style="background:var(--surface-2);color:var(' + (c.src === "dashboard" ? "--accent" : "--single") + ');margin-right:6px">' +
-        (c.shared ? "Logged" : c.src === "dashboard" ? "Here" : "Excel") + '</span>' + esc(c.what) + '</span>' +
+        /* "Floor" is its own word: a note from a tablet was neither typed here
+           nor found in the Excel file, and calling it either would be wrong */
+        (c.shared ? "Logged" : c.src === "dashboard" ? "Here" : c.src === "floor" ? "Floor" : "Excel") +
+        '</span>' + esc(c.what) + '</span>' +
       '<span style="font-size:12px">' + (c.from || c.to ?
         '<span style="color:var(--ink-4);text-decoration:line-through">' + esc(c.from || "blank") + '</span> &rarr; ' +
         '<span style="font-weight:600">' + esc(c.to || "blank") + '</span>' : "&mdash;") + '</span></div>').join("")

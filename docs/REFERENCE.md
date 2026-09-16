@@ -1193,3 +1193,215 @@ both halves. `test_station.js` (246) proves `OfficeDone` follows the record and
 does not flap during the switch-on window.
 Reproduced in a stubbed browser with `scratchpad/untick_repro_reload.js` +
 `stub_office_reload.js`, cases R1–R8.
+
+---
+
+## 20. Station comments: a word from the floor to the office
+
+Built 2026-09-15. Spec: `docs/specs/2026-09-15-station-comments.md`.
+
+**What.** A floor worker can leave a note against a job — a shortage, a mistake
+on the sheet, anything that needs a person's attention rather than a tick — and
+the office reads it in that job's drawer. One-way in this build: the floor
+writes, the office reads. **Append-only on both sides**: nothing edits or
+deletes a note, and no affordance for either exists in the code.
+
+**The list.** `Station comments`, beside the other floor lists (the interim
+arrangement of §11 applies unchanged: the workbook's own site until a
+`Floor stations` site exists). One row per note — `Title` (`JOB|unix-ms`, a row
+id and **not** a key: no unique rule, nothing looks a row up by it), `Job`,
+`Station`, `Who`, `Text`, `At`. Named like `Station people` and `Station log`
+because it is every station's, not the glass station's. Never created by code;
+a missing list is a plain, explained state on both pages and nothing is written
+anywhere.
+
+**Built once, for every station.** The whole channel — the composer, the thread,
+the row builder and the two list calls — is `ST.stationComments(cfg)` in
+`station-core.js`, and **`cfg.station` is its only station-specific input**.
+`station.js` passes `ST.STATION_NAME`; a future `cutting.html` passes
+`"Cutting"` and has the feature, with no new list, no new column and nothing to
+add to the office's drawer. The Graph calls are injected (`cfg.listItems`,
+`cfg.listAdd`), so `station-core.js` still knows nothing about Graph and the
+tests need no network.
+
+**The tablet** (`station.js`, styles in `glass.html`). A note button at the foot
+of each job card, carrying the count of **this station's** notes on that job.
+Open, it is that station's own thread — oldest first, "who · how long ago ·
+what they said" — a box and Send. A glass tablet never shows a cutting note:
+the office drawer is where a job's notes come together. Sending is one `listAdd`
+to `Station comments`, the same primitive and the same directness as a
+`Station log` line — no feeder, no upsert, no id looked up, and **no workbook of
+any kind** (the grep gate over `station.js`/`station-core.js`/`glass.html` is
+asserted as a test, not only run by hand). A refused send keeps the typing in
+the box and says so in red; it can never take the board away. A note typed while
+the last one is still in the air is kept rather than wiped, and the box says
+which it is — *"sent — what is in the box is a new note"* — because writing left
+behind on purpose otherwise looks exactly like a note that failed, and the
+obvious answer to that (tap Send again) would post the first note twice. The draft is
+deliberately **not** part of the card's repaint signature — a card rebuilt on
+every keystroke is a caret lost on every keystroke — and `dressCard` puts the
+caret back when something else redraws the card mid-sentence. The list is read
+once at start-up and then only while a composer is actually open, at most every
+`COMMENT_POLL_MS` (20 s): a tablet nobody is writing on sends no request for it.
+
+**The office** (`app.js`). `Station comments` is a fourth entry in
+`STATION_FEEDS`, polled by delta on the floor's own clock (10 s while somebody
+is looking at the floor or has a glass job's drawer open, 60 s otherwise) — the
+spec's "the drawer's own poll cycle, no new polling infrastructure". Read at
+every load (`stationAfterFeed`) rather than only when a drawer opens, because
+the Changes line is the whole notification. `floorNotesHtml(j)` draws a **Floor
+notes** section in the drawer: every station's notes on that job, oldest first,
+tagged with station, person and time, read-only, for **every** job and not only
+a glass one. **No new column on the job row** (owner's rule, 2026-09-09) and no
+new window. A note nobody has seen puts one line in **Changes** — "New floor
+note on `<job>`, from `<station>`, `<who>`", `src: "floor"`, which renders as
+its own **Floor** badge and its own entry in the source filter. The first read
+of the list is a baseline and announces nothing, so a page opening on two
+hundred old notes posts no lines. **Nothing about a note is written into the
+workbook** — not a cell and not a `Dashboard Log` line: the note is already
+recorded in the floor's own list, and a log line per open dashboard would record
+the same note once per screen.
+
+**Not built** (spec's own list): a reply from the office back to the tablet;
+read/unread state per note; any station page but glass.
+
+**Honest limits.** A note on a job with no glass on it reaches the office on the
+slow poll (up to a minute), because the fast rate is decided by whether anybody
+is looking at the floor's work.
+
+**The office holds a ninety-day window of it**, the same one `Station log` gets
+and through the same function (`stationNotesRecent` → `stationLogRecent`),
+applied in `readStationNotes` and in `feedRows` for both the full read and the
+delta's first enumeration. A row with no stamp at all is kept, exactly as the
+log keeps one. Nothing deletes from the list itself — this is a reading window,
+not data loss — and `listItems` still follows `@odata.nextLink` only to
+`LIST_PAGE_CAP` (50 pages of 999) before warning and handing back what it has,
+so a list that ever grew past ~50,000 rows would be read in part. That is the
+remaining future work, and it is years away at a few notes a day.
+
+**Two bugs the second review found in the first fix pass, both now closed:**
+
+- **The seen-ids cap used to re-announce old notes for ever.** `saveNotesSeen`
+  trimmed to the newest 500 ids while `noteFloorNotes` walks *every* row the
+  feed holds, so the moment the list passed 500 rows the oldest ids fell out of
+  the memory, were announced again as new, and evicted a different block, which
+  was announced again next pass — measured at exactly (rows − 500) false lines
+  **per pass**, and `noteFloorNotes` runs on every successful delta (six times a
+  minute for five minutes whenever a list has refused one). The 400-entry
+  Changes panel would fill with ghosts and push every real change out. Fixed by
+  making the cap a cap on **memory of rows that are gone**: an id still in the
+  feed is never evicted, so re-announcing one is impossible, and the window
+  above is what keeps that bounded.
+- **A list that vanished after a good read reported healthy for ever.**
+  `stationFull` returned `false` both for "nothing to do" and for "there is no
+  such list", so a list renamed, deleted, or left behind in the old site when
+  the others moved across (exactly the migration `docs/STATIONS.md` describes —
+  and `Station comments` postdates those notes) left `STATION_NOTES_OK === true`
+  with no clock armed: a fresh enumeration of a list that is not there every ten
+  seconds, ~8,600 requests a day per open screen, a drawer rendering rows nobody
+  could refresh, and no Changes line ever again. Fixed by making both
+  `stationFull` and `stationDelta` answer **`null`** for "there is no such
+  list" — which every existing caller reads as falsy exactly as before — and by
+  the poll's notes branch degrading on it the same way `readStationNotes` does.
+
+**A note with a blank `Station`** shows on every station's tablet, because an
+empty string passes every station's filter — the same rule `logRows` has always
+had. It is only reachable by hand-typing a row into SharePoint; hiding it
+everywhere would lose a note somebody wrote, so it is deliberate. Recorded in
+`docs/STATIONS.md`.
+
+**A board reorder interrupts typing. Not solved — mitigated.** A card is moved
+(`appendChild`) when another job finishes or the office marks one done, and
+moving a node blurs what is inside it. `paintBoard` puts the caret back in the
+note box afterwards, the same way `dressCard` does after a redraw, and the text
+was never at risk (it lives in the draft, and the node is moved rather than
+rebuilt) — but **a programmatic `focus()` does not re-open a tablet's on-screen
+keyboard**, only a finger does, so the person has to **tap the box again to keep
+typing**. Closing it properly means not re-appending a card whose composer is
+open, which is a change to the board-diff logic and was not made. Told plainly
+in `docs/SUPPORT.md`.
+
+**Tests.** `test_comments.js` (44 checks): the row the composer builds; the
+tablet's own-station thread and the drawer's cross-station one; oldest first on
+both, and two notes in one second in the order they were written; a hand-made
+row with only a Title; the card's button and its count; sending as one POST from
+the right station and the right person; **two notes sharing a Title and both
+surviving** — no upsert, no dedupe, nothing assuming uniqueness; a refused send
+keeping the typing; **a note typed while the last one is still in the air never
+being wiped by it landing**; typing never redrawing the card; every boundary of
+the "how long ago" a thread line shows; a second station getting
+the feature from one word; the drawer's section, read-only, with no control of
+any kind; the Changes line in the owner's own words, **a note that arrived while
+the dashboard was shut being announced on the next load and only once**, the
+first look by a browser announcing nothing, and the seen-ids cap trimming its
+map and its list together; **announcing a note calling neither `noteChange` nor
+`CW.appendLog` and sending no write at all** (the real functions, counted, not a
+string match); a missing list on the tablet (an explained line, no box, nothing
+written) and in the drawer, with the floor's board untouched by it; **a list
+that does not exist yet being asked about again and found the moment it is
+made**; **a notes-list failure inside `stationPoll` reaching neither the board's
+error line nor `glassColourRun`, and then backing off**; **a list longer than
+the seen-ids cap announcing nothing twice however many passes run** (driven
+through the real `noteFloorNotes`, since a synthetic `notesSeenMark` test cannot
+see that failure mode); the ninety-day window; **a list that vanishes after a
+good read degrading, arming its clock and then asking for nothing**; and
+over the whole run — no workbook, no `/drive`, no DELETE and no PATCH of a note.
+
+### 20a. Floor notes on the job row and the board (amendment E, 2026-09-16)
+
+Asked for after the real-browser demo of the build above, before the push.
+Spec: `docs/specs/2026-09-15-station-comments.md`, Amendment E. Three changes,
+all in `index.html` / `app.js`; the tablet, the feeder and the workbook are
+untouched, and the office still never writes `Station comments`.
+
+**E1 — the Components F·S·T cell is blanked.** The owner: "we dont need this
+bar for now... i might add something later." The row's Components cell and
+its header text are both emptied in `rowHtml`; the column keeps its width so
+nothing else on the row moves. The drawer's own "N components" tile, the
+exports and the parser are unchanged.
+
+**E2 — an unread-notes icon on the job row.** `notesIconHtml(job)` draws a
+💬-and-count badge in the row's badge cell (never a column of its own — the
+2026-09-09 rule) for whatever that job's floor notes nobody has opened on
+*this screen* yet, with a native `title` tooltip listing each one (station,
+who, when, text). Empty string, not a placeholder, the moment nothing is
+unread. `wireNotesIcons(scope)` binds its click and swallows the drag-start so
+the badge never starts dragging the row underneath it; the click calls
+`openJobNotes(id)`, which selects the job, opens the drawer and
+`scrollIntoView`s the `#floornotes` section. "Seen" is decided by
+`notesUnreadMap()`, one entry per job in memory (`NOTES_UNREAD`, rebuilt by
+`notesUnreadFresh()` once per paint rather than once per row), against what
+is stored in localStorage under `cw_notesread` and loaded by
+`notesReadRestore()`. The stored shape is `{ "<JOB>": { at: "<ISO of the
+newest DATED note seen>", ids: ["<item id>", ...] } }` — an id for every
+*undated* note (typed by hand into SharePoint) because a stamp cannot say
+"and that one, too", only "and everything before this moment". Opening a job
+calls `markNotesRead(job)`, which folds every note's `at` or `id` into that
+entry, saves it, and returns whether anything changed. Every stamp comparison
+anywhere in this feature — newest-seen, note ordering — goes through
+`ST.atCmp(a, b)` (`station-core.js`): parses both sides as dates and compares
+the moments, falling back to a plain text compare only when one side will not
+parse. Comparing the raw ISO strings as text was the first review bug (see
+HISTORY.md): a stamp with milliseconds text-sorts *before* the same instant
+without them, because `.` is below `Z`.
+
+**Unread notes repaint rows without touching the floor's poll rate.**
+`chipsNow()` builds one comparison string per paint from two independent
+halves: a `glass` half (each row's station counters) that also sets
+`CHIPS_GLASS` — the only thing that decides whether the floor's lists get
+polled at the fast 10 s rate — and a `notes` half (each row's unread count,
+from the same `notesUnreadFresh()` call the icon uses) that feeds only the
+diff `ROWS_CHIPS` compares against to decide whether a repaint is owed. A note
+arriving, or a job being opened on this screen, changes the `notes` half and
+so repaints the rows; it never changes `CHIPS_GLASS` and so never speeds up
+the poll a note nobody asked about.
+
+**E3 — every station's notes on the Glass station board card.**
+`floorNoteLineHtml(r)` is the one line-drawing helper — station badge, who,
+`stWhen(r.at)`, the text — used by both `floorNotesHtml(j)` (the drawer's
+existing Floor notes section, now with a `#floornotes` anchor id for E2's
+scroll) and the new `floorNotesCardHtml(job)`, which prints the same lines
+under a board card's "last:" line for every station, not only Glass, oldest
+first. A card with no notes prints nothing; the channel's checking/missing/
+unreachable states are never shown on the board — that explained state stays
+in the drawer only, so four hundred cards do not each grow a banner.

@@ -167,9 +167,17 @@ none of the three.
   really tapped, only after the office has answered a question naming what will
   be destroyed, and only through `ST.officeClearFields(who, at)`, which cannot
   express any value but nought. See `docs/REFERENCE.md` §18.
+- **Tablet → `Station comments`.** Since 2026-09-15 a floor worker can also
+  leave a **note** against a job, from a composer on that job's card. One
+  `listAdd` per note, straight to the list, append-only — nothing edits or
+  deletes one, on either side. The whole channel (composer, thread, row builder
+  and both list calls) is `ST.stationComments(cfg)` in `station-core.js`, whose
+  only station-specific input is `cfg.station`, so a second station page passes
+  its own name and shares the list. The tablet shows a station **its own**
+  notes; the office drawer shows every station's. See `docs/REFERENCE.md` §20.
 - **Office reads by delta.** Apart from that one clear, the master dashboard
   never writes `Glass station`'s floor columns, and never writes `Station
-  people` or `Station log` at all. It reads all three (the people list once, for the log
+  people`, `Station log` or `Station comments` at all. It reads all four (the people list once, for the log
   window's filters) and keeps the board, the drawer's timeline and the log
   window current with `listDelta()` — every 10 seconds while the station
   board, the log window, or a drawer for a job with glass is open
@@ -263,6 +271,8 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | glass station job facts and floor counters | `Glass station` SharePoint list, in the separate `Floor stations` site — shipped 2026-09-08 |
 | who may record which stage on the floor | `Station people` SharePoint list, same site — shipped 2026-09-08 |
 | who moved which counter, and when | `Station log` SharePoint list, same site; written by the tablet, read by the master, never deleted from — shipped 2026-09-08 |
+| a note the floor left against a job | `Station comments` SharePoint list, same site; written by a floor tablet, read by the master in that job's drawer, append-only and never deleted from — 2026-09-15 |
+| a note typed on the tablet but not sent yet | nowhere but the page's own memory: the draft lives in the channel's state and is re-drawn from it, and a refused send keeps it in the box until Send is tapped again |
 | a queued/not-yet-sent checkpoint tap | `cw_cpqueue`, replayed on the next page load |
 | a queued/not-yet-sent station tap | `cw_stationq` (counters) and `cw_stationlogq` (the log lines they owe) — tablet only, shipped 2026-09-08 |
 | a queued tap the office's lock arrived under, so it was dropped rather than sent | `cw_stationblocked` — tablet only, drawn on the card in red until the office unlocks the job (2026-09-10) |
@@ -271,4 +281,6 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | workbook and list ids, once resolved | `cw_fileref`, `cw_listids`, `cw_stationsite` |
 | export presets (filters/fields/format only, never job data) | `cw_exportpresets` |
 | whether the job card's Windows and Doors folds were left open | `cw_cpopen` — one flag per fold, per browser; nothing about a job is in it |
+| which floor notes the Changes panel has already announced | `cw_notesseen` — the ids of announced `Station comments` rows, capped at 500, seeded silently on a browser's first look (2026-09-15) |
+| which jobs' floor notes a person on this screen has opened | `cw_notesread` — `{ JOB: { at, ids } }`: the `At` of the newest dated note seen and the ids of undated ones; drives the unread icon on the job row and the station board card; per browser, never written to SharePoint (2026-09-16) |
 | UI-only preferences | `cw_theme`, `cw_hidden`, `cw_collapsed`, `cw_changes`, `cw_stationtheme` (the tablet's own light/dark, dark by default) |

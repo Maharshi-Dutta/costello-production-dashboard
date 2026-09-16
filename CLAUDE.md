@@ -98,13 +98,17 @@ the one that first wrote them down.
    missing from this rule until 2026-09-11) and, since 2026-09-11,
    **`Dashboard progress` — the single record of checkpoint status, one row
    per `JOB|ITEM`** ([`docs/specs/2026-09-11-status-list-is-truth.md`](docs/specs/2026-09-11-status-list-is-truth.md)); and
-   the floor's three —
-   `Glass station`, `Station people` and
-   `Station log` — in the separate private site `Floor stations`, which the
+   the floor's four —
+   `Glass station`, `Station people`,
+   `Station log` and, since 2026-09-15, **`Station comments`** (one row per note
+   a floor tablet leaves against a job, append-only: nothing edits or deletes
+   one, on either side — [`docs/specs/2026-09-15-station-comments.md`](docs/specs/2026-09-15-station-comments.md)) — in the
+   separate private site `Floor stations`, which the
    station account can reach and the workbook's site cannot be reached from
    (shipped 2026-09-08). No list is created by code; if one is missing the
    feature says which one, plainly, and does nothing. **The office
-   (`app.js`) never writes `Station people` or `Station log`, and never
+   (`app.js`) never writes `Station people`, `Station log` or
+   `Station comments`, and never
    writes the floor's own columns of `Glass station`** (`Cut`, `Hotmelt`,
    `Glazed`, `Tuff` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds
    that list's job-fact columns (which since 2026-09-10 include `TuffTotal`,
@@ -145,7 +149,8 @@ the one that first wrote them down.
      `Station log`. The body can only be built by `ST.officeClearFields(who,
      at)`, which takes a name and a time and so cannot carry a counter in.
    Only the tablet (`station.js`) writes a By, an At, a last touch or a log
-   line.
+   line — **or a note**: `Station comments` is written by a floor tablet and by
+   nothing else, one POST per note, and is read here and in no export.
 4. **No phone number and no eircode leave the app in any export, ever.**
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or
@@ -200,6 +205,9 @@ node test_phases_list.js
 node automation/test_digest.js
 node test_station.js
 node test_glasscolour.js
+node test_comments.js
+node test_doors.js
+node test_john.js
 
 node verify.js   # dev-only cross-check, see below
 ```

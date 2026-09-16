@@ -290,6 +290,47 @@ deletes from it.
 The tablet merges a run of quick taps on one row and stage into a single
 write, so one line reads `5 → 8` rather than three lines counting up to it.
 
+### `Station comments`
+
+Added 2026-09-15 (spec: `docs/specs/2026-09-15-station-comments.md`). One row
+per **note** a floor worker leaves against a job — a shortage, a mistake on the
+sheet, anything that needs a person's attention rather than a tick. Written by
+a floor tablet only; the office reads it in the job's drawer and never writes
+it, and nothing anywhere deletes from it.
+
+Like `Station people` and `Station log`, this list is **every** station's, not
+the glass station's: a second station page passes its own name and shares it.
+
+| column | type | meaning |
+|---|---|---|
+| Title | text | a row id, `<JOB>\|<unix-ms>` — **not** a key: no unique rule, nothing looks a row up by it, two rows may share one |
+| Job | text | the job number, upper-case |
+| Station | text | which station wrote it: `Glass` today, free text so a new station is a new value rather than a schema change |
+| Who | text | the person signed in at the tablet's picker |
+| Text | multiple lines of text | the note |
+| At | text | ISO timestamp, stamped at send |
+
+**Append-only, on both sides.** There is no edit and no delete anywhere in the
+code, and the tablet sends one POST per note. A mistake gets a follow-up note.
+
+**A row with the `Station` column left blank shows on every station's tablet.**
+That is deliberate, and it matches the rule `Station log` has always used: a row
+can only get there by somebody typing it into SharePoint by hand, and hiding it
+from every screen would lose a note rather than tidy one. The office drawer tags
+such a row "floor" rather than naming a station. Filling the column in fixes it.
+
+**This channel is for job problems, not customer contact details.** The note is
+free text somebody types, so nothing stops a phone number being written into
+it by habit — and nothing should be. The list is never part of any export.
+
+**Creating it** (the owner, once): a plain list named exactly
+`Station comments`, in the same site the other three floor lists are in, with
+the columns `Job`, `Station`, `Who`, `At` as Single line of text and `Text` as
+Multiple lines of text (`Title` already exists). **Do not** turn on
+enforce-unique-values on Title — this list is a log, like `Station log`, not an
+upsert target like `Glass station`. It starts empty. Until it exists, both
+screens say so plainly and nothing is written anywhere.
+
 ## What the office sees
 
 From the master dashboard's "Sheet" dropdown (next to the search box),
@@ -309,6 +350,17 @@ a timeline of that job's own log lines, newest first, capped at twelve, with
 a "Full log" link. A job that has left production but was fed at some point
 still shows its record here, worded "Finished on the floor" rather than "Not
 fed to the floor yet".
+
+Under that, since 2026-09-15, a **Floor notes** section: every station's notes
+about this job, oldest first, each tagged with the station, the person and the
+time. Read-only — there is no reply box in this build. It is shown for **every**
+job, not only a glass one, because the channel belongs to every station. A new
+note also appears in the **Changes** panel, as "New floor note on `<job>`, from
+`<station>`, `<who>`", within the same ten seconds (or a minute when nobody is
+looking at the floor) as the rest of the floor's work. There is no new column
+on the job row — per-job detail goes in the card (owner's rule, 2026-09-09).
+Since 2026-09-16, a new note also shows a 💬 badge on the job row and on that
+job's Glass station board card, until the job is opened on that screen.
 
 The **Floor log window** (the button next to the board, or "Full log" from a
 drawer) lists every `Station log` line, newest first, with four filters

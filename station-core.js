@@ -922,6 +922,345 @@ function logLast(rows, job) {
   return (rows || []).find(r => r.job === want) || null;
 }
 
+/* ---- a word from the floor to the office ------------------------------------
+   Shipped 2026-09-15. Spec: docs/specs/2026-09-15-station-comments.md.
+
+   The floor can move a counter and it can finish a job; until now it could not
+   say anything. A shortage, a wrong measurement on the sheet, a pallet that
+   arrived broken - none of that is a tick, and the only channel for it was
+   somebody walking to the office. So: one note, typed on the card of the job it
+   is about, read by the office in that job's drawer.
+
+   THE WHOLE POINT OF THIS BLOCK IS THAT IT IS NOT THE GLASS STATION'S. More
+   station tablets are coming (cutting, fabrication, glazing, windows, doors)
+   and every one of them will want the same channel. So the composer, the
+   thread, the row it writes and the two list calls all live here, behind
+   stationComments(), whose ONLY station-specific input is cfg.station: a
+   future cutting.html changes that one word and has the feature.
+
+   Three rules, from the spec and from CLAUDE.md:
+
+     · APPEND-ONLY. One row per note, never upserted by Title, never patched,
+       never deleted - by either side. A mistake gets a follow-up note. There is
+       no edit path and no delete path here to find;
+     · the tablet writes this list DIRECTLY, exactly as it writes Station log,
+       and touches no workbook of any kind;
+     · the tablet sees only its OWN station's notes on a job. The office drawer
+       is where every station's notes about a job come together.              */
+const COMMENT_LIST = "Station comments";
+/* Title is a row id (JOB|unix-ms), not a key: this list has no unique rule on
+   it and nothing ever reads a row back by it. Text is the note itself, the one
+   free-text field on any floor list. */
+const COMMENT_FIELDS = ["Title", "Job", "Station", "Who", "Text", "At"];
+/* A note is a sentence or two about a job, not a document. The cap is on the
+   composer and again on the row builder, so a long paste cannot arrive through
+   a replayed draft either. */
+const COMMENT_MAX = 2000;
+/* How often a tablet with a composer open asks the list what else has been
+   said. Only with one open: a closed composer has nothing to show and a read
+   six times a minute of a list nobody is looking at is a poll for its own sake. */
+const COMMENT_POLL_MS = 20000;
+
+/* No list is created by code (CLAUDE.md rule 3). A missing list says which one,
+   plainly, on whichever screen is asking, and writes nothing anywhere. */
+const COMMENT_MISSING_FLOOR = "The “Station comments” list is not in the floor’s site yet, " +
+  "so notes cannot be left here. Ask the office to add it — nothing in the Excel file is involved.";
+const COMMENT_MISSING_OFFICE = "The “Station comments” list is not in the floor’s site yet, " +
+  "so the floor cannot leave notes. Ask the manager to add it — nothing in the Excel file is involved.";
+const COMMENT_UNREACHABLE = "The floor’s notes could not be read just now — retrying.";
+const COMMENT_CHECKING = "checking…";
+const COMMENT_EMPTY_FLOOR = "No notes on this job yet.";
+const COMMENT_EMPTY_OFFICE = "No notes from the floor on this job yet.";
+/* A note that would not send is kept in the box and said so: the floor has
+   typed something they meant somebody to read, and dropping it silently is the
+   one thing this feature must not do. */
+const COMMENT_UNSENT = "not sent — tap Send again";
+/* ... and the other way round: the note DID go, but there is still writing in
+   the box because somebody carried on typing while it was in the air. Without
+   a word here the box looks exactly like a note that failed to send, and the
+   obvious thing to do about it - tap Send again - would post the first note
+   twice. */
+const COMMENT_KEPT = "sent — what is in the box is a new note";
+
+/** The row id: the job and the instant, which is unique enough for a list
+    nothing ever looks a row up in. */
+function commentTitle(job, at) {
+  const t = stNum(at, NaN);
+  const ms = isFinite(t) ? t : Date.parse(stTxt(at));
+  return stKey(job) + "|" + (isFinite(ms) ? Math.round(ms) : Date.now());
+}
+/** The one row the composer sends. Six columns, all text, none of them a
+    counter, a colour, a cell or anything the workbook has ever heard of. */
+function commentFields(e) {
+  const at = stTxt(e && e.at) || new Date().toISOString();
+  return { Title: commentTitle(e && e.job, at),
+           Job: stKey(e && e.job),
+           Station: stTxt((e && e.station) || STATION_NAME).trim(),
+           Who: stTxt(e && e.who),
+           Text: stTxt(e && e.text).trim().slice(0, COMMENT_MAX),
+           At: at };
+}
+
+/** Two `At` stamps, compared by the MOMENT they name rather than as text.
+    -1 / 0 / 1, like any comparator.
+
+    ISO stamps mostly sort as text, and that is what this used to lean on - but
+    not always: "…10:00:00.100Z" is a tenth of a second AFTER "…10:00:00Z" and
+    sorts BEFORE it as a string, because "." is below "Z". The tablet writes
+    milliseconds (`new Date().toISOString()`); a row typed into SharePoint by
+    hand often has none, and the office's "have I seen this note" stamp is
+    whichever of the two it last saw - so one undated-looking second could hide
+    every note that followed it. A stamp neither side can parse as a date (a
+    hand-typed "yesterday") falls back to the text comparison it always had,
+    which is the best that can be said about it. */
+function atCmp(a, b) {
+  const ta = Date.parse(stTxt(a)), tb = Date.parse(stTxt(b));
+  if (isFinite(ta) && isFinite(tb)) return ta < tb ? -1 : ta > tb ? 1 : 0;
+  const sa = stTxt(a), sb = stTxt(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+/** The list, read into rows - OLDEST FIRST on both screens, because this reads
+    as a conversation and not as a log.
+
+    `f.job` narrows to one job; `f.station` narrows to one station, which is
+    what the tablet passes and what the office drawer deliberately does not. A
+    row whose Station column is empty is shown to whoever asks, the same rule
+    logRows has always used: it can only have come off a tablet, and hiding it
+    from every screen would lose a note somebody typed. */
+function commentRows(items, f) {
+  const job = stKey(f && f.job);
+  const station = stTxt(f && f.station).trim().toLowerCase();
+  const out = [];
+  (items || []).forEach(it => {
+    if (!it) return;
+    const fl = it.fields || {};
+    /* the Job column, with the Title's own prefix as the fallback - a row typed
+       into SharePoint by hand can easily have one and not the other */
+    const j = stKey(fl.Job) || stKey(stTxt(fl.Title).split("|")[0]);
+    const text = stTxt(fl.Text).trim();
+    if (!j || !text) return;                       // an empty note is not a note
+    const st = stTxt(fl.Station).trim();
+    if (job && j !== job) return;
+    if (station && st && st.toLowerCase() !== station) return;
+    out.push({ id: stTxt(it.id), job: j, station: st, who: stTxt(fl.Who).trim(),
+               text: text.slice(0, COMMENT_MAX), at: stTxt(fl.At) });
+  });
+  /* by the moment each stamp names (atCmp, not text - a note with milliseconds
+     on it sorts after one without); the item id breaks a tie, because two notes
+     inside one second are possible and the older id is the older note */
+  out.sort((a, b) => atCmp(a.at, b.at) || stItemAge(a, b));
+  return out;
+}
+
+/** "just now" / "12 min ago" / "3 h ago" / "2 days ago", from an ISO stamp. The
+    tablet's own agoWords takes a millisecond number; this one is pure, takes
+    what the list carries, and can be tested without a clock. */
+function commentAgo(at, now) {
+  const t = Date.parse(stTxt(at));
+  if (!isFinite(t)) return "";
+  const s = Math.max(0, Math.round((stNum(now, Date.now()) - t) / 1000));
+  if (s < 45) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 172800) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+/** The Changes-panel line for a note the office has not seen before. The
+    sentence is the owner's, from the spec, and is built here so both the page
+    and its test read the same words. */
+function commentChangeWords(r) {
+  return "New floor note on " + stKey(r && r.job) +
+         ", from " + (stTxt(r && r.station).trim() || "a floor station") +
+         ", " + (stTxt(r && r.who).trim() || "somebody");
+}
+
+/* This file draws no DOM - it never has - but it does build the strings both
+   pages set as innerHTML, exactly as logFields builds the row both pages read.
+   So it needs its own escape rather than borrowing a page's. */
+const stEsc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---- the channel itself -----------------------------------------------------
+   One object per station page, made once at start-up. It holds the list, what
+   is typed but not sent, which composers are open, and the two calls that read
+   and append - and it takes the station's name, the list transport and a clock,
+   so nothing in here knows what a Graph is and the tests need no network.
+
+   Everything a page has to do with it:
+
+       const NOTES = ST.stationComments({ station: ST.STATION_NAME,
+                                          listItems: CW.listItems,
+                                          listAdd: CW.listAdd,
+                                          opts: listOpts });
+       ... NOTES.read()  once at start
+       ... NOTES.poll()  on the page's own clock
+       ... NOTES.html(job)  inside the card
+       ... NOTES.toggle / setDraft / send  from the card's clicks
+
+   `station` is the ONLY station-specific input. That is the feature.        */
+function stationComments(cfg) {
+  cfg = cfg || {};
+  const station = stTxt(cfg.station || STATION_NAME).trim() || STATION_NAME;
+  const list = stTxt(cfg.list || COMMENT_LIST);
+  const opts = () => (typeof cfg.opts === "function" ? cfg.opts() : (cfg.opts || {}));
+  const clock = () => stNum(typeof cfg.now === "function" ? cfg.now() : cfg.now, Date.now());
+
+  /* ok: null not looked yet · false missing, refused or unreachable · true read
+     it. `why` is which of those, in words, for the card. */
+  const S = { items: null, ok: null, why: "", readAt: 0,
+              open: {}, draft: {}, sending: {}, failed: {}, kept: {} };
+
+  const key = job => stKey(job);
+  /** This station's notes on one job, oldest first. */
+  const rows = job => commentRows(S.items || [], { job: job, station: station });
+  const isOpen = job => !!S.open[key(job)];
+  const draftOf = job => stTxt(S.draft[key(job)]);
+
+  function toggle(job) {
+    const k = key(job);
+    if (S.open[k]) delete S.open[k]; else S.open[k] = 1;
+    return !!S.open[k];
+  }
+  function setDraft(job, text) {
+    const k = key(job);
+    S.draft[k] = stTxt(text).slice(0, COMMENT_MAX);
+    /* the "that was sent, this is new" note has been read by then: the next
+       keystroke is somebody carrying on, and a hint that outstays the moment it
+       explains is just another thing on the card to read */
+    if (S.kept[k]) delete S.kept[k];
+  }
+  const anyOpen = () => Object.keys(S.open).length > 0;
+
+  /** The whole list, quietly. A missing list is a state, not an error; anything
+      else leaves whatever was last read exactly where it is. Never throws:
+      a note channel must not be able to take a working board away. */
+  async function read() {
+    if (typeof cfg.listItems !== "function") return false;
+    try {
+      const items = await cfg.listItems(list, opts());
+      if (items == null) {
+        S.ok = false; S.why = stTxt(cfg.missing) || COMMENT_MISSING_FLOOR;
+        S.readAt = clock();
+        return false;
+      }
+      S.items = items; S.ok = true; S.why = ""; S.readAt = clock();
+      return true;
+    } catch (e) {
+      S.readAt = clock();
+      if (S.ok !== true) { S.ok = false; S.why = COMMENT_UNREACHABLE; }
+      return false;
+    }
+  }
+  /** The page's clock, answered only when somebody has a composer open and the
+      last read is old enough to be worth replacing. */
+  async function poll() {
+    if (!anyOpen()) return false;
+    if (S.readAt && clock() - S.readAt < COMMENT_POLL_MS) return false;
+    return await read();
+  }
+
+  /** Append one note. One POST, no read, no upsert, no id looked up: this list
+      is a log and every row is its own record.
+
+      The row goes into the copy in hand at once so the thread shows it without
+      waiting for a read, exactly as a tap shows before its write lands. A
+      refused write puts the text back in the box and says so. */
+  async function send(job, who) {
+    const k = key(job);
+    /* exactly what is in the box, kept beside the trimmed copy that is sent.
+       The box stays editable while the POST is in the air - only the Send
+       button is disabled - and on workshop wifi that is a second or two in
+       which somebody can start the next note. */
+    const raw = draftOf(job);
+    const text = raw.trim();
+    if (!text) return null;
+    if (S.ok === false) return null;               // nowhere to write it
+    if (S.sending[k]) return null;                 // one at a time per job
+    if (typeof cfg.listAdd !== "function") return null;
+    const fields = commentFields({ job: job, station: station, who: who,
+                                   text: text, at: new Date(clock()).toISOString() });
+    S.sending[k] = 1; delete S.failed[k]; delete S.kept[k];
+    try {
+      const made = await cfg.listAdd(list, fields, opts());
+      const id = made && made.id != null ? String(made.id) : "local:" + fields.Title;
+      S.items = (S.items || []).concat([{ id: id, fields: fields }]);
+      /* EMPTY THE BOX ONLY IF IT STILL HOLDS WHAT WENT (review finding 3).
+         Clearing it unconditionally throws away whatever has been typed since
+         the tap, silently, with no message and no way back - the one thing this
+         feature must never do with something somebody meant to be read. If it
+         has moved on, the note that landed is in the thread above and the new
+         typing is left exactly where it is - and the box SAYS SO, or writing
+         left behind on purpose looks exactly like a note that failed to send. */
+      if (draftOf(job) === raw) S.draft[k] = "";
+      else S.kept[k] = COMMENT_KEPT;
+      return fields;
+    } catch (e) {
+      S.failed[k] = COMMENT_UNSENT;                // the typing stays in the box
+      return null;
+    } finally {
+      delete S.sending[k];
+    }
+  }
+
+  /** One thread line: who, how long ago, and what they said. */
+  function lineHtml(r, now) {
+    return '<div class="cmrow">' +
+      '<span class="cmwho">' + stEsc(r.who || "—") + '</span>' +
+      '<span class="cmwhen">' + stEsc(commentAgo(r.at, now)) + '</span>' +
+      '<div class="cmtext">' + stEsc(r.text) + '</div></div>';
+  }
+
+  /** The composer and the thread, for one card. Closed it is one button with a
+      count on it; open it is this station's notes on the job, oldest first,
+      and a box to add to them. */
+  function html(job) {
+    const k = key(job);
+    const now = clock();
+    const mine = rows(job);
+    const open = isOpen(job);
+    const n = mine.length;
+    const head = '<button class="cmtog" data-cmt="' + stEsc(job) + '" aria-expanded="' + (open ? "true" : "false") + '">' +
+      '<svg class="cmicon" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path fill="currentColor" d="M2 2h12v9H6.6L3 13.8V11H2z"/></svg>' +
+      (n ? "Notes (" + n + ")" : "Note") + '</button>';
+    if (!open) return '<div class="cmt">' + head + '</div>';
+    const body =
+      S.ok === null ? '<div class="cmhint">' + stEsc(COMMENT_CHECKING) + '</div>'
+      : S.ok === false ? '<div class="cmhint">' + stEsc(S.why || COMMENT_MISSING_FLOOR) + '</div>'
+      : (n ? '<div class="cmthread">' + mine.map(r => lineHtml(r, now)).join("") + '</div>'
+           : '<div class="cmhint">' + stEsc(COMMENT_EMPTY_FLOOR) + '</div>') +
+        /* the "\n" straight after the tag is not decoration: HTML throws away a
+           newline immediately after <textarea>, so without one of its own a
+           draft that starts with a blank line loses it on the next redraw */
+        '<textarea class="cmbox" data-cmbox="' + stEsc(job) + '" rows="2" maxlength="' + COMMENT_MAX + '" ' +
+          'placeholder="A word for the office about this job…">\n' + stEsc(draftOf(job)) + '</textarea>' +
+        '<div class="cmfoot">' +
+          '<span class="cmnote' + (S.failed[k] ? " bad" : "") + '">' +
+            stEsc(S.failed[k] || S.kept[k] ||
+                  "Sent to the office. Nothing in the Excel file is involved.") + '</span>' +
+          '<button class="cmsend" data-cmsend="' + stEsc(job) + '"' + (S.sending[k] ? " disabled" : "") + '>' +
+          (S.sending[k] ? "Sending…" : "Send") + '</button></div>';
+    return '<div class="cmt open">' + head + '<div class="cmbody">' + body + '</div></div>';
+  }
+
+  /** What this card is showing of the channel, for the board's repaint diff.
+      The DRAFT is deliberately not in it: a card must not be rebuilt under the
+      fingers typing into it. */
+  function sig(job) {
+    const k = key(job);
+    const mine = rows(job);
+    return (isOpen(job) ? "o" : "") + mine.length + ":" +
+           (mine.length ? mine[mine.length - 1].id : "") +
+           (S.sending[k] ? "s" : "") + (S.failed[k] ? "!" : "") + (S.kept[k] ? "=" : "") +
+           "|" + (S.ok === null ? "?" : S.ok ? "y" : "n");
+  }
+
+  return { station: station, list: list, state: S,
+           rows: rows, isOpen: isOpen, draftOf: draftOf, anyOpen: anyOpen,
+           toggle: toggle, setDraft: setDraft,
+           read: read, poll: poll, send: send, html: html, sig: sig };
+}
+
 /* ---- keeping two boards in step --------------------------------------------
    Ten-second polling means the board is rebuilt six times a minute. Throwing
    the whole thing away each time loses an open card, the scroll position, and
@@ -1069,6 +1408,10 @@ const ST = {
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
+  COMMENT_LIST, COMMENT_FIELDS, COMMENT_MAX, COMMENT_POLL_MS,
+  COMMENT_MISSING_FLOOR, COMMENT_MISSING_OFFICE, COMMENT_UNREACHABLE, COMMENT_CHECKING,
+  COMMENT_EMPTY_FLOOR, COMMENT_EMPTY_OFFICE, COMMENT_UNSENT, COMMENT_KEPT,
+  commentTitle, commentFields, commentRows, commentAgo, commentChangeWords, stationComments, atCmp,
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,

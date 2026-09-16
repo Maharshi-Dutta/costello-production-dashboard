@@ -216,6 +216,58 @@ happened longer ago than that will show "Nothing recorded on the floor for
 this job yet." even though the lines still exist in SharePoint. This is a
 display window, not data loss: nothing is ever removed from the list itself.
 
+## Floor notes: what the channel is for, and when one does not appear
+
+**What it is for.** The note box on a tablet's job card is for something about
+**the job** that needs a person rather than a tick: short by two units, the
+measurement on the sheet looks wrong, the glass arrived broken. It is **not**
+for customer contact details — no phone numbers and no eircodes in a note,
+ever. Nothing stops somebody typing one (it is a free-text box), and nothing
+should: the list is internal, it is read in the drawer and it is never part of
+any export, but the rule is the rule.
+
+**Nobody can edit or delete a note**, on either screen — not the floor, not the
+office. A note that was wrong gets a follow-up note saying so. That is
+deliberate: this is a record of what was said, like `Station log`.
+
+**A note the office cannot see.** In order:
+
+1. **"The 'Station comments' list is not in the floor's site yet."** It has not
+   been created. `docs/STATIONS.md`, `Station comments`, has the five-minute
+   recipe. Until it exists the tablet shows the same line inside the composer
+   and writes nothing anywhere.
+2. **It is on another job.** The drawer shows one job's notes and nothing else.
+3. **Give it a minute.** A note reaches the office on the floor's own poll —
+   ten seconds while somebody is looking at the floor or has a glass job's
+   drawer open, up to a minute otherwise. The Changes panel gets a line the
+   moment it arrives.
+4. **The tablet says "not sent — tap Send again".** Then it never left the
+   tablet. The typing is still in the box; tapping Send again sends it. This is
+   usually the workshop wifi.
+
+**A glass tablet does not show a cutting tablet's notes** and vice versa — each
+station sees its own. The job's drawer in the office is the one place they all
+come together.
+
+**The speech-bubble icon on a job row** (and on a Glass station board card)
+means that job has notes **this screen has not opened yet**. Hovering it shows
+them; clicking it opens the job at its Floor notes. Opening the job by any
+route — the icon, the row, a jump link — marks that job's notes seen and the
+icon goes. **It is per computer, not shared**: each office screen keeps its own
+memory (in the browser, under `cw_notesread`), so two computers each show the
+icon until each of them opens the job, and clearing the browser's site data
+puts every note back to unread on that screen. Nothing about it is written to
+SharePoint or to the workbook.
+
+**The keyboard closes while you are typing a note, if another job finishes.**
+This is a known limitation and it is **not fixed** — expect it. When another job
+on the board finishes, or the office marks one done, the cards are re-ordered,
+and moving a card closes the tablet's on-screen keyboard. **Nothing is lost**:
+every word already typed is still in the box. **You will need to tap the box
+again to carry on typing.** The dashboard puts the cursor back where it was, but
+no web page can make a tablet re-open its keyboard on its own — only a finger
+can — so the tap is unavoidable until the board is redrawn differently.
+
 ## The office cleared a job's glass but the tablet still shows the old counts
 
 Clearing a job's glass in the office also puts the floor's counters back to

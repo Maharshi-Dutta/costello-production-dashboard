@@ -451,6 +451,25 @@ async function flushLog() {
 let SITEID = null;
 const listOpts = () => ({ siteId: SITEID, fields: ST.STATION_FIELDS });
 const peopleOpts = () => ({ siteId: SITEID, fields: ST.PEOPLE_FIELDS });
+const commentOpts = () => ({ siteId: SITEID, fields: ST.COMMENT_FIELDS });
+
+/* ---- a word for the office -------------------------------------------------
+   The note channel, shipped 2026-09-15 (docs/specs/2026-09-15-station-comments.md).
+   Every line of it - the composer, the thread, the row and the two list calls -
+   is in station-core.js, and THIS IS THE ONE LINE A SECOND STATION PAGE WOULD
+   CHANGE: `station` is the only station-specific input the channel takes. A
+   cutting.html passes "Cutting" here and has the feature, with no new list, no
+   new column and nothing to add to the office's drawer.
+
+   It writes `Station comments` the same way the log lines are written - one
+   POST from the tablet, straight to the list, no feeder, no upsert, no delete -
+   and like every other thing on this page it never goes near the workbook. */
+const NOTES = ST.stationComments({
+  station: ST.STATION_NAME,
+  listItems: (name, o) => CW.listItems(name, o),
+  listAdd: (name, fields, o) => CW.listAdd(name, fields, o),
+  opts: commentOpts
+});
 
 /** Everything that can go wrong with a read, decided in one place. Only
     SharePoint actually saying "there is no such site" or "there is no such
@@ -713,7 +732,11 @@ function cardInner(g) {
         ST.stageLabel(s.stage) + " " + s.value).join(", ")) +
         ' was not saved — the office marked this job finished first</div>' : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
-         : owed ? '<div class="saving">saving…</div>' : "");
+         : owed ? '<div class="saving">saving…</div>' : "") +
+    /* under everything the card counts: a word for the office about this job,
+       and this station's own earlier words about it. Closed it is one button,
+       so a card with nothing to say about it is the height it always was. */
+    NOTES.html(g.job);
 }
 
 /* ---- the picker -------------------------------------------------------------
@@ -796,7 +819,12 @@ let WIRED = false;
 function qState(g) {
   const lost = blockedFor(g.job);
   return (owedFor(g.id) ? "o" : "") + (badFor(g.id) ? "b" : "") +
-         (lost ? "!" + lost.stages.map(s => s.stage + s.value).join(",") : "");
+         (lost ? "!" + lost.stages.map(s => s.stage + s.value).join(",") : "") +
+         /* the note channel is not in the list either: opening a composer, a
+            note arriving from the other shift and a send that failed all change
+            what this card draws and none of them move a counter. The DRAFT is
+            deliberately not in the signature - see dressCard. */
+         "/" + NOTES.sig(g.job);
 }
 
 /* The person is not in the list either, and every card is drawn from them
@@ -819,9 +847,25 @@ function makeCard(g) {
   el.innerHTML = cardInner(g);
   return el;
 }
+/** Redraw one card - and put the caret back if it was in this card's note box.
+    A card is rebuilt whole (innerHTML), which is fine for numbers and buttons
+    and would be very much not fine for a half-typed sentence: the ten-second
+    poll would take the caret out of it six times a minute.
+
+    Only the CARET is restored, never the text: the box is drawn from the draft,
+    and the draft is what the input listener has been keeping current. That is
+    also why a sent note does not come back - send() empties the draft, the box
+    is redrawn empty, and the caret lands at nought in it. */
 function dressCard(el, g) {
+  const act = document.activeElement;
+  const at = act && act.dataset && act.dataset.cmbox === g.job ? act.selectionStart : null;
   el.className = "card" + (g.finished ? " done" : "");
   el.innerHTML = cardInner(g);
+  if (at == null || !el.querySelector) return;
+  const box = el.querySelector('[data-cmbox="' + g.job + '"]');
+  if (!box) return;
+  const to = Math.min(Number(at) || 0, String(box.value || "").length);
+  try { box.focus(); if (box.setSelectionRange) box.setSelectionRange(to, to); } catch (e) {}
 }
 function paintBoard(host, board) {
   if (!DOING) {
@@ -863,11 +907,27 @@ function paintBoard(host, board) {
   /* the order, and which group a card sits in, only get touched when something
      actually moved - appendChild on a node already in place is a move */
   if (diff.order || diff.added.length || diff.removed.length) {
+    /* ... and a move BLURS whatever is inside it. Another job finishing while
+       somebody is half way through a note would otherwise drop the caret and
+       close the tablet's keyboard mid-sentence. The typing itself was never at
+       risk (it is in the draft, and the node is moved rather than rebuilt), but
+       having to find the box again with a sheet of glass in the other hand is
+       the sort of thing that stops people using it. So the caret is put back
+       where it was, the same way dressCard does after a redraw. */
+    const act = document.activeElement;
+    const box = act && act.dataset && act.dataset.cmbox ? act : null;
+    const at = box ? box.selectionStart : null;
     board.forEach(g => {
       const el = NODES[g.job];
       if (!el) return;
       (g.finished ? FIN : DOING).appendChild(el);
     });
+    if (box && document.activeElement !== box) {
+      try {
+        box.focus();
+        if (box.setSelectionRange && at != null) box.setSelectionRange(at, at);
+      } catch (e) {}
+    }
   }
   const done = board.filter(g => g.finished).length;
   FINHEAD.textContent = done ? "Finished · " + done + (FINOPEN ? " ▾" : " ▸") : "";
@@ -1002,9 +1062,52 @@ function wireBoard(host) {
         tap(d.id, d.stage, d.act === "all" || d.act === "none" ? d.act : Number(d.act));
         return;
       }
+      /* the note channel: open or close the composer, or send what is in it.
+         Neither can reach a counter, a queue or anything the workbook knows
+         about - they only ever add one row to `Station comments`. */
+      if (d.cmt) {
+        ev.stopPropagation();
+        NOTES.toggle(d.cmt);
+        render();
+        /* opened on a channel that has not answered yet - never looked, or the
+           site was not resolved when the page started: ask now rather than show
+           an empty thread until somebody reloads the tablet */
+        if (NOTES.isOpen(d.cmt) && NOTES.state.ok !== true)
+          NOTES.read().then(() => render(), () => {});
+        return;
+      }
+      if (d.cmsend) {
+        ev.stopPropagation();
+        if (el.disabled) return;
+        sendNote(d.cmsend);
+        return;
+      }
       el = el.parentElement;
     }
   });
+  /* what is typed is remembered but NOT redrawn: a card rebuilt on every
+     keystroke is a caret lost on every keystroke. dressCard puts the caret back
+     when something else redraws the card mid-sentence. */
+  host.addEventListener("input", ev => {
+    const d = (ev.target && ev.target.dataset) || {};
+    if (!d.cmbox) return;
+    touch();
+    NOTES.setDraft(d.cmbox, ev.target.value);
+  });
+}
+
+/** Send the note typed on one job's card. One row appended to `Station
+    comments`, from the person signed in, for this station. Nothing else is
+    written anywhere, and nothing is ever edited or removed. */
+async function sendNote(job) {
+  if (!PERSON) return;                       // the board is not drawn without one
+  if (!NOTES.draftOf(job).trim()) return;
+  /* send() marks the job as sending before it awaits anything, so this render
+     is the one that greys the button and says "Sending…" */
+  const going = NOTES.send(job, who());
+  render();
+  await going;
+  render();
 }
 
 /* ---- staying current -------------------------------------------------------
@@ -1037,6 +1140,12 @@ async function tickOnce() {
      door until somebody thinks to reload it */
   if (!PEOPLE_READ) await readPeople();
   await pollList();
+  /* the note channel keeps its own counsel: it only asks the list anything
+     while somebody has a composer open, and never more often than
+     ST.COMMENT_POLL_MS. A tablet nobody is writing on sends no request for it
+     at all. A failure there is quiet by construction and cannot touch the
+     board. */
+  if (await NOTES.poll()) render();
 }
 
 /* ---- the page ---- */
@@ -1065,6 +1174,10 @@ async function start() {
   render();
   await readPeople();
   await readList();
+  /* what has already been said about today's jobs, so a second shift does not
+     retype the first shift's note. One read, quiet, and unable to fail loudly:
+     a missing list is a line inside the composer, never a board taken away. */
+  await NOTES.read();
   await flushQueue();                            // taps owed from a previous visit
   if (refreshT) clearInterval(refreshT);
   refreshT = setInterval(tickOnce, ST.REFRESH_MS);

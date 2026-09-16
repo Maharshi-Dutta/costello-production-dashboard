@@ -46,6 +46,8 @@ that wants to change one has to ask. The date is when the owner said it.
 | A17 | 2026-09-11 | **The five DOORS DONE cells are the third sanctioned fill.** A job's doors are those five cells: the text is the door's type code, the fill is its status, and a door has two stages — yellow in fabrication, gold done. "When updated from dashboad it should update the cell with correct color as well. And vice versa." | The doors were the one part of a job the dashboard could not tick, so the office was colouring them in Excel by hand — which, since A14, does not count as status. Repo rule 1 gained its third reason in the commit that shipped it. |
 | A18 | 2026-09-14 | **Windows (M) and Doors (N) keep their own tick AND answer for what is under them.** What is shown is the higher of the line's own record and the aggregate of its window types or its doors. The paint only ever goes **upwards**: a tick underneath may take M or N to yellow or gold, and **nothing under the line ever repaints it white** — a gold M or N is never touched by this feature, and only the office's own Clear on that line whitens it. | The doors brief's assumption (a) made the two lines purely derived; the owner withdrew it on sight of the build: *"already golden means it finished even if all the cell or component has no ticked. u should not change anything in the excel sheet. if yellow mean in fabrication and golden means done; if a window has some yellow and some component white it means it in process."* The review had also reproduced the derived-only version planting white into a gold M cell. |
 | A19 | 2026-09-14 | **A doors quantity that disagrees with the coded cells is a warning, not a decision.** The drawer's Doors line and the home list's hover say "quantity says 3 · 2 doors listed"; nothing is blocked and no colour changes. | Owner: *"that mean the quantity is wrong and should give a warning."* The sheet is the master for how much work there is; the dashboard says when it does not add up and leaves it to a person. |
+| A20 | 2026-09-16 | **The saved view named after a colleague in `app.js` keeps its name.** The rename to "Sheet order" was declined. | Standing item since the station-comments review flagged the rule-4 violation; the owner's call, not the session's, and the answer is no for now. |
+| A21 | 2026-09-16 | **The unread-notes icon's seen state is per screen, not shared.** Two office computers each show 💬 on a job until each one, separately, opens that job. | Amendment E's own design: the state is a plain `localStorage` key, and nothing writes it to a shared list. Sharing it across screens is possible later but was not asked for. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -213,6 +215,45 @@ boot-time case.
 - **A tablet 404 on the `Floor stations` site lookup is expected.** That site
   does not exist; the fallback to the workbook's site is by design (A5).
 
+### B16. A subagent wiped `app.js` to 0 bytes mid-task
+**Cause:** a python heredoc run through the shell, mid-edit on `app.js`,
+collapsed the literal `\uD83D` (the 💬 icon's surrogate half) to `\uD83D`
+being written as an actual control sequence; `open(p, "w")` had already
+truncated the file before the encode error landed, so the file was left at
+zero bytes. Nothing had been committed, so `git` had nothing to restore it
+from.
+**Fix:** recovered `git show HEAD:app.js` as a base and replayed the previous
+day's implementer's 28 Edit calls from its own transcript by hand, checked by
+spot-checking line numbers recorded earlier that day, by the `355/8` numstat
+matching the diff stat recorded before the wipe, and by all suites passing
+afterwards.
+**Lesson:** code edits by a subagent go through the Edit/Write tools, never a
+shell heredoc — a heredoc can silently mistranslate escapes and a shell
+redirect truncates before it errors. Uncommitted feature work of any size
+should be committed to a branch early, precisely so a wipe like this one has
+something to restore from.
+
+### B17. Two review bugs in the unread-notes icon (amendment E), both closed before ship
+**Cause 1 — stamps compared as text.** The stored "last seen" stamp and every
+note's own `At` were compared as strings. The tablet writes milliseconds
+(`toISOString()`); `"…10:00:00.100Z" < "…10:00:00Z"` as text, because `.`
+sorts below `Z`. A note landing in the same second as the stored stamp could
+therefore read as already seen, permanently.
+**Fix 1:** one comparator, `ST.atCmp(a, b)` in `station-core.js` — parses both
+sides as dates and compares the moments, falling back to the old text compare
+only when a side will not parse (a hand-typed "yesterday"). Used everywhere a
+stamp decides "seen" or note order.
+**Cause 2 — an undated note born after the job was first opened read as seen
+from birth.** The seen state was a single stamp per job; a note with no `At`
+(typed by hand into SharePoint) has nothing to compare against a stamp, so it
+was silently treated as older than whatever the stamp already held.
+**Fix 2:** the stored value became `{ at, ids }` — a stamp for dated notes,
+and the note's own item id remembered for every undated one, because a stamp
+can say "and everything before this moment" but only an id can say "and that
+one, too".
+**Found by:** the second independent review, before ship, not by a live
+report.
+
 ---
 
 ## C. Build log
@@ -294,6 +335,13 @@ In order. Each line is one shipped commit.
 |---|---|
 | _(this build)_ | **Doors by type.** The five DOORS DONE cells (BT–BX) become one checkpoint each — the cell's text is the door's code, its fill is its status, two stages only — ticked from the job card with In fabrication / Done / Clear, joined to the `Dashboard progress` record like every other checkpoint, and adopted by the safeguard when somebody paints one in Excel (A17). **Windows (M) and Doors (N) keep their own tick and also answer for what is under them** — the higher of the two is shown, and the paint only ever goes upwards, so a gold M or N is never repainted white by anything under it (A18). A doors quantity that disagrees with the coded cells is said in plain words in the card and in the hover (A19). The door cells get a one-time import of their own, behind `cw_cpimported_doors`, because the general one had drained three days before they existed. The window types move under one collapsible **Windows** heading in the card, the doors under **Doors**, both remembered per browser. On the home list the WND / DRS numbers carry the aggregate colour with the breakdown in the hover — no new column (A6). **Repo rule 1 gains its third sanctioned fill in this commit.** Spec: [`specs/2026-09-11-doors-and-window-types.md`](specs/2026-09-11-doors-and-window-types.md). Tests: `test_doors.js`, plus doors and derived-aggregate sections in `test_checkpoints.js` |
 
+### 2026-09-16 — station comments, and the floor's notes on the job row
+commit and build: see git log
+
+| Commit | What it added |
+|---|---|
+| `the commit stamped build 20260916-1259` | **Station comments**, built 2026-09-15: a note channel from any floor station to the office, `ST.stationComments(cfg)` built once for every station, the `Station comments` list, the tablet's own-station thread, and the drawer's cross-station read-only **Floor notes** section — a Changes line per new note, nothing written to the workbook (REFERENCE.md §20). **Amendment E**, added 2026-09-16 after the owner's demo: the Components F·S·T cell blanked (E1); an unread-notes 💬 badge on the job row and on the Glass station board card, per-screen seen state in `localStorage` (`cw_notesread`), opening a job scrolling the drawer to Floor notes (E2, B17); every station's notes drawn on the board cards themselves (E3) (REFERENCE.md §20a). Real-browser checks run this time: tablet 13/13, office 12/12, amendment 22/22, headed-Edge demo approved by the owner. Build: `20260916-1259` |
+
 ---
 
 ## D. Symptom index
@@ -330,5 +378,16 @@ In order. Each line is one shipped commit.
   mobile layout for the master page.
 - Parked features: DG and TG progress bars inside the job card, and a PDF
   export with a per-job template and custom notes.
+- **A latent copy of the text-stamp bug (B17) remains in `logRows`'s sort for
+  `Station log`** (`station-core.js` ~878) — left out of the 2026-09-16
+  commit on purpose; only `commentRows`/`notesUnreadMap` were fixed via
+  `ST.atCmp`.
+- Shared seen state for the unread-notes icon across office screens, if the
+  owner wants it later (A21 records the per-screen choice as deliberate for
+  now).
+- The owner still has to create the `Station comments` SharePoint list
+  (recipe in `docs/STATIONS.md`) and do a live check on the tablet against
+  the real list; nothing else is blocked on it, both pages already show a
+  quiet explained state without it.
 - The permanent `Floor stations` site, once the owner has Global Administrator
   (A5).
