@@ -438,6 +438,7 @@ commit and build: see git log
 
 | Commit | What it added |
 |---|---|
+| 2026-09-17, build 20260917-1231 | **Welding board colours follow the theme.** The row and group tints were hard-coded light green/yellow; in dark mode that was a pale box with light text, seen live by the owner. Six CSS lines in `index.html` now use `--green/--green-bg` and `--fab/--fab-bg`. |
 | 2026-09-17, build 20260917-1212 | **The welding station**, the second floor page: `welding.html` + `welding.js` + `welding-core.js` for the PVC welders, a `Welding station` list in the `Floor stations` site (one row per job **and product group**), an office board at Show ▸ Welding station with the office's own steppers, and a read-only Welding line in the job drawer. F and S only, never T; every product group on the sheet minus a four-name deny-list; the COMMENT carried with a rule-3 strip over it. **No workbook write anywhere in the feature.** `station-core.js` was generalised by a **station definition** (default: glass, so every older call means what it meant) and the station-independent tablet shell moved into a new `station-ui.js`. `CLAUDE.md` rule 2 gains a dated third exception: the office's welding edits write the floor's counters, logged in `Dashboard Log` and never in `Station log`. Spec: `docs/specs/2026-09-16-welding-station.md`; what was built: `docs/REFERENCE.md` §21; how to add the third station: `docs/STATIONS.md`, "Adding a station" |
 
 **Owner decisions taken that day** (full wording in the spec's "Decisions
