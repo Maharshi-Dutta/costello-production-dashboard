@@ -187,6 +187,51 @@ See `docs/STATIONS.md` for the full data model, admin setup and
 troubleshooting, and [`docs/specs/2026-09-08-glass-station.md`](specs/2026-09-08-glass-station.md) plus its v2 and
 v3 for the binding spec (the code wins over any of them where they disagree).
 
+### The welding station (2026-09-16), and what a second station costs
+
+The same flow, in a different site, with one extra arrow. Spec:
+[`docs/specs/2026-09-16-welding-station.md`](specs/2026-09-16-welding-station.md).
+
+```
+Production sheet ──parse──▶ ALL ──weldSlice──▶ feedWelding() ──▶ `Welding station`
+  (F and S of every allowed                      (app.js)          (Floor stations site)
+   product group; T never)                                            │      ▲
+Dashboard progress ──cpStatus──▶ the seed, on an untouched row only ───┘      │
+                                                                             │
+welding.html + welding.js ──FramesDone/SashesDone + By/At + DoneBy/At─────────┤
+  (the tablet)             ──one `Station log` line per landed counter────────┤
+                           ──one `Station comments` row per note──────────────┘
+                                                                             │
+office board (Show ▸ Welding station) ──the same five fields, + one ──────────┘
+                                         `Dashboard Log` line, never `Station log`
+```
+
+- **No workbook write anywhere in it.** The welding station never paints a cell
+  and neither do the office's welding edits. The gold F/S cells are read once,
+  as a seed, through the **record** (`cpStatus`, the `Dashboard progress`
+  list) — never as a colour, never written back. The one workbook write on the
+  whole path is the `Dashboard Log` line an office edit leaves, and `Dashboard
+  Log` is a dashboard-owned sheet.
+- **A different site.** The welding lists are in `Floor stations`; the glass
+  lists are still in the workbook's own site. `CW.stationSite(which)` honours
+  the definition's `site` (`"floor"` / `"own"`), so the two can never share a
+  site id, a delta token or a "the lists moved" counter — see `docs/STATIONS.md`,
+  "Adding a station", step 7, which also records the one gap that pin leaves.
+- **What was generalised, and what was not.** `ST.feedPlan`, `ST.sliceHash` and
+  `ST.floorOnly` now take a **station definition** whose default is the glass
+  one, and `ST.stationPeople` and `ST.boardDiff` take the station's stage list
+  and card signature. Nothing glass-specific was added to `station-core.js` and
+  nothing welding-specific went into it: the welding rules are all in
+  `welding-core.js`, and the shared tablet shell (theme, gate, picker, PIN pad)
+  is `station-ui.js`.
+- **The office writes a floor counter here, on purpose.** The second sanctioned
+  case after the glass clear, dated in `CLAUDE.md` rule 2 on 2026-09-16: the
+  owner asked to be able to correct welding progress from the office, "even on
+  a finished job — they might make it wrong". It goes through
+  `WELDC.weldOfficeFields` → `WELDC.weldFloorOnly`, which is the same filter the
+  tablet's own queue runs on, so a job fact cannot get into the body. It is
+  recorded in `Dashboard Log` and **never** in `Station log`.
+
 ## Module map
 
 | module | responsibility |
@@ -198,6 +243,9 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | `app.js` | everything with a DOM: rendering the job list/drawer/windows, wiring every tap to a write, `PENDING`/`PENDV`/`PENDA` optimistic holds, sign-in/session boot, the phase-list read/write UI, the Export/Alerts/Versions windows, the radial selection menu, build-freshness polling |
 | `station-core.js` | pure glass-station logic (shipped 2026-09-08) — `glassTotal`, `officeSeed`, `glassSlice`, `feedPlan`, `sliceHash`, `jobBoard`, `boardFilter`, `applyTap`, who may record what (`stationPeople`/`canStage`/`pinOk`/`personExpired`), the write and log shapes (`floorOnly`/`tapFields`/`logFields`), reading the log back (`logRows`/`logFilter`/`logCounts`/`logLast`), and the two functions that keep a ten-second poll cheap (`mergeDelta`, `boardDiff`) — no DOM, no Graph, loads in Node and the browser like `checkpoints.js` |
 | `station.js` | the glass station page UI (shipped 2026-09-08), using `CW` from `graph.js` and the pure functions from `station-core.js` |
+| `station-ui.js` | the floor tablet's **shell**, station-independent (2026-09-16): the device's light/dark choice, "how long ago" in words, the sign-in gate, and the "Who are you?" picker with its PIN pad. Everything is prefixed `stu`/`STU` so a page can load it beside any station's script. Used by `welding.js`; `glass.html` loads it and `station.js` has not moved onto it yet (its test harness runs `station.js` in a context that does not load this file) |
+| `welding-core.js` | pure welding-station logic (shipped 2026-09-16): the `WELD` definition, the deny-list of product groups, the rule-3 comment strip (`weldStripDigits`), the slice, the records and cards, the three-level colour rule, the tap clamp, the write bodies (`weldTapFields`/`weldOfficeFields`/`weldFloorOnly`), the queued-tap re-base and the card signature — no DOM, no Graph, no workbook, self-contained |
+| `welding.js` | the welding station page UI (2026-09-16), using `CW`, `ST`, `STU` and `WELDC` |
 | `build.py` | stamps a timestamp build id onto every script tag's `?v=` and into the footer, writes `version.json` for the freshness poll |
 
 ## Key invariants
@@ -278,7 +326,12 @@ v3 for the binding spec (the code wins over any of them where they disagree).
 | a queued tap the office's lock arrived under, so it was dropped rather than sent | `cw_stationblocked` — tablet only, drawn on the card in red until the office unlocks the job (2026-09-10) |
 | who is at the station tablet, and when they last tapped | `cw_person` — tablet only; the stages always come back from the list, never from storage |
 | when the master last fed the `Glass station` list, and the hash of what it sent | `cw_stationfeed` — read by `feedStation()` to decide whether a run can be skipped |
-| workbook and list ids, once resolved | `cw_fileref`, `cw_listids`, `cw_stationsite` |
+| welding station job facts and floor counters | `Welding station` SharePoint list, in the `Floor stations` site — one row per job **and product group** — 2026-09-16 |
+| a queued/not-yet-sent welding tap | `cw_weldq` (counters) and `cw_weldlogq` (the log lines they owe) — the welding tablet only, deliberately separate from the glass tablet's two so one page can never read the other's queue (2026-09-16) |
+| who is at the welding tablet, and when they last tapped | `cw_wperson` — the welding tablet only |
+| whether the welding tablet's "Sent to floor" chip is on | `cw_weldsent` — the device's own choice, off by default |
+| when the master last fed the `Welding station` list, and the hash of what it sent | `cw_weldfeed` — read by `feedWelding()` to decide whether a run can be skipped |
+| workbook and list ids, once resolved | `cw_fileref`, `cw_listids`, `cw_stationsite` (the legacy resolver, which nothing in the app asks for any more), and one key per pinned channel: `cw_stationsite_own` (glass, the workbook's own site) and `cw_stationsite_floor` (welding) — 2026-09-16 |
 | export presets (filters/fields/format only, never job data) | `cw_exportpresets` |
 | whether the job card's Windows and Doors folds were left open | `cw_cpopen` — one flag per fold, per browser; nothing about a job is in it |
 | which floor notes the Changes panel has already announced | `cw_notesseen` — the ids of announced `Station comments` rows, capped at 500, seeded silently on a browser's first look (2026-09-15) |

@@ -112,6 +112,18 @@ let FAIL_LOG = 0;                       // n Station log POSTs to refuse
 let UNIQUE_TITLE = false;               // the list's "enforce unique values" rule on Title
 let SITE_403 = false;                   // the Floor stations lookup refused rather than missing
 let OWN_HAS_LISTS = false;              // are the three lists in the workbook's own site?
+/* FIXTURE, 2026-09-16: where this fake world keeps THE glass lists.
+   Since ST.GLASS.site became "own" (the hard pin - graph.js, "a station that
+   is PINNED to one site"), the glass page and the glass feeder resolve the
+   WORKBOOK'S OWN SITE by path and never look at `Floor stations` at all. So
+   the world every app-driven test below runs in is "the glass lists are in the
+   workbook's own site", and that site serves the same stores (ITEMS /
+   PEOPLEITEMS / LOGITEMS) the tests already assert on.
+   It is turned OFF around the two blocks that are deliberately about two
+   sites holding two separate copies - the interim-arrangement section and the
+   "the feeder works the same on either site" one - where the separate
+   OWNITEMS/OWNPEOPLE/OWNLOG stores with their own ids ARE the point. */
+let OWN_IS_MAIN = true;
 /* the interim copies. Separate stores with separate item ids, because that is
    the whole point: an item id only means anything in the list it came from. */
 let OWNITEMS = [], OWNPEOPLE = [], OWNLOG = [];
@@ -134,7 +146,8 @@ function item(fields, id) {
   return { id: String(id == null ? NEXTID++ : id), fields: Object.assign({}, fields) };
 }
 function storeFor(id, base) {
-  const own = base === OWNLISTS_PATH;
+  /* OWN_IS_MAIN: the workbook's own site holds THE lists, not a second copy */
+  const own = base === OWNLISTS_PATH && !OWN_IS_MAIN;
   return id === GLASS_ID ? (own ? OWNITEMS : ITEMS)
        : id === PEOPLE_ID ? (own ? OWNPEOPLE : PEOPLEITEMS)
        : id === LOG_ID ? (own ? OWNLOG : LOGITEMS) : null;
@@ -231,7 +244,7 @@ function route(method, path, body) {
      arrangement, and nothing at all otherwise. There is no workbook route at
      all: anything that reaches for the file gets a 599 no retry rule matches */
   if (path.indexOf(OWNLISTS_PATH) === 0)
-    return OWN_HAS_LISTS ? routeFlist(method, path, body, OWNLISTS_PATH) : ok({ value: [] });
+    return (OWN_IS_MAIN || OWN_HAS_LISTS) ? routeFlist(method, path, body, OWNLISTS_PATH) : ok({ value: [] });
   return { status: 599, body: { error: { code: "thisTestServesNoWorkbook", message: path } } };
 }
 
@@ -298,7 +311,12 @@ const S = code => vm.runInContext(code, sandbox);
 
 /* ---------- helpers ---------- */
 const reset = () => { REQ.length = 0; TOASTS.length = 0; peakInflight = 0; };
-const forget = () => { delete mem.cw_listids; CW._resetListIds(); CW._setStationSite(null); };
+/* 2026-09-16: the two PINNED channels ("own" for glass, "floor" for welding)
+   keep their own cached ids, so forgetting the site means forgetting all three
+   or the next resolve quietly answers from a cache this test thought it had
+   cleared. */
+const forget = () => { delete mem.cw_listids; CW._resetListIds(); CW._setStationSite(null);
+                       CW._resetPinnedSites(); };
 const paths = () => REQ.map(r => r.method + " " + r.path);
 const writes = () => REQ.filter(r => r.method !== "GET");
 const settle = ms => new Promise(r => setTimeout(r, ms == null ? 40 : ms));
@@ -1315,6 +1333,7 @@ const person = (name, stages, pin, active, station) =>
      Creating a site needs an administrator the owner has not got, so the three
      lists live in the workbook's own site for now and the station account is a
      member of it. Nothing on either screen knows or says which site it is. */
+  OWN_IS_MAIN = false;          // this block is about TWO sites with two separate copies
   SITE_EXISTS = false; OWN_HAS_LISTS = true; forget(); reset();
   assert.strictEqual(await CW.stationSite(), SITE, "the workbook's own site is used instead");
   assert.deepStrictEqual(paths(), ["GET " + HOST_LOOKUP, "GET " + OWN_LOOKUP],
@@ -1351,6 +1370,7 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(await CW.stationSite(), null);
   assert.strictEqual(REQ.length, 0, "the miss is held for a minute, so a poll cannot hammer it");
   OWN_404 = false; SITE_EXISTS = true; OWN_HAS_LISTS = false; forget();
+  OWN_IS_MAIN = true;           // back to the world the pin describes
   pass("with neither site reachable the answer is null, held for a minute, never cached as an answer");
 
   /* ---- (2) the Floor stations site, once it exists, wins ---- */
@@ -1719,14 +1739,17 @@ const person = (name, stages, pin, active, station) =>
   consent(true);
   pass("without the list permission already granted, the feeder does nothing at all");
 
-  SITE_EXISTS = false; forget(); A("STATION_FEED = { hash: '', at: 0 }");
+  /* the site the GLASS feeder cannot resolve is the workbook's own one now,
+     because that is the site ST.GLASS.site pins it to (graph.js, the hard
+     pin). Every assertion below is the one it always was. */
+  OWN_404 = true; forget(); A("STATION_FEED = { hash: '', at: 0 }");
   reset();
   assert.strictEqual(await feedStation(), null);
   assert.strictEqual(writes().length, 0);
   assert.strictEqual(A("STATION_OK"), false);
   assert.strictEqual(TOASTS.length, 0, "and it never toasts: the dashboard carries on regardless");
-  SITE_EXISTS = true; forget();
-  pass("a missing Floor stations site is a plain state on the board, not an error anybody sees");
+  OWN_404 = false; forget();
+  pass("a missing workbook's own site — the one the glass station is pinned to — is a plain state on the board, not an error anybody sees");
 
   ITEMS = []; forget();
   const many = [];
@@ -1925,18 +1948,22 @@ const person = (name, stages, pin, active, station) =>
      refusal or a dead connection says nothing about where the lists are, and
      dropping the site over one restarts the whole re-check cadence - or, on a
      403, flips a dashboard that is happily on the real site to the fallback. */
+  /* 2026-09-16: stationTrouble() forgets the channel the GLASS page is pinned
+     to (ST.GLASS.site === "own"), so that is the channel these checks read.
+     Every assertion and every message below is the one it always was; asking
+     the legacy channel now would be asking about a channel nothing writes. */
   forget();
-  assert.strictEqual(await CW.stationSite(), FSITE);
-  const genB = CW._stationSiteInfo().gen;
+  assert.strictEqual(await CW.stationSite(ST.GLASS.site), SITE);
+  const genB = CW._pinnedSiteInfo("own").gen;
   A("stationWarned = true;");
   stationTrouble(new Error("GET /sites/x/lists/y/items -> 403 {\"error\":{\"code\":\"accessDenied\"}}"));
-  assert.strictEqual(CW._stationSiteInfo().id, FSITE, "a refused list call keeps the site");
+  assert.strictEqual(CW._pinnedSiteInfo("own").id, SITE, "a refused list call keeps the site");
   stationTrouble(new Error("Failed to fetch"));
-  assert.strictEqual(CW._stationSiteInfo().id, FSITE, "and so does a dead connection");
-  assert.strictEqual(CW._stationSiteInfo().gen, genB, "neither of them is a move");
+  assert.strictEqual(CW._pinnedSiteInfo("own").id, SITE, "and so does a dead connection");
+  assert.strictEqual(CW._pinnedSiteInfo("own").gen, genB, "neither of them is a move");
   stationTrouble(new Error("GET /sites/x/lists/y/items -> 404 {\"error\":{\"code\":\"itemNotFound\"}}"));
-  assert.strictEqual(CW._stationSiteInfo().id, null, "only a 404 drops it");
-  assert.strictEqual(CW._stationSiteInfo().gen, genB + 1, "and that is a move");
+  assert.strictEqual(CW._pinnedSiteInfo("own").id, null, "only a 404 drops it");
+  assert.strictEqual(CW._pinnedSiteInfo("own").gen, genB + 1, "and that is a move");
   pass("a refusal or a dropped connection never forgets the site; only a genuine 404 does");
 
   /* and a 403 on the re-check cannot flip a page that is on the real site */
@@ -1969,6 +1996,7 @@ const person = (name, stages, pin, active, station) =>
   pass("a cw_stationsite left by the previous build is read as it was meant, with no lookup and no reset");
 
   /* and the feeder works the same on either site, saying nothing about which */
+  OWN_IS_MAIN = false;          // two sites, two copies: that is what this one checks
   SITE_EXISTS = false; OWN_HAS_LISTS = true; forget(); consent(true);
   ITEMS = []; LOGITEMS = []; OWNITEMS = []; OWNLOG = [];
   useJobs([mkJob({ id: "R8100", cust: "Customer One", glass: { tg: 3 }, blk: 4, seq: 0 })]);
@@ -1990,6 +2018,7 @@ const person = (name, stages, pin, active, station) =>
     .forEach(w => assert.ok(ownHtml.indexOf(w) < 0, "nothing on screen says which site: " + w));
   A("state.board = null;");
   SITE_EXISTS = true; OWN_HAS_LISTS = false; forget();
+  OWN_IS_MAIN = true;           // back to the world the pin describes
   ITEMS = []; LOGITEMS = []; OWNITEMS = []; OWNLOG = [];
   A("STATION_SITE_GEN = CW.stationSiteMoves(); STATION_FEED = { hash: '', at: 0 };");
   pass("the feeder and the office board work the same on the fallback, and no wording anywhere names a site");
@@ -2407,7 +2436,11 @@ const person = (name, stages, pin, active, station) =>
     "while R5303 still gets its own three");
   pass("the drawer's timeline matches its job exactly, so R530 never lists R5303's work");
 
-  assert.deepStrictEqual(STATIONS, [["glass", "Glass station"]],
+  /* 2026-09-16: the next station went exactly where this check said it would.
+     The assertion is kept, widened by one line rather than rewritten: glass is
+     still first and still called what it was called, and adding the welding
+     board really was one entry in this array plus a renderer for its key. */
+  assert.deepStrictEqual(STATIONS, [["glass", "Glass station"], ["welding", "Welding station"]],
     "one array next to SHEETNAMES is where the next station goes");
   assert.strictEqual(SHEETNAMES[0], "Production", "SHEETNAMES is untouched, for the export and the row chips");
   pass("the dropdown is driven by one STATIONS array, and SHEETNAMES is left exactly as it was");
@@ -3672,6 +3705,7 @@ const person = (name, stages, pin, active, station) =>
      whichever row happens to carry it - almost certainly another job - and the
      log then records that as work somebody did on it. The entry is stamped
      with its site and re-matched by Title, which is unique and does not move. */
+  OWN_IS_MAIN = false;          // this block IS two sites holding two lists
   ITEMS = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One", GlassType: "GLASS",
                   Total: 6, Seq: 1, Active: "Yes", Cut: 1 }, "9500"),
            item({ Title: "R7777", Job: "R7777", Customer: "Customer Two", GlassType: "GLASS",
@@ -3709,6 +3743,12 @@ const person = (name, stages, pin, active, station) =>
   pass("a tap queued in one site is re-matched by Title after a move, never written by item id");
 
   /* and a queued tap whose row is not in the new list at all is dropped */
+  /* the tablet is on the site it moved TO, and the entry below is stamped with
+     the one it moved FROM - that difference is the whole premise. It used to
+     be left over from the block above, whose last pollList() resolved
+     stationSite() to FSITE; the glass page asks for "own" now, so it is set
+     here instead of relied on. */
+  S("SITEID = " + JSON.stringify(FSITE) + ";");
   S("QUEUE = {}; LOGQ = {};");
   S("QUEUE['4242|cut'] = { id: '4242', stage: 'cut', value: 2, who: 'Person A', " +
     "at: '2026-09-08T07:00:00.000Z', job: 'R9999', type: 'TG', site: " + JSON.stringify(SITE) + ", from: 0, err: 0 };");
@@ -3719,6 +3759,7 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("Object.keys(QUEUE).length"), 0, "and the entry is gone rather than retried for ever");
   assert.strictEqual(S("Object.keys(LOGQ).length"), 0, "with no log line invented for it");
   S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  OWN_IS_MAIN = true;           // back to the world the pin describes
   pass("a queued tap whose row did not come across is dropped, not written onto whatever row has that id");
 
   /* ---- AMENDMENT 3: the tablet never writes without a resolved site ---- */

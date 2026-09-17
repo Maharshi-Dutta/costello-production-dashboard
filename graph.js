@@ -1276,11 +1276,111 @@ function forgetListIdsFor(siteId) {
   if (hit) try { localStorage.setItem(LISTIDS_KEY, JSON.stringify(all)); } catch (e) {}
 }
 
+/* ---- a station that is PINNED to one site (2026-09-16) ----------------------
+   The rule above - "the Floor stations site if it is there, the workbook's own
+   site if it is not" - was written when there was one station and no Floor
+   stations site. Creating that site for the welding station would therefore
+   have moved the GLASS page to it on its next ten-minute re-check, into a site
+   with no "Glass station" list in it. The owner's decision of 2026-09-16
+   (spec §"Decisions taken", 1) was option (a): pin.
+
+   So a station definition carries a `site`, and this honours it. Each of the
+   two words is a SEPARATE lookup, with its own cached id, its own miss clock
+   and its own move counter, and NEITHER can ever answer the other's site:
+
+     stationSite("own")    THE WORKBOOK'S OWN SITE, resolved by path
+                           (SITE_PATH + SITE_AS_LIST) and nothing else. The
+                           `Floor stations` site is never looked up on this
+                           channel - not on an empty cache, not after a
+                           forget, not when somebody taps Try again. This is
+                           the glass station, whose three lists are in the
+                           workbook's own site (the interim arrangement of
+                           2026-09-08), until the day they are copied across
+                           and the word in ST.GLASS.site becomes "floor".
+     stationSite("floor")  THE `Floor stations` SITE and nothing else, with no
+                           fallback of any kind. Missing is null, and the page
+                           says so quietly - the same explained state a
+                           missing list gets.
+     stationSite()         unchanged, and still exactly what it always was:
+                           prefer the real site, fall back to the workbook's,
+                           keep looking. Nothing in the app asks for it any
+                           more - glass asks for "own" and welding for "floor"
+                           - but it is left alone because it is what the older
+                           tests describe and it costs nothing.
+
+   WHY THE FIRST VERSION OF THIS WAS WRONG, written down so it is not rebuilt.
+   "own" first meant "return whatever site is cached, else fall through to the
+   legacy route". That is not a pin. Three ordinary things empty the cache - a
+   404 on any list call (which calls forgetStationSite), localStorage cleared
+   or a new device, and a browser profile that had never opened the dashboard
+   - and on the very next resolve the legacy route PREFERS `Floor stations`
+   and caches it with own:false, so it is never reconsidered. The glass
+   feeder, the glass colour writer and clearFloorGlass would all have been
+   pointed at a site with no glass list in it, permanently, from one 404. It
+   is a lookup by path now, every time the cache is empty, and there is no
+   route from this channel to the other site at all.
+
+   Nothing in here goes anywhere near findFile(), a /drive/ path or a
+   /workbook path: the station account has no business there, and this is the
+   code that could accidentally send it. SITE_AS_LIST marks the own-site
+   lookup as the station's rather than findFile()'s, so it is asked for
+   quietly with the list scopes and can never put a consent window in front of
+   somebody holding a sheet of glass. */
+const PIN_KEY = { own: "cw_stationsite_own", floor: "cw_stationsite_floor" };
+const pinState = { own: { id: null, missAt: 0, soft: false, gen: 0, read: false },
+                   floor: { id: null, missAt: 0, soft: false, gen: 0, read: false } };
+const isPin = w => w === "own" || w === "floor";
+function pinLoad(which) {
+  const s = pinState[which];
+  if (s.read) return s;
+  s.read = true;
+  try { s.id = localStorage.getItem(PIN_KEY[which]) || null; } catch (e) {}
+  return s;
+}
+function pinRemember(which, id) {
+  const s = pinState[which];
+  if (s.id && s.id !== id) { forgetListIdsFor(s.id); s.gen++; }
+  s.id = id; s.read = true;
+  try { localStorage.setItem(PIN_KEY[which], id); } catch (e) {}
+}
+/** The ONE path each channel may ask for. There is deliberately no branch
+    below this line that could send "own" at the Floor stations lookup, or
+    "floor" at the workbook's own site. */
+function pinPath(which) {
+  if (which === "floor") return "/sites/" + SITE_PATH.split(":")[0] + ":/sites/" + STATION_SITE_NAME;
+  return "/sites/" + SITE_PATH + SITE_AS_LIST;
+}
+/** Resolve one pinned site, or null. A miss is held for a minute so a
+    ten-second poll cannot hammer a lookup that is not going to answer. */
+async function pinnedSite(which) {
+  const s = pinLoad(which);
+  if (s.id) return s.id;
+  if (s.missAt && Date.now() - s.missAt < STATION_MISS_MS) return null;
+  let found = null;
+  try {
+    const r = await call("GET", pinPath(which));
+    found = (r && r.id) || null;
+  } catch (e) {
+    if (!isMissing(e) && !isRefused(e)) throw e;
+    s.missAt = Date.now(); s.soft = isRefused(e) && !isMissing(e);
+    return null;
+  }
+  if (!found) { s.missAt = Date.now(); s.soft = false; return null; }
+  s.missAt = 0; s.soft = false;
+  pinRemember(which, found);
+  return s.id;
+}
+
 /** The site the floor's lists are in, or null if neither can be resolved.
     Anything that is not an answer - offline, a bad gateway - is thrown, so the
     pages can tell "there is nowhere to read this from" apart from "I cannot
-    see it just now" and leave the board they are already showing alone. */
-async function stationSite() {
+    see it just now" and leave the board they are already showing alone.
+
+    `which` is a station definition's `site`: "own", "floor", or nothing at all
+    for the historic behaviour. See the block above. */
+async function stationSite(which) {
+  const pin = String(which || "").toLowerCase();
+  if (isPin(pin)) return await pinnedSite(pin);
   loadStationSite();
   /* the real site, already found: there is nothing left to look for */
   if (stationSiteId && !stationSiteOwn) return stationSiteId;
@@ -1352,7 +1452,16 @@ function isRefused(e) {
 
     The re-check cadence is NOT reset. `lookAgain` is for a person tapping "Try
     again", which is a reason to look right now; a failed call is not.        */
-function forgetStationSite(lookAgain) {
+function forgetStationSite(lookAgain, which) {
+  const pin = String(which || "").toLowerCase();
+  if (isPin(pin)) {
+    const s = pinState[pin];
+    if (s.id) forgetListIdsFor(s.id);
+    s.id = null; s.read = true; s.gen++;
+    if (lookAgain) { s.missAt = 0; s.soft = false; }
+    try { localStorage.removeItem(PIN_KEY[pin]); } catch (e) {}
+    return;
+  }
   if (stationSiteId) forgetListIdsFor(stationSiteId);
   stationSiteId = null; stationSiteOwn = false; stationSiteRead = true;
   stationSiteGen++;
@@ -1362,7 +1471,10 @@ function forgetStationSite(lookAgain) {
 /** Which site the lists are being read from now, for a caller holding state
     that only means anything in one site - a delta token, say. It changes when
     the lists move, and never otherwise. */
-function stationSiteMoves() { return stationSiteGen; }
+function stationSiteMoves(which) {
+  const pin = String(which || "").toLowerCase();
+  return isPin(pin) ? pinState[pin].gen : stationSiteGen;
+}
 
 
 window.CW = {
@@ -1400,6 +1512,20 @@ window.CW = {
   },
   /* tests only: which site is in use, and whether it is the fallback */
   _stationSiteInfo() { return { id: stationSiteId, own: stationSiteOwn, gen: stationSiteGen }; },
+  /* tests only: what one PINNED channel ("own" / "floor") currently holds */
+  _pinnedSiteInfo(which) {
+    const s = pinState[String(which || "").toLowerCase()];
+    return s ? { id: s.id, gen: s.gen, missAt: s.missAt } : null;
+  },
+  /* tests only: forget both pinned channels, in memory and in localStorage -
+     what a browser profile that had never opened the page starts from */
+  _resetPinnedSites() {
+    ["own", "floor"].forEach(k => {
+      const s = pinState[k];
+      s.id = null; s.missAt = 0; s.soft = false; s.read = false;
+      try { localStorage.removeItem(PIN_KEY[k]); } catch (e) {}
+    });
+  },
   /* tests only: pretend the last look for the Floor stations site was then, so
      a ten-minute re-check can be reached without waiting ten minutes */
   _stationSiteLookedAt(at) { stationSiteMissAt = at; },

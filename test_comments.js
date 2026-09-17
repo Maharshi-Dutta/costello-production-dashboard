@@ -85,6 +85,15 @@ const LOG_ID = "list-station-log";
 const NOTES_ID = "list-station-comments";
 const FLISTS_PATH = "/sites/" + FSITE + "/lists";
 const HOST_LOOKUP = "/sites/costellowindowsie.sharepoint.com:/sites/FloorStations";
+/* FIXTURE, 2026-09-16: the WORKBOOK'S OWN SITE serves the same four lists.
+   Since ST.GLASS.site became "own" (the hard pin - graph.js, "a station that
+   is PINNED to one site"), the glass page and the office resolve the
+   workbook's own site by path and never look at `Floor stations`. The stores
+   are the same objects, because this suite is about one list read from both
+   sides - which site it is read from is test_station.js' question, not this
+   one's. */
+const OWNLISTS_PATH = "/sites/" + SITE + "/lists";
+const OWN_LOOKUP = "/sites/costellowindowsie.sharepoint.com:/sites/ProductionProgress";
 
 let NOTES_EXISTS = true;                // has the office made the Station comments list yet?
 let ITEMS = [], PEOPLEITEMS = [], LOGITEMS = [], NOTEITEMS = [];
@@ -105,9 +114,11 @@ const storeFor = id => id === GLASS_ID ? ITEMS : id === PEOPLE_ID ? PEOPLEITEMS
 let DELTA_SEQ = 0;
 const DELTA_NEXT = {};                  // listId -> [batch, ...] for token calls
 
-function routeDelta(listId, tail) {
+function routeDelta(listId, tail, base) {
   const store = storeFor(listId) || [];
-  const link = () => G + FLISTS_PATH + "/" + listId + "/items/delta?token=T" + (++DELTA_SEQ);
+  /* the deltaLink comes back against the site it was asked of, so a token can
+     never carry a page from one site to the other */
+  const link = () => G + (base || FLISTS_PATH) + "/" + listId + "/items/delta?token=T" + (++DELTA_SEQ);
   if (/[?&]token=/.test(tail)) {
     const batch = (DELTA_NEXT[listId] || []).shift() || [];
     return ok({ value: batch, "@odata.deltaLink": link() });
@@ -118,8 +129,14 @@ function routeDelta(listId, tail) {
 
 function route(method, path, body) {
   if (path === HOST_LOOKUP) return ok({ id: FSITE, displayName: "Floor stations" });
-  if (path.indexOf(FLISTS_PATH) === 0) {
-    const rest = path.slice(FLISTS_PATH.length);
+  if (path.indexOf(OWN_LOOKUP) === 0) return ok({ id: SITE, displayName: "Production Progress" });
+  if (path.indexOf(OWNLISTS_PATH) === 0) return routeLists(method, path, body, OWNLISTS_PATH);
+  if (path.indexOf(FLISTS_PATH) === 0) return routeLists(method, path, body, FLISTS_PATH);
+  return { status: 599, body: { error: { code: "thisTestServesNoWorkbook", message: path } } };
+}
+function routeLists(method, path, body, base) {
+  {
+    const rest = path.slice(base.length);
     if (method === "GET" && rest.indexOf("?$select=id,displayName") === 0) return ok({ value: lists() });
     const mi = /^\/([^/?]+)\/items(.*)$/.exec(rest);
     if (!mi) return { status: 404, body: { error: { code: "itemNotFound" } } };
@@ -129,7 +146,7 @@ function route(method, path, body) {
     if (FAIL_NOTES_GET && id === NOTES_ID && method === "GET") {
       FAIL_NOTES_GET--; return { status: 403, body: { error: { code: "accessDenied" } } };
     }
-    if (method === "GET" && tail.indexOf("/delta") === 0) return routeDelta(id, tail);
+    if (method === "GET" && tail.indexOf("/delta") === 0) return routeDelta(id, tail, base);
     if (method === "GET") return ok({ value: store.map(x => ({ id: x.id, fields: Object.assign({}, x.fields) })) });
     if (FAIL_NOTES && id === NOTES_ID && method !== "GET") {
       FAIL_NOTES--; return { status: 403, body: { error: { code: "accessDenied" } } };

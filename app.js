@@ -23,7 +23,7 @@ const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep
    station is adding a line here and a renderer for its key - the dropdown, the
    empty states and the reset in renderChips all follow from this array.
    SHEETNAMES stays exactly as it was, for the export filter and the row chips. */
-const STATIONS = [["glass", "Glass station"]];
+const STATIONS = [["glass", "Glass station"], ["welding", "Welding station"]];
 /* Everything the Show dropdown can put in the job list's place. The floor
    stations, and then the John print sheet - which is not a station at all: it
    is the office's own second sheet, "Production (2)", shown on its own terms
@@ -1375,6 +1375,20 @@ let STATION_LOG = null;        // the Station log list, likewise
 /* the floor's notes: `Station comments`, read here and never written. It is a
    fourth list that can be missing on its own, so it gets its own three states
    exactly as the log does. (2026-09-15, docs/specs/2026-09-15-station-comments.md) */
+/* WHICH SITE THE GLASS LISTS ARE IN, and the one word that holds them there
+   (2026-09-16). The glass station's three lists are in the workbook's own site
+   - the interim arrangement of 2026-09-08, because there was no Global
+   Administrator to make a separate one. There is now, and the welding station
+   gets `Floor stations`; creating it would have moved this page's glass reads
+   to a site with no "Glass station" list in it at the next ten-minute
+   re-check. ST.GLASS.site is "own" until the glass lists are copied across,
+   and every glass call below asks for that site by name. See graph.js,
+   "a station that is PINNED to one site". */
+// fallback is "own", never "": with no ST.GLASS yet, glass paths must still
+// resolve to the workbook's own site and can never fall through to the
+// legacy (no-site) route.
+const glassSite = () => (typeof ST !== "undefined" && ST.GLASS ? ST.GLASS.site : "own");
+
 let STATION_NOTES = null;
 let STATION_NOTES_OK = null;
 let STATION_NOTES_WHY = "";
@@ -1453,7 +1467,7 @@ async function readStation() {
     if (CW.hasListConsent && !(await CW.hasListConsent())) {
       STATION_OK = false; STATION_WHY = STATION_NEED_CONSENT; STATION_ERR = ""; return null;
     }
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) { STATION_OK = false; STATION_WHY = STATION_SITE_MISSING; STATION_ERR = ""; return null; }
     const items = await CW.listItems(ST.STATION_LIST, { siteId: siteId, fields: ST.STATION_FIELDS });
     if (items == null) { STATION_OK = false; STATION_WHY = STATION_LIST_MISSING; STATION_ERR = ""; return null; }
@@ -1477,7 +1491,7 @@ async function readStationLog() {
     if (CW.hasListConsent && !(await CW.hasListConsent())) {
       STATION_LOG_OK = false; STATION_LOG_WHY = STATION_NEED_CONSENT; return null;
     }
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) { STATION_LOG_OK = false; STATION_LOG_WHY = STATION_SITE_MISSING; return null; }
     const items = await CW.listItems(ST.LOG_LIST, { siteId: siteId, fields: ST.LOG_FIELDS });
     if (items == null) { STATION_LOG_OK = false; STATION_LOG_WHY = STATION_LOG_MISSING; return null; }
@@ -1546,7 +1560,7 @@ async function readStationNotes() {
       notesAgain(NOTES_MISS_RETRY_MS);          // granted later, without a reload
       return null;
     }
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) {
       STATION_NOTES_OK = false; STATION_NOTES_WHY = STATION_SITE_MISSING;
       notesAgain(NOTES_MISS_RETRY_MS);
@@ -1824,7 +1838,7 @@ function feedRows(key, rows) {
 let stationPeopleReading = null;
 async function readStationPeople() {
   try {
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     STATION_PEOPLE = (siteId &&
       await CW.listItems(ST.PEOPLE_LIST, { siteId: siteId, fields: ST.PEOPLE_FIELDS_OFFICE })) || [];
   } catch (e) {
@@ -1850,7 +1864,7 @@ function stationTrouble(e) {
      the lists are; dropping the site over one would restart the whole re-check
      cadence, and on a 403 could flip a dashboard that is happily reading the
      real site over to the fallback. */
-  if (CW.isMissing && CW.isMissing(e) && CW.forgetStationSite) CW.forgetStationSite();
+  if (CW.isMissing && CW.isMissing(e) && CW.forgetStationSite) CW.forgetStationSite(false, glassSite());
   if (/interaction_required|login_required/.test(m)) {
     STATION_OK = false; STATION_WHY = STATION_SIGN_IN_AGAIN; STATION_ERR = "";
   } else if (/permission needed/.test(m)) {
@@ -1939,7 +1953,15 @@ function chipsNow() {
     takes it as soon as whoever was typing or dragging has finished, so the rows
     can never sit on a number the floor has moved on from with nothing to say
     so. Cheap when nothing is owed, which is nearly always. */
-function stationCatchUp() { if (ROWS_STALE) redrawStation(); }
+function stationCatchUp() {
+  if (!ROWS_STALE) return;
+  /* ... and on the welding board it is redrawWelding() that owes it. This used
+     to call redrawStation() whatever was on screen, and redrawStation() returns
+     straight out on the welding board without clearing ROWS_STALE - so a
+     repaint deferred while somebody was typing in the board's own search box
+     was owed for ever and never taken. */
+  if (state.board === "welding") redrawWelding(); else redrawStation();
+}
 
 /** A repaint nobody asked for: no entry animation, so the rows change their
     numbers where they stand instead of the whole list flashing. */
@@ -2029,12 +2051,12 @@ async function stationPoll() {
   stationPolling = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) return false;
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) return false;
     /* the floor's lists can move from one site to another (see stationSite()).
        A delta token only means anything in the site it was issued in, so a
        move throws both of them away and starts again. */
-    const gen = CW.stationSiteMoves ? CW.stationSiteMoves() : 0;
+    const gen = CW.stationSiteMoves ? CW.stationSiteMoves(glassSite()) : 0;
     if (gen !== STATION_SITE_GEN) { stationSiteMoved(gen); }
     let moved = await stationDelta("items", siteId);
     if (STATION_LOG_OK === true && (await stationDelta("log", siteId))) moved = true;
@@ -2156,6 +2178,9 @@ function redrawStation() {
      carries the floor's chip too, and a counter moved on the tablet has to
      reach it. Held off while the list is in use - and then owed, so the next
      tick takes the repaint that was skipped rather than losing it. */
+  /* the welding board redraws on its own clock (redrawWelding) from its own
+     lists, so a glass poll must not rebuild it under somebody's filter */
+  if (state.board === "welding") { if (state.sel && $("#dhost")) renderDrawer(); return; }
   const onBoard = typeof STATIONS !== "undefined" && STATIONS.some(b => b[0] === state.board);
   if (rowsInUse()) ROWS_STALE = true;
   else if (onBoard) { ROWS_STALE = false; quietRows(); }
@@ -2186,7 +2211,16 @@ function stationTick() {
        leave stationPollT null with stationTick() never reached: no timer would
        ever be armed again, and the whole dashboard would quietly stop updating
        until somebody reloaded the page. */
-    try { await stationPoll(); stationCatchUp(); } catch (e) { /* neither throws; belt and braces */ }
+    /* ONE TRY PER STATION, SIDE BY SIDE, AND NEITHER INSIDE THE OTHER.
+       weldPoll() used to be called from inside stationPoll(), which returns
+       early on `STATION_OK !== true` - so a glass list that could not be read
+       (no permission yet, list not made, a 404) silently froze the WELDING
+       board as well, on a dashboard where the welding lists were perfectly
+       healthy. Each station's poll is its own question about its own lists in
+       its own site, and neither may gate, delay or fail the other. */
+    try { await stationPoll(); } catch (e) { /* it has its own catch; belt and braces */ }
+    try { await weldPoll(); } catch (e) { /* ... and so does this one */ }
+    try { stationCatchUp(); } catch (e) {}
     stationTick();
   }, STATION_TICK_MS);
 }
@@ -2224,6 +2258,11 @@ function setStationFoot() {
      refusing a write and somebody has to know rather than read it in a console */
   if (GLASS_COLOUR_ERR) { show("glass colours not saved"); el.title = GLASS_COLOUR_ERR; return; }
   if (STATION_FEED_ERR) { show("station feed failed"); el.title = STATION_FEED_ERR; return; }
+  /* the welding feed has its own word, after the glass one: two feeds, two
+     lists, two sites, and the office should know which of them is stuck */
+  if (typeof WELD_FEED_ERR !== "undefined" && WELD_FEED_ERR) {
+    show("welding feed failed"); el.title = WELD_FEED_ERR; return;
+  }
   if (!STATION_FEED.at) { show(""); el.title = ""; return; }
   show("station feed: " + agoWords(STATION_FEED.at));
   el.title = "The Glass station list was last brought up to date then. The Excel file is not involved.";
@@ -2389,12 +2428,12 @@ async function feedStation() {
       STATION_FEED_ERR = "";                             // nothing to do is not a failure
       return null;
     }
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) { STATION_OK = false; STATION_WHY = STATION_SITE_MISSING; STATION_ERR = ""; return null; }
     /* the feed resolves the site as well, so it is one of the two places a
        move can first be noticed - and it must not feed the new site holding
        the old one's tokens */
-    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves() : 0;
+    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves(glassSite()) : 0;
     if (fgen !== STATION_SITE_GEN) stationSiteMoved(fgen);
     const opts = { siteId: siteId, fields: ST.STATION_FIELDS };
     const items = await CW.listItems(ST.STATION_LIST, opts);
@@ -2433,6 +2472,728 @@ async function feedStation() {
     stationBusy = false;
     setStationFoot();
   }
+}
+
+/* ================= the welding station, in the office =========================
+   Shipped 2026-09-16 (docs/specs/2026-09-16-welding-station.md). The second
+   floor station, and the first one built on the shape the third will use: the
+   columns and the rules are welding-core.js' `WELD` definition, the list
+   mechanics are the same station-core.js functions the glass feeder uses, and
+   everything below is this dashboard's half - feed the list, poll it, draw the
+   board, and let the office correct a counter.
+
+   FOUR THINGS TO KEEP IN MIND BEFORE CHANGING ANY OF IT:
+
+   1. NOTHING HERE WRITES THE WORKBOOK. Not a fill, not a value, not a row. The
+      gold F/S cells are read ONCE, as a seed, through the office's own
+      `Dashboard progress` record (cpStatus) - never as a colour, and never
+      back again. Rule 1 has three sanctioned fills and this is not a fourth.
+   2. The welding lists are in the `Floor stations` site and the glass ones are
+      not (owner's decision 1, 2026-09-16). Every call below resolves its site
+      with WELDC.WELD.site and the glass ones with glassSite(); the two must
+      never share a site id, a delta token or a "the lists moved" counter.
+   3. The office's edits write the floor's counters. That is the SECOND
+      sanctioned office write of a floor counter, after the glass clear, and it
+      is dated in CLAUDE.md rule 2. They go in `Dashboard Log` and NEVER in
+      `Station log` - there is no call to ST.logFields on this path at all.
+   4. A failure here can never stop the glass feed, the checkpoint writes or the
+      colour writer. Every entry point has its own try and reports into its own
+      three states.                                                           */
+const WELD_SITE_MISSING = "The “Floor stations” SharePoint site is not there yet, or this account " +
+  "cannot see it, so the welding board cannot be shown. Ask the manager — nothing in the Excel file is involved.";
+const WELD_LIST_MISSING = "The “Welding station” list is not in the “Floor stations” site yet. " +
+  "Ask the manager to add it — nothing in the Excel file is involved.";
+const WELD_LOG_MISSING = "The “Station log” list is not in the “Floor stations” site yet, so who " +
+  "welded what cannot be shown here. Ask the manager to add it.";
+const WELD_NEED_CONSENT = STATION_NEED_CONSENT;
+
+let WELD_ITEMS = null;          // the Welding station list, as last read
+let WELD_OK = null;             // null: not looked · false: no site, no list, no permission · true
+let WELD_WHY = "";
+let WELD_ERR = "";              // a passing failure: the last board stays, with this line above it
+let WELD_LOG = [];              // the Station log, in the floor's site, Welding lines
+let WELD_LOG_OK = null, WELD_LOG_WHY = "";
+let WELD_NOTES = null;          // Station comments, in the floor's site
+let WELD_NOTES_OK = null;
+let WELD_SITEID = null;
+let WELD_SITE_GEN = 0;
+let WELD_TOK = { items: null, log: null, notes: null };
+let weldBusy = false, weldPolling = false;
+let WELD_FEED = { hash: "", at: 0 };
+let WELD_FEED_ERR = "";
+const WELD_FEED_KEY = "cw_weldfeed";
+try { WELD_FEED = JSON.parse(localStorage.getItem(WELD_FEED_KEY) || "null") || WELD_FEED; } catch (e) {}
+function saveWeldFeed() { try { localStorage.setItem(WELD_FEED_KEY, JSON.stringify(WELD_FEED)); } catch (e) {} }
+/* which job rows on the board are expanded, what is in its search box, and
+   which section it is narrowed to. Screen state: nothing is written anywhere. */
+let WELD_OPEN = {}, WELD_Q = "", WELD_SECT = "";
+let weldWriting = {};           // item id|part -> an office write in flight
+
+/** Is the welding station's code even on this page? index.html loads
+    welding-core.js; a harness that does not gets a board that says so once and
+    never throws. */
+const weldOn = () => typeof WELDC !== "undefined" && !!WELDC && typeof ST !== "undefined";
+/** The site the welding lists are in: `Floor stations`, and nothing else. */
+async function weldSiteId() { return await CW.stationSite(WELDC.WELD.site); }
+const weldOpts = () => ({ siteId: WELD_SITEID, fields: WELDC.WELD_FIELDS });
+
+/** What a failed read means, in one place, for this station's own three states
+    and nothing else's. It can never touch STATION_OK, STATION_WHY or the glass
+    board: a different list, in a different site, is a different question. */
+function weldTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  const gone = !!(CW.isMissing && CW.isMissing(e));
+  if (gone) {
+    WELD_SITEID = null;
+    if (CW.forgetStationSite) CW.forgetStationSite(false, WELDC.WELD.site);
+  }
+  if (/permission needed/.test(m)) { WELD_OK = false; WELD_WHY = WELD_NEED_CONSENT; WELD_ERR = ""; return; }
+  if (gone) { WELD_OK = false; WELD_WHY = WELD_SITE_MISSING; WELD_ERR = ""; return; }
+  /* anything else - offline, a bad gateway, a refused token - leaves the last
+     board on screen with a line above it, because a blank screen saying "ask
+     the manager to make the list" is a lie when the list is fine and the
+     workshop wifi is not */
+  WELD_ERR = "cannot reach the welding lists just now — retrying";
+  console.warn("[welding] " + m);
+}
+
+/** Read the Welding station list, quietly. Never pops a consent window, never
+    toasts, never throws. */
+async function readWelding() {
+  if (!weldOn() || typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      WELD_OK = false; WELD_WHY = WELD_NEED_CONSENT; WELD_ERR = ""; return null;
+    }
+    WELD_SITEID = await weldSiteId();
+    if (!WELD_SITEID) { WELD_OK = false; WELD_WHY = WELD_SITE_MISSING; WELD_ERR = ""; return null; }
+    const items = await CW.listItems(WELDC.WELD_LIST, weldOpts());
+    if (items == null) { WELD_OK = false; WELD_WHY = WELD_LIST_MISSING; WELD_ERR = ""; return null; }
+    WELD_ITEMS = items; WELD_OK = true; WELD_WHY = ""; WELD_ERR = "";
+    WELD_TOK.items = null;                    // a full read: the next poll starts a fresh delta
+    return items;
+  } catch (e) { weldTrouble(e); return null; }
+}
+/** The floor's log and the floor's notes, for the panel under the board. Both
+    read-only here, for ever: the office writes neither, on this station or any
+    other. Each can be missing on its own without taking the board away. */
+async function readWeldingLog() {
+  if (!weldOn() || !WELD_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.LOG_LIST, { siteId: WELD_SITEID, fields: ST.LOG_FIELDS });
+    if (items == null) { WELD_LOG_OK = false; WELD_LOG_WHY = WELD_LOG_MISSING; return null; }
+    WELD_LOG = stationLogRecent(items);
+    WELD_LOG_OK = true; WELD_LOG_WHY = "";
+    WELD_TOK.log = null;
+    return WELD_LOG;
+  } catch (e) { weldTrouble(e); return null; }
+}
+async function readWeldingNotes() {
+  if (!weldOn() || !WELD_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.COMMENT_LIST, { siteId: WELD_SITEID, fields: ST.COMMENT_FIELDS });
+    if (items == null) { WELD_NOTES_OK = false; WELD_NOTES = []; return null; }
+    WELD_NOTES = stationNotesRecent(items);
+    WELD_NOTES_OK = true;
+    WELD_TOK.notes = null;
+    return WELD_NOTES;
+  } catch (e) { weldTrouble(e); return null; }
+}
+
+/* ---- the feeder -------------------------------------------------------------
+   Beside feedStation(), never inside it, and in its own try at the call site: a
+   welding list that will not write must not stop the glass list being fed, and
+   neither of them may stop a checkpoint reaching the workbook.
+
+   Otherwise it is the same dull shape: skip unless the permission is already
+   granted, skip when nothing has changed and the last run is recent, read the
+   list once, work out the plan (ST.feedPlan with the welding definition), send
+   it a few at a time in the same three lanes and the same 60-write budget, and
+   remember what was sent. Never a delete, ever. */
+function weldStatusOf(j, item) {
+  return typeof cpStatus === "function" ? cpStatus(j, item) : "";
+}
+/** The same guard the glass feeder's stationFeedPatch has, for the same reason:
+    a plan is made from a list read a moment ago, and a seed must not land on a
+    row the floor has taken over since. A patch carrying no seed field goes
+    straight out. */
+async function weldFeedPatch(p, opts) {
+  const fields = p.fields || {};
+  if (!WELDC.WELD_SEED_FIELDS.some(k => k in fields))
+    return CW.listPatch(WELDC.WELD_LIST, p.id, fields, opts);
+  let now = null;
+  try { now = await CW.listItem(WELDC.WELD_LIST, p.id, opts); }
+  catch (e) { now = null; }                 // could not look: assume the worst and keep off the counters
+  const have = (now && now.fields) || {};
+  const touched = !now || String(have.DoneAt == null ? "" : have.DoneAt).trim() !== "";
+  if (!touched) return CW.listPatch(WELDC.WELD_LIST, p.id, fields, opts);
+  const body = {};
+  Object.keys(fields).forEach(k => { if (WELDC.WELD_SEED_FIELDS.indexOf(k) < 0) body[k] = fields[k]; });
+  /* FedAt/FedBy alone are not worth a write: they only ride along with a
+     change, and the change is exactly what was just dropped */
+  if (!Object.keys(body).some(k => k !== "FedAt" && k !== "FedBy")) return null;
+  return CW.listPatch(WELDC.WELD_LIST, p.id, body, opts);
+}
+/** Add one row, treating a refused POST the way the glass feeder does: the
+    Title is unique on the list, so a refusal usually means another dashboard
+    made the row first - patch it instead, minus the seed if the floor has
+    already tapped it. */
+async function weldAdd(fields, opts) {
+  try { return await CW.listAdd(WELDC.WELD_LIST, fields, opts); }
+  catch (e) {
+    const mine = await CW.listItemsFor(WELDC.WELD_LIST, fields.Title, opts);
+    if (!mine.length) throw e;                    // a real failure: nothing was created
+    const have = mine[0].fields || {};
+    const touched = String(have.DoneAt == null ? "" : have.DoneAt).trim() !== "";
+    const body = {};
+    Object.keys(fields).forEach(k => {
+      if (k === "Title") return;
+      if (touched && WELDC.WELD_SEED_FIELDS.indexOf(k) >= 0) return;
+      body[k] = fields[k];
+    });
+    return CW.listPatch(WELDC.WELD_LIST, mine[0].id, body, opts);
+  }
+}
+const WELD_AGAIN_MS = 30000;
+let weldAgainT = null;
+function weldFeedAgain() {
+  if (weldAgainT) return;
+  weldAgainT = setTimeout(() => { weldAgainT = null; feedWelding().catch(() => {}); }, WELD_AGAIN_MS);
+}
+
+async function feedWelding() {
+  if (!weldOn()) return null;
+  if (weldBusy) return null;                             // only one feed at a time
+  if (weldPolling) { weldFeedAgain(); return null; }     // a poll is merging a delta right now
+  if (typeof CW === "undefined" || !CW || !CW.listAdd) return null;
+  weldBusy = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) { WELD_FEED_ERR = ""; return null; }
+    /* every job on the sheet, every allowed group with F or S > 0, carrying the
+       office's own record so a group already ticked gold arrives welded */
+    const slice = WELDC.weldSlice(ALL, BLOCKNAMES, weldStatusOf);
+    const hash = ST.sliceHash(slice, WELDC.WELD);
+    if (hash === WELD_FEED.hash && Date.now() - (WELD_FEED.at || 0) < STATION_FEED_MS) {
+      WELD_FEED_ERR = "";                                // nothing to do is not a failure
+      return null;
+    }
+    WELD_SITEID = await weldSiteId();
+    if (!WELD_SITEID) { WELD_OK = false; WELD_WHY = WELD_SITE_MISSING; WELD_ERR = ""; return null; }
+    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves(WELDC.WELD.site) : 0;
+    if (fgen !== WELD_SITE_GEN) weldSiteMoved(fgen);
+    const opts = weldOpts();
+    const items = await CW.listItems(WELDC.WELD_LIST, opts);
+    if (items == null) { WELD_OK = false; WELD_WHY = WELD_LIST_MISSING; WELD_ERR = ""; return null; }
+    WELD_OK = true; WELD_WHY = ""; WELD_ERR = ""; WELD_ITEMS = items; WELD_TOK.items = null;
+    const plan = ST.feedPlan(slice, items,
+      { at: new Date().toISOString(), by: feedWho(), def: WELDC.WELD });
+    const all = plan.adds.map(f => () => weldAdd(f, opts))
+      .concat(plan.patches.map(p => () => weldFeedPatch(p, opts)));
+    const work = all.slice(0, STATION_FEED_MAX);
+    const r = await stationSend(work);
+    WELD_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
+    /* the hash is only remembered when the whole plan went out: a run cut short
+       by the 60-write cap, or that lost a write, must run again */
+    const whole = !r.failed && work.length === all.length;
+    WELD_FEED = whole ? { hash: hash, at: Date.now() } : { hash: "", at: Date.now() };
+    saveWeldFeed();
+    if (!whole) weldFeedAgain();
+    console.log("[welding] fed " + r.sent + " of " + all.length +
+                " (" + plan.adds.length + " new, " + plan.patches.length + " changed, " +
+                plan.unchanged + " already right)");
+    if (r.sent) {
+      const after = await CW.listItems(WELDC.WELD_LIST, opts);
+      if (after) { WELD_ITEMS = after; WELD_TOK.items = null; }
+    }
+    return r;
+  } catch (e) {
+    WELD_FEED_ERR = (e && e.message) || String(e);
+    console.warn("[welding] feed failed:", WELD_FEED_ERR);
+    weldTrouble(e);
+    weldFeedAgain();
+    return null;
+  } finally {
+    weldBusy = false;
+    setStationFoot();
+  }
+}
+
+/** The welding lists have moved to another site. Everything held about them was
+    true of the old one: both tokens and the "already fed" hash go with it. */
+function weldSiteMoved(gen) {
+  WELD_SITE_GEN = gen;
+  WELD_TOK = { items: null, log: null, notes: null };
+  WELD_FEED = { hash: "", at: 0 }; saveWeldFeed();
+  console.log("[welding] the welding lists have moved: feeding and re-reading the new site");
+}
+
+/* ---- the poll ---------------------------------------------------------------
+   Its own, on the station clock, in its own try inside stationPoll. A welding
+   list that flaps must not put "cannot reach the floor's lists" over a glass
+   board that read perfectly well, and - far worse - must not return before the
+   glass colour writer has had its turn. That was review bug 2 of the comments
+   feature and it is not being rebuilt here. */
+async function weldDeltaOne(key, list, fields) {
+  const opts = { siteId: WELD_SITEID, fields: fields };
+  if (WELD_TOK[key]) opts.token = WELD_TOK[key];
+  const had = opts.token || null;
+  let d;
+  try {
+    d = await CW.listDelta(list, opts);
+  } catch (e) {
+    if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+    /* a stale token, or a list that will not serve a delta at all: read it the
+       plain way this pass and start a fresh token next time */
+    WELD_TOK[key] = null;
+    const all = await CW.listItems(list, { siteId: WELD_SITEID, fields: fields });
+    if (all == null) return null;
+    return { rows: all, fresh: true };
+  }
+  if (d == null) return null;                     // the list is not there any more
+  WELD_TOK[key] = d.next || null;
+  if (!had) return { rows: d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields })),
+                     fresh: true };
+  if (!d.items.length) return { rows: null, fresh: false };
+  return { rows: d.items, fresh: false };
+}
+async function weldPoll() {
+  if (!weldOn() || weldPolling || weldBusy) return false;
+  if (WELD_OK !== true) return false;             // nothing read yet: nothing to keep current
+  if (!CW.listDelta) return false;
+  weldPolling = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) return false;
+    WELD_SITEID = await weldSiteId();
+    if (!WELD_SITEID) return false;
+    const gen = CW.stationSiteMoves ? CW.stationSiteMoves(WELDC.WELD.site) : 0;
+    if (gen !== WELD_SITE_GEN) weldSiteMoved(gen);
+    let moved = false;
+    const got = await weldDeltaOne("items", WELDC.WELD_LIST, WELDC.WELD_FIELDS);
+    if (got === null) {
+      /* NULL MEANS THE LIST IS NOT THERE ANY MORE, and it is not a throw. Read
+         as "nothing moved" it would leave this feed reporting healthy for ever
+         and enumerating a list that does not exist every ten seconds - which is
+         exactly review bug B of the comments feature. */
+      WELD_OK = false; WELD_WHY = WELD_LIST_MISSING;
+    } else if (got.rows) {
+      WELD_ITEMS = got.fresh ? got.rows : ST.mergeDelta(WELD_ITEMS || [], got.rows);
+      moved = true;
+    }
+    if (WELD_LOG_OK === true) {
+      const lg = await weldDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
+      if (lg === null) { WELD_LOG_OK = false; WELD_LOG_WHY = WELD_LOG_MISSING; }
+      else if (lg.rows) {
+        WELD_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(WELD_LOG || [], lg.rows));
+        moved = true;
+      }
+    }
+    if (WELD_NOTES_OK === true) {
+      const nt = await weldDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
+      if (nt === null) { WELD_NOTES_OK = false; WELD_NOTES = WELD_NOTES || []; }
+      else if (nt.rows) {
+        WELD_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(WELD_NOTES || [], nt.rows));
+        moved = true;
+      }
+    }
+    WELD_ERR = "";
+    if (moved) redrawWelding();
+    return moved;
+  } catch (e) {
+    weldTrouble(e);
+    return false;
+  } finally {
+    weldPolling = false;
+  }
+}
+/** Redraw the welding board, and nothing else on the page. Held off while the
+    list is in use - somebody typing in the board's own search box - and then
+    owed, exactly as the glass repaint is. */
+function redrawWelding() {
+  if (state.board !== "welding") return;
+  if (rowsInUse()) { ROWS_STALE = true; return; }
+  ROWS_STALE = false;
+  quietRows();
+}
+/* The reads the board needs, asked once each, whoever asks first - the same
+   shape as stationReadIfNeeded, so opening the board three times asks
+   SharePoint once. */
+let weldReading = null, weldLogReading = null, weldNotesReading = null;
+/* TWO RULES HERE, and each of them was a real fault before it was a rule.
+
+   ALREADY READ MEANS RETURN, NOT "call the callback anyway". Every one of
+   these is called from inside a renderer, and the callback is "draw again" -
+   so answering synchronously makes renderRows() call itself without end. It
+   is a stack overflow, not a slow board, and it was found in the browser check
+   rather than in any offline suite. The glass pair above has always returned
+   bare for exactly this reason; these three do too.
+
+   AND A READ THAT FAILED IS NOT TRIED AGAIN AT NETWORK SPEED. A passing
+   failure leaves the state null (that is deliberate: null means "not known",
+   and a blip must not blank a board). But null is also what says "ask" - so
+   without a clock, the failed read's own `then` redraws, the redraw asks
+   again, and the tablet hammers a refusing list as fast as the wifi will
+   carry it. Same shape as the notes channel's notesAgain()/notesDue(): a
+   stamp and a wait, longer for "no such list" than for a dropped connection,
+   and the retry costs nothing on the passes in between. */
+const WELD_RETRY_MS = 15000;          // a passing failure: the workshop wifi
+const weldSoft = { board: 0, log: 0, notes: 0 };
+const weldSoftMs = { board: 0, log: 0, notes: 0 };
+/** Remember that this read did not answer, and how long to leave it. */
+function weldAgain(which, ms) { weldSoft[which] = Date.now(); weldSoftMs[which] = ms; }
+/** Is it time to ask again? */
+function weldDue(which) {
+  return !weldSoft[which] || Date.now() - weldSoft[which] >= weldSoftMs[which];
+}
+/* A site or a list that is NOT THERE needs no clock: the read sets the state
+   to false with the words for it, and false is not null, so the guard above
+   returns and nothing asks again. Only the states that stay null - the wifi,
+   a bad gateway, a refused token - can loop, and those are what this waits. */
+function weldReadIfNeeded(then) {
+  if (WELD_OK !== null) return;
+  if (!weldDue("board")) return;
+  if (!weldReading) {
+    weldAgain("board", WELD_RETRY_MS);          // armed before the read, not after
+    weldReading = readWelding().then(r => {
+      weldReading = null;
+      if (WELD_OK === null) weldAgain("board", WELD_RETRY_MS);
+      else weldSoft.board = 0;
+      return r;
+    }, () => { weldReading = null; });
+  }
+  weldReading.then(() => { if (then) then(); });
+}
+function weldLogReadIfNeeded(then) {
+  if (WELD_LOG_OK !== null || !WELD_SITEID) return;
+  if (!weldDue("log")) return;
+  if (!weldLogReading) {
+    weldAgain("log", WELD_RETRY_MS);
+    weldLogReading = readWeldingLog().then(r => {
+      weldLogReading = null;
+      if (WELD_LOG_OK === null) weldAgain("log", WELD_RETRY_MS); else weldSoft.log = 0;
+      return r;
+    }, () => { weldLogReading = null; });
+  }
+  weldLogReading.then(() => { if (then) then(); });
+}
+function weldNotesReadIfNeeded(then) {
+  if (WELD_NOTES_OK !== null || !WELD_SITEID) return;
+  if (!weldDue("notes")) return;
+  if (!weldNotesReading) {
+    weldAgain("notes", WELD_RETRY_MS);
+    weldNotesReading = readWeldingNotes().then(r => {
+      weldNotesReading = null;
+      if (WELD_NOTES_OK === null) weldAgain("notes", WELD_RETRY_MS); else weldSoft.notes = 0;
+      return r;
+    }, () => { weldNotesReading = null; });
+  }
+  weldNotesReading.then(() => { if (then) then(); });
+}
+
+/* ---- the office's own edit --------------------------------------------------
+   The SECOND sanctioned office write of a floor counter (CLAUDE.md rule 2,
+   dated 2026-09-16). The owner asked for it in as many words: the office must
+   be able to set and clear welding progress per job, "even on a finished job -
+   they might make it wrong".
+
+   What one click writes, and all it CAN write: that part's counter, that part's
+   By and At, and the last-touch pair - WELDC.weldOfficeFields, run through
+   WELDC.weldFloorOnly, which is the same filter the tablet's own queue runs on.
+   A job fact cannot get into it, because there is no argument it could come in
+   by: the builder takes a part, a number, a name and a time.
+
+   What it does NOT write: a `Station log` line. That list is the floor's and
+   stays the floor's. The change goes into `Dashboard Log` through noteChange,
+   exactly as the glass clear's does, and the tablet shows the office's name as
+   the row's last touch on its next ten-second poll. */
+async function weldOfficeEdit(id, part, act) {
+  if (!weldOn() || !CW.listPatch) return false;
+  const rec = (weldRecordsNow().byId || {})[String(id)];
+  if (!rec) return false;
+  const k = String(id) + "|" + part;
+  if (weldWriting[k]) return false;                       // one at a time per line
+  if (WELDC.weldApplyTap(rec, part, act) == null) return false;   // not a part of this station
+  if (WELD_OK !== true) { toast(WELD_WHY || WELD_LIST_MISSING, true); return false; }
+  /* gated by list consent like every list write, and skipped quietly without
+     it - never a popup somebody did not ask for */
+  if (CW.hasListConsent && !(await CW.hasListConsent())) { toast(WELD_NEED_CONSENT, true); return false; }
+  const who = feedWho(), at = new Date().toISOString();
+  weldWriting[k] = 1;
+  redrawWelding();
+  let from = rec[part], value = null, stale = false;
+  try {
+    WELD_SITEID = await weldSiteId();
+    if (!WELD_SITEID) throw new Error(WELD_SITE_MISSING);
+    /* READ THE ROW BEFORE DERIVING THE NUMBER.
+       The board's copy is up to ten seconds old, and the floor is tapping the
+       same counter. A welder's "All" at 14:00:01 on a board this screen last
+       polled at 13:59:56 - showing 3 of 49 - followed by the office pressing +
+       at 14:00:05 would write 4 and destroy 46 taps, with the office's later
+       stamp on it so nothing could argue it back. So: one GET of this row
+       immediately before the PATCH, and the number is derived from what it
+       says, not from what the board was drawing.
+
+       A read that will not answer is not a reason to write blind: it throws
+       into the catch below and nothing is sent. A row whose DoneAt has moved
+       since the board's copy gets a small word on screen afterwards, because a
+       number that lands somewhere other than where the finger was pointing has
+       to say so. "All" and "None" are absolute and land on the same answer
+       either way - they are re-derived from the fresh row too, so the clamp is
+       against the quantity the list actually holds. */
+    const now = await CW.listItem(WELDC.WELD_LIST, rec.id, weldOpts());
+    if (!now || !now.fields) throw new Error(WELD_LIST_MISSING);
+    const fresh = WELDC.weldRecord({ id: rec.id, fields: now.fields });
+    stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
+    from = fresh[part];
+    value = WELDC.weldApplyTap(fresh, part, act);
+    if (value == null || value === from) {
+      /* the floor has already put it where this click was going to */
+      delete weldWriting[k];
+      WELD_ITEMS = (WELD_ITEMS || []).map(it => String(it.id) === String(rec.id)
+        ? { id: it.id, fields: Object.assign({}, it.fields || {}, now.fields) } : it);
+      redrawWelding();
+      if (stale) toast(rec.job + " " + rec.group + ": updated from the floor first.");
+      return false;
+    }
+    const body = WELDC.weldFloorOnly(WELDC.weldOfficeFields(part, value, who, at));
+    await CW.listPatch(WELDC.WELD_LIST, rec.id, body, weldOpts());
+    /* the local copy carries the fresh row's own fields as well as the write,
+       so the board is not left showing the stale numbers beside the new one */
+    WELD_ITEMS = (WELD_ITEMS || []).map(it => String(it.id) === String(rec.id)
+      ? { id: it.id, fields: Object.assign({}, it.fields || {}, now.fields, body) } : it);
+  } catch (e) {
+    delete weldWriting[k];
+    console.warn("[welding] office edit refused:", (e && e.message) || e);
+    toast(rec.job + " " + rec.group + ": that change could not be saved. " + friendly(e), true);
+    redrawWelding();
+    return false;
+  }
+  delete weldWriting[k];
+  redrawWelding();
+  /* the floor had moved the row between the board's last poll and this click,
+     so the number this write started from is not the one that was on screen
+     when the office pressed the button. Said out loud, quietly, once. */
+  if (stale) toast(rec.job + " " + rec.group + ": updated from the floor first — " +
+                   WELDC.weldPartLabel(part) + " is " + value + " now.");
+  /* one line per change, in the office's own log and nowhere else. The from/to
+     are the row's real ones, read a moment ago, not the board's stale pair. */
+  noteChange(rec.job, WELDC.weldLogWords(rec.job, rec.group, part), String(from), String(value));
+  return true;
+}
+
+/* ---- what the board draws --------------------------------------------------- */
+let WRECS = null, WRECS_OF = false;
+/** Every welding record and card of the list, built once per version of it. The
+    array itself is the cache key, exactly as stationRecords() uses: every path
+    that changes WELD_ITEMS replaces the array rather than editing it. */
+function weldRecordsNow() {
+  if (WRECS_OF === WELD_ITEMS) return WRECS;
+  WRECS_OF = WELD_ITEMS;
+  const cards = weldOn() ? WELDC.weldOfficeBoard(WELD_ITEMS || []) : [];
+  const byId = {}, byJob = {};
+  cards.forEach(c => { byJob[c.job] = c; c.groups.forEach(g => { byId[String(g.id)] = g; }); });
+  WRECS = { cards: cards, byId: byId, byJob: byJob };
+  return WRECS;
+}
+let WLOGROWS = null, WLOGROWS_OF = false;
+function weldLogRowsNow() {
+  if (WLOGROWS_OF === WELD_LOG) return WLOGROWS;
+  WLOGROWS_OF = WELD_LOG;
+  WLOGROWS = ST.logRows(WELD_LOG || [], WELDC.WELD_NAME);
+  return WLOGROWS;
+}
+/** The floor's notes about one job, from the welding tablets. Read-only here:
+    there is no reply channel in this build and nothing on this page POSTs,
+    PATCHes or DELETEs a row of that list. */
+function weldNotesFor(job) {
+  return ST.commentRows(WELD_NOTES || [], { job: job, station: WELDC.WELD_NAME });
+}
+
+function weldBarHtml(done, total) {
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
+  return '<span class="wobar" aria-hidden="true"><span class="wobarfill" style="width:' + pct + '%"></span></span>';
+}
+/** Frames, or sashes, added over a job's groups - the pair on the job's row. */
+function weldPartWords(c, part) {
+  let done = 0, total = 0;
+  c.groups.forEach(g => { done += g[part]; total += g[part + "Total"]; });
+  return { done: done, total: total };
+}
+/** The sections the board offers to narrow by, in the sheet's own order. */
+function weldSections(cards) {
+  const seen = [];
+  cards.forEach(c => { if (c.section && seen.indexOf(c.section) < 0) seen.push(c.section); });
+  return seen;
+}
+function weldCardsShown() {
+  const all = weldRecordsNow().cards;
+  let rows = WELDC.weldFilter(all, String(WELD_Q || "").trim());
+  if (WELD_SECT) rows = rows.filter(c => c.section === WELD_SECT);
+  return rows;
+}
+
+/** One expanded group: the office's steppers on Frames and Sashes, that line's
+    By/At, and the bar. Every button writes the list at once. */
+function weldOfficeLineHtml(g, line) {
+  const k = String(g.id) + "|" + line.part;
+  const busy = !!weldWriting[k];
+  const b = (t, act, cls) => '<button class="' + cls + '" data-wid="' + esc(g.id) +
+    '" data-wpart="' + esc(line.part) + '" data-wact="' + esc(act) + '"' +
+    (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
+  const stamp = line.at ? esc(line.by || "—") + " · " + esc(stWhen(line.at)) : "";
+  return '<div class="woline c-' + (line.colour || "none") + '">' +
+    '<span class="wolab">' + esc(line.label) + '</span>' +
+    '<span class="wonum tab">' + line.done + ' / ' + line.total + '</span>' +
+    weldBarHtml(line.done, line.total) +
+    '<span class="wobtns">' + b("&minus;", "-1", "wobtn") + b("+", "1", "wobtn") +
+      b("All", "all", "wobtn wide") + b("None", "none", "wobtn wide") + '</span>' +
+    '<span class="wowho">' + stamp + '</span>' +
+  '</div>';
+}
+function weldOfficeGroupHtml(g) {
+  return '<div class="wogrp c-' + (g.colour || "none") + '">' +
+    '<div class="woghead"><span class="cond wogname">' + esc(g.group) + '</span>' +
+      '<span class="wogcount tab">' + g.done + ' / ' + g.total + '</span></div>' +
+    g.lines.map(l => weldOfficeLineHtml(g, l)).join("") + '</div>';
+}
+/** One job's row on the office's welding board. Click it to expand. */
+function weldRowHtml(c) {
+  const open = !!WELD_OPEN[c.job];
+  const fr = weldPartWords(c, "frames"), sa = weldPartWords(c, "sashes");
+  const notes = weldNotesFor(c.job);
+  return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") +
+      '" data-wjob="' + esc(c.job) + '">' +
+    '<div class="wohead" data-wtog="' + esc(c.job) + '">' +
+      '<span class="wotog">' + (open ? "▾" : "▸") + '</span>' +
+      '<span class="cond tab stjob">' + esc(c.job) + '</span>' +
+      '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
+      '<span class="wosect">' + esc(c.section || "—") + '</span>' +
+      '<span class="wototal tab">' + c.done + ' / ' + c.total + '</span>' +
+      weldBarHtml(c.done, c.total) +
+      '<span class="wopart tab">Frames ' + fr.done + '/' + fr.total + '</span>' +
+      '<span class="wopart tab">Sashes ' + sa.done + '/' + sa.total + '</span>' +
+      (notes.length ? '<span class="wonotes" title="' +
+        esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' +
+        notes.length + '</span>' : "") +
+      '<span class="wolast">' + (c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
+    '</div>' +
+    (open ? '<div class="wobody">' + c.groups.map(weldOfficeGroupHtml).join("") +
+      (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
+      (notes.length ? '<div class="wonotelist">' + notes.map(n =>
+        '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
+        '<span class="cmwhen">' + esc(ST.commentAgo(n.at)) + '</span>' +
+        '<div class="cmtext">' + esc(n.text) + '</div></div>').join("") + '</div>' : "") +
+      '</div>' : "") +
+  '</div>';
+}
+
+/** The whole board: the filter bar, the rows, and the floor's log under them. */
+function weldBoardHtml() {
+  if (!weldOn()) return '<div class="empty">The welding board did not load.</div>';
+  if (WELD_OK === null) return '<div class="empty">' + esc(STATION_CHECKING) + '</div>';
+  if (WELD_OK !== true)
+    return '<div class="empty" style="line-height:1.6">' + esc(WELD_WHY || WELD_LIST_MISSING) + '</div>';
+  const cards = weldCardsShown();
+  /* a passing failure never takes the board away: it says so above whatever was
+     last read, because a stale board beats a blank one */
+  const trouble = WELD_ERR ? '<div class="sttrouble">' + esc(WELD_ERR) + '</div>' : "";
+  const sects = weldSections(weldRecordsNow().cards);
+  const bar = '<div class="wofilt">' +
+    '<input class="txt" id="wq" placeholder="Find a job, a customer or a group" value="' + esc(WELD_Q) + '">' +
+    '<select class="txt" id="wsect"><option value="">Every section</option>' +
+      sects.map(s => '<option value="' + esc(s) + '"' + (WELD_SECT === s ? " selected" : "") + '>' +
+        esc(s) + '</option>').join("") + '</select>' +
+    '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
+    '</div>';
+  const body = !cards.length
+    ? '<div class="empty" style="line-height:1.6">No welding jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>'
+    : cards.map(weldRowHtml).join("");
+  return trouble + bar + '<div class="wolist">' + body + '</div>' + weldLogPanelHtml();
+}
+
+/* The floor's log, under the board. The owner's answer to "office edits are not
+   in Station log" was about visibility: the floor's log must be visible on the
+   office's welding view, and this is where it is. Read-only, filtered to
+   Welding, newest first, with the same counts bar the glass log window has -
+   the very same ST.logRows / ST.logCounts. */
+const WELD_LOG_SHOW = 40;
+function weldLogPanelHtml() {
+  weldLogReadIfNeeded(() => { if (state.board === "welding") redrawWelding(); });
+  weldNotesReadIfNeeded(() => { if (state.board === "welding") redrawWelding(); });
+  const head = '<div class="wologhead"><span class="kick">Floor log</span>' +
+    '<span class="wologsub">Who welded what, and when. Written by the tablet only — ' +
+    'the office never writes a line of it, and nothing in the Excel file is involved.</span></div>';
+  if (WELD_LOG_OK === null) return '<div class="wolog">' + head +
+    '<div class="cphint">' + esc(STATION_CHECKING) + '</div></div>';
+  if (WELD_LOG_OK !== true) return '<div class="wolog">' + head +
+    '<div class="cphint">' + esc(WELD_LOG_WHY || WELD_LOG_MISSING) + '</div></div>';
+  const rows = weldLogRowsNow();
+  const counts = ST.logCounts(rows);
+  const chip = c => '<span class="lgcount">' + esc(c.key) + ' <strong class="tab">' + c.units + '</strong>' +
+    ' <span class="lgc2">' + c.lines + ' line' + (c.lines === 1 ? "" : "s") + '</span></span>';
+  const lines = rows.slice(0, WELD_LOG_SHOW).map(r =>
+    '<div class="stlrow"><span class="stlwho">' + esc(r.who || "—") + '</span>' +
+    '<span class="stn">' + esc(r.job) + '</span>' +
+    '<span class="stlwhat">' + esc(r.type) + ' · ' + esc(WELDC.weldPartLabel(r.stage)) +
+      ' · ' + r.from + ' → ' + r.to + '</span>' +
+    '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>').join("");
+  return '<div class="wolog">' + head +
+    (counts.people.length ? '<div class="lgcrow"><span class="kick">Per person</span>' +
+      counts.people.map(chip).join("") + '</div>' : "") +
+    (rows.length ? '<div class="stlog">' + lines + '</div>' +
+      (rows.length > WELD_LOG_SHOW ? '<div class="cphint">' + rows.length +
+        ' lines in the last ' + ST.LOG_DAYS + ' days; the newest ' + WELD_LOG_SHOW + ' are shown.</div>' : "")
+     : '<div class="cphint">Nothing recorded on the welding floor yet.</div>') +
+  '</div>';
+}
+
+/** Wire the board: the expanders, the two filters and the office's steppers. */
+function wireWeldBoard(host) {
+  if (!host || !host.querySelector) return;
+  const q = host.querySelector("#wq");
+  if (q) q.oninput = () => {
+    WELD_Q = q.value || "";
+    const at = q.selectionStart;
+    renderRows();
+    const n2 = $("#wq");
+    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
+  };
+  const se = host.querySelector("#wsect");
+  if (se) se.onchange = () => { WELD_SECT = se.value || ""; renderRows(); };
+  (host.querySelectorAll("[data-wtog]") || []).forEach(el => {
+    el.onclick = ev => {
+      /* a stepper inside an open row must not also fold the row up */
+      if (ev && ev.target && ev.target.dataset && ev.target.dataset.wact) return;
+      const j = el.dataset.wtog;
+      if (WELD_OPEN[j]) delete WELD_OPEN[j]; else WELD_OPEN[j] = 1;
+      renderRows();
+    };
+  });
+  (host.querySelectorAll("[data-wact]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (el.disabled) return;
+      const act = el.dataset.wact;
+      weldOfficeEdit(el.dataset.wid, el.dataset.wpart,
+                     act === "all" || act === "none" ? act : Number(act))
+        .catch(e => console.warn("[welding] " + ((e && e.message) || e)));
+    };
+  });
+}
+
+/** One read-only line in the job drawer, under the window types: how far the
+    welding floor has got, and the way to the board. There is deliberately no
+    new column on the job row - per-job detail goes in the card (owner's rule,
+    2026-09-09). */
+function weldDrawerLine(j) {
+  if (!weldOn() || !j) return "";
+  weldReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
+  if (WELD_OK !== true) return "";
+  const c = WELDC.weldJobCard(WELD_ITEMS || [], j.id);
+  if (!c || !c.total) return "";
+  return '<div class="weldline"><span class="kick">Welding</span>' +
+    '<span class="weldnum tab">' + c.done + ' / ' + c.total + '</span>' +
+    '<button class="ghost" id="weldopen">open the welding board</button></div>';
 }
 
 /* Every job the floor has a row for, in one map, built once per version of the
@@ -2650,6 +3411,11 @@ async function load(reason, force) {
       .then(() => cpAdoptRun(), () => {})
       .then(() => cpRepaintRun(), () => {})
       .then(() => feedStation(), () => {})
+      /* the welding feed, AFTER the glass one and in its own link of the chain
+         (2026-09-16). Both handlers call it, so a glass feed that somehow threw
+         cannot stop the welding list being fed - and feedWelding has its own
+         try inside, so it cannot stop the colour writer below either. */
+      .then(() => feedWelding(), () => feedWelding())
       .then(stationAfterFeed, () => {})
       .then(() => glassColourRun(), () => {})
       .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
@@ -3130,7 +3896,7 @@ async function clearFloorGlass(job) {
   const body = ST.officeClearFields(feedWho(), new Date().toISOString());
   try {
     if (STATION_OK !== true) throw new Error(STATION_WHY || "the floor's list is not readable");
-    const siteId = await CW.stationSite();
+    const siteId = await CW.stationSite(glassSite());
     if (!siteId) throw new Error(STATION_SITE_MISSING);
     await CW.listPatch(ST.STATION_LIST, g.id, body, { siteId: siteId, fields: ST.STATION_FIELDS });
   } catch (e) {
@@ -4893,7 +5659,8 @@ function renderChips() {
        (nothing changed, or the permission was granted since) read it now. Only
        for a floor station: the John print sheet came out of the workbook
        download the page already made and has nothing at all to read. */
-    if (state.board && state.board !== "john") stationReadIfNeeded(() => renderAll());
+    if (state.board === "welding") weldReadIfNeeded(() => renderAll());
+    else if (state.board && state.board !== "john") stationReadIfNeeded(() => renderAll());
   };
   c.appendChild(ssel);
 
@@ -5602,6 +6369,19 @@ function renderRows() {
      selection, no drag targets, nothing that writes anything anywhere */
   if (state.board) {
     ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // the board is its own reason to poll fast
+    /* the welding board is a second station in the same slot, with its own
+       list, its own site and its own renderer. Adding the third is another
+       line here and another renderer - see docs/STATIONS.md, "Adding a
+       station". */
+    if (state.board === "welding") {
+      weldReadIfNeeded(() => { if (state.board === "welding") renderRows(); });
+      host.innerHTML = '<div class="stboard weldboard">' + weldBoardHtml() + '</div>';
+      wireWeldBoard(host);
+      const wn = (WELD_OK === true && weldOn()) ? weldCardsShown().length : 0;
+      $("#count").textContent = wn ? "Showing " + wn + " job" + (wn > 1 ? "s" : "") +
+        " on the Welding station board" : "Welding station";
+      return;
+    }
     /* the card's "last: ..." line comes from the log list, which the feeder
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
@@ -6109,6 +6889,11 @@ function cpSectionHtml(j, ed) {
     (prodNames.length ? cpFoldHtml(j, "win", "Window types",
         prodNames.map(n => cpGroupHtml(j, g(n), cap(n.slice(5)), on, !locked && !readOnly, false, "All done")).join(""),
         prodNames.length, "window type") : "") +
+    /* how far the welding floor has got on this job, read-only, with the way to
+       their board. It is a LINE and not a column: per-job detail goes in the
+       card (owner's rule, 2026-09-09). It writes nothing and it is not a
+       checkpoint - nothing here can paint a cell. */
+    weldDrawerLine(j) +
     /* Doors: the same shape, with the quantity warning on whichever of the two
        the job actually has (amendments 6 and 10) */
     g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly, warn)).join("") +
@@ -6451,6 +7236,16 @@ function renderDrawer() {
       renderDrawer(); renderRows();
     };
     wireCheckpoints(host, j.id);
+    /* the one thing the welding line in the drawer can do: switch the list to
+       the welding board. No write, no checkpoint, nothing near the workbook. */
+    const wo = $("#weldopen");
+    if (wo) wo.onclick = () => {
+      state.board = "welding"; state.picked = {};
+      const sel = $("#showsel");
+      if (sel) sel.value = "welding";
+      closeDrawer();
+      renderAll();
+    };
   }
 }
 

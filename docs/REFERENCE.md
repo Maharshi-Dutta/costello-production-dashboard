@@ -1405,3 +1405,161 @@ under a board card's "last:" line for every station, not only Glass, oldest
 first. A card with no notes prints nothing; the channel's checking/missing/
 unreachable states are never shown on the board — that explained state stays
 in the drawer only, so four hundred cards do not each grow a banner.
+
+## 21. The welding station: the second floor page, and the pattern for the next
+
+**Shipped 2026-09-16.** Spec:
+[`docs/specs/2026-09-16-welding-station.md`](specs/2026-09-16-welding-station.md).
+Data model, admin setup and the checklist for the third station:
+[`docs/STATIONS.md`](STATIONS.md).
+
+The PVC welders get their own tablet page (`welding.html`), the office gets a
+board at **Show ▸ Welding station**, progress lives in one SharePoint list in
+the `Floor stations` site, and **nothing in the feature writes the workbook**.
+
+### What it is
+
+- **`Welding station`**, one row per job **and product group**, so a job with
+  casement windows and a PVC door is two rows carrying the same job facts.
+  `Title` = `JOB|GROUP`, unique.
+- The groups fed are **every** F/S/T product group the parser already finds on
+  the `Production` sheet, minus a deny-list of four (`ALU CLAD WINDOWS`,
+  `ALUCLAD TILT & TURN`, `BIFOLD`, `COMPOSITE`). A new green group on the sheet
+  needs no code change; a new red one is one line in `welding-core.js`.
+- Within a group, **F (frames) and S (sashes) only**. T is green on the owner's
+  header template in most groups and is still never shown — "there is no
+  transomes even if it is green" (owner, 2026-09-16).
+- **Three colours, three levels, the same three words:** no colour = nothing
+  welded, **yellow** = started, **green** = every one welded. On a
+  Frames/Sashes line, on the product group, and on the job card.
+
+### Rule 3 and the COMMENT (`weldStripDigits`)
+
+The owner asked for the sheet's COMMENT on the floor, with phone numbers
+removed (option B, 2026-09-16), and that answer is recorded as a rule-3
+decision. The strip runs **on the way into the list**, so no phone number and
+no eircode is ever stored where the floor could read one:
+
+- every run of **six or more digits** becomes `…`;
+- anything **eircode-shaped** (a letter, two digits or a digit and `W`, then
+  four alphanumerics, with or without a space) becomes `…`;
+- whitespace is collapsed and the result is capped at 140 characters.
+
+A job number is deliberately not caught: `R5303` is a letter and four digits,
+two characters short of the eircode shape. `export.js` had no eircode regex to
+borrow — it protects the eircode by never reading `j.eir` at all, which is the
+stronger rule where it applies and no help at all for free text — so the shape
+is written down once, in `welding-core.js`, and tested in `test_welding.js`
+against both a phone number and an eircode.
+
+A dash- or dot-joined run of sizes is over-stripped the same right-side-of-wrong
+way as an ISO date — `cill 150-2100` → `cill …`, `1200-900-1500` → `…`, `pane
+1.2.3.4.5.6` → `…` — because it has the same digit-and-separator shape as a
+phone number; that is the same owner's decision, the same way round (rule 3
+wins over a readable size). An `x`-separated size (`2 x 1200 x 900`) has no
+such shape and survives.
+
+### The seed
+
+Only when the feeder is **creating** a row, or when `DoneAt` is still empty
+(checked twice, exactly as the glass list's seed is): `FramesDone = Frames`
+when the office's own record for `prod:<group>:f` says `done`, else `0`; the
+same for sashes with `:s`. **Yellow seeds nothing** (owner, answer 5) — yellow
+says the work is not finished, and seeding it would tell the floor that frames
+still to weld are welded.
+
+The record is `cpStatus(j, item)` — the `Dashboard progress` list, §19 — and
+**not** the Excel colour, so a cell painted gold in Excel by hand reaches the
+seed through the existing safeguard rather than by anything here reading a
+fill. Nothing in this feature can paint one either: rule 1 still has exactly
+three sanctioned fills and welding is not a fourth.
+
+### The tablet
+
+`welding.html` + `welding.js`, the same shell as the glass page and the same
+shared station account: the picker, the PIN, the ten-minute lock, Switch
+person, the search box, the note channel (`ST.stationComments({ station:
+"Welding" })` — one word changed), ten-second delta polling, queued absolute
+writes rebased against the list, incremental redrawing.
+
+One card per job, its groups inside it in the sheet's own order, Frames and
+Sashes lines with `−` / `+` / `All` (which becomes `None` at the total) and a
+bar. A line with nothing to weld is not drawn; a group with nothing to weld is
+never fed. Groups on the board are **Active** and **Finished**; a finished card
+is still tappable and comes back the moment it is reduced, by the floor or by
+the office. The header carries **"N left"** (frames left plus sashes left over
+the whole board, never narrowed by the search box) and a **Sent to floor**
+chip, off by default, remembered on the device.
+
+There is **no lock column**. Glass has `OfficeDone`, which greys the tablet;
+welding does not need one, because the office edits the same counters instead.
+
+### The office's board
+
+One row per job, **every section**, in sheet order: an overall bar,
+`Frames x/y`, `Sashes x/y`, the last touch, and the unread-notes count from
+`Station comments`. Click a row to open it: one block per product group, each
+with the office's own **−, +, All, None** on Frames and Sashes.
+
+An office edit writes **exactly five fields** — that part's counter, that
+part's `By`/`At`, and `DoneBy`/`DoneAt` — through
+`WELDC.weldOfficeFields` → `WELDC.weldFloorOnly`, which is the same filter the
+tablet's own queue runs on, so no job fact can reach the body. It leaves **one
+`Dashboard Log` line** per change ("Welding: R5303 CASEMENT WINDOWS frames,
+3 → 6") and **no line of `Station log`**: that list is the floor's and stays
+the floor's (rule 2, unchanged; the owner's answer was about visibility, and
+the board's own **Floor log** panel is where the floor's log is visible).
+
+The tablet sees the office's change as the row's last touch on its next poll.
+A queued floor tap made *before* the office's edit is dropped and said so in
+red on the card — `WELDC.weldRebase` decides that, and it is the same
+last-writer-wins rule the glass clear uses: a counter that has **risen** under
+a waiting tap re-bases the movement onto the new number, one that has **fallen**
+under a row stamped **after** the tap is the later word and the tap goes.
+
+The job drawer gets one read-only line under the window types — "Welding 9 /
+16", with a button that switches the list to the board. **No new column on the
+job row** (owner's rule, 2026-09-09).
+
+### What was generalised, and what was deliberately not
+
+`station-core.js` gained a **station definition** argument and nothing else:
+`feedPlan`, `sliceHash` and `floorOnly` take one (default `ST.GLASS`, so every
+older call site means exactly what it meant), `stationPeople` takes the
+station's stage list, `boardDiff` takes the station's card signature. Nothing
+glass-specific was added to it and nothing welding-specific went into it — the
+welding rules are all in `welding-core.js`, and the station-independent tablet
+shell (theme, gate, picker, PIN pad) is the new `station-ui.js`.
+
+### The site pin
+
+`CW.stationSite(which)` honours the definition's `site`, and each word is a
+separate lookup by path that can only ever answer one site:
+
+- **`"floor"`** — the `Floor stations` site, with no fallback. Missing is
+  `null` and the page says so quietly.
+- **`"own"`** — the workbook's own site, where the glass lists still are. The
+  `Floor stations` site is **never** looked up on this channel: not on an empty
+  cache, not after a forget, not on **Try again**.
+
+The two keep separate cached ids (`cw_stationsite_own`,
+`cw_stationsite_floor`), separate miss clocks and separate move counters, so a
+glass 404 can never move the welding board and vice versa.
+
+**The first build of this pin was wrong and the review caught it.** It returned
+the cached site and otherwise fell through to the legacy resolver, which
+*prefers* `Floor stations`. A 404 on any glass list call (which calls
+`forgetStationSite`), a cleared localStorage, a new tablet or a new office PC
+each empty that cache — and the very next resolve would have moved the glass
+feeder, the glass colour writer and `clearFloorGlass` onto a site with no
+`Glass station` list in it, permanently. There is no gap left to describe: the
+only thing that can ever move the glass page is `ST.GLASS.site` being changed
+from `"own"` to `"floor"` on the day its three lists are copied across.
+
+### Not built, and said so
+
+- Nothing paints the `Production` sheet from welding progress (owner, answer
+  5b). The office ticks F/S gold by hand or in the drawer, as today.
+- No reply channel from the office to the welding tablet.
+- No move of the glass lists (owner, answer 9).
+- Cutting is not a stage here: "no cutting, it should just have welding".

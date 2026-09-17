@@ -203,6 +203,96 @@ scratchpad, not the repo: `untick_repro_reload.js` with `stub_office_reload.js`
 for the reverting case, `morning_repro.js` with `stub_morning.js` for the
 boot-time case.
 
+### B18. The welding board blew the stack the first time it was opened in a browser
+
+**Symptom:** `Maximum call stack size exceeded` the moment Show ▸ Welding
+station was picked. Nothing on screen, no board, no error the user could read.
+
+**Not what it looked like.** It was not the renderer, not the list, not the
+data. `weldLogReadIfNeeded(then)` answered its callback **synchronously** when
+the list had already been read — and the callback it is given, from inside
+`weldBoardHtml()`, is "draw the board again". So `renderRows()` called
+`renderRows()` until the stack ran out.
+
+**The fix, and the lesson:** already read means `return`, not "call the
+callback anyway". The glass pair (`stationReadIfNeeded` /
+`stationLogReadIfNeeded`) has always returned bare and says so in a comment;
+the welding three were written from the same shape but with the guard's `then`
+left in. All three now return bare.
+
+Worth recording for one reason: **no offline suite could have found it.** The
+Node harness never calls `renderRows()` for the board, and 40 offline checks
+were green while the page was unopenable. It was the first thing the real
+browser check found, and it is why the manager loop has that step.
+
+### B19. The welding fix pass: what an independent review found, and why each one mattered
+
+Twelve findings on the first build of the welding station, all closed in one
+pass on 2026-09-16. Four are worth remembering because none of them was a
+mistake in the feature — each was a correct-looking piece of code that was
+wrong about something outside itself.
+
+**A pin that was not a pin (ship-blocking).** `stationSite("own")` returned the
+cached site and otherwise fell through to the legacy resolver — which *prefers*
+`Floor stations`. It reads like a pin and behaves like one right up until the
+cache empties, and three ordinary events empty it: a 404 on any glass list call
+(which calls `forgetStationSite`), localStorage cleared or a new device, and a
+browser profile that has never opened the dashboard. After any of them the next
+resolve moved the glass feeder, the glass colour writer and `clearFloorGlass`
+onto a site with no `Glass station` list — permanently, from one 404, with
+"Try again" re-resolving the same wrong site. It is a lookup by path per
+channel now, with no route from one channel to the other. **The lesson: a cache
+with a fallback is not a pin. If the fallback can be reached, it will be.**
+
+**A regex that only knew one way to write a phone number (ship-blocking, rule
+3).** `\d{6,}` catches `0871234567` and nothing else, and a phone number in a
+workshop comment is almost never typed that way. `086 123 4567`,
+`+353 86 123 4567`, `087-123-4567`, `086.123.4567`, `(086) 123 4567` and
+`08712 34567` all reached the floor's list unchanged. Fixed with a separator-
+aware pass in front of the contiguous one, and the same strip was extended to
+the `Customer` column, which is free text off the same sheet. **The lesson: a
+redaction rule is only as good as the list of shapes it was tested against, and
+that list has to come from how people actually type, not from how the field is
+defined.**
+
+**One station's poll inside another's.** `weldPoll()` was called from inside
+`stationPoll()`, after its `if (STATION_OK !== true) return false`. A glass list
+that could not be read — no permission yet, list not made, one 404 — silently
+froze the welding board on a dashboard where the welding lists were perfectly
+healthy. Each station's poll is its own `try` on the tick now, side by side.
+**The lesson: "in its own try" is not enough if the try is inside somebody
+else's early return.**
+
+**A ten-second-old board writing an absolute number.** The office's stepper
+derived its value from `WELD_ITEMS`, which is up to one poll old. A welder's
+"All" at 14:00:01 on a board last polled at 13:59:56 showing 3 of 49, plus the
+office pressing + at 14:00:05, wrote 4 — forty-six taps destroyed, under the
+office's later stamp so nothing could argue them back. The row is read
+immediately before the PATCH now and the number derived from what it says, with
+a quiet "updated from the floor first" when it had moved. **The lesson: any
+absolute write derived from a polled copy needs a read immediately before it,
+however short the window looks.**
+
+Also closed in the same pass, and each one small: a repaint owed on the welding
+board was never taken (`stationCatchUp` called `redrawStation`, which returns
+early there without clearing the flag); the three `weld*ReadIfNeeded` helpers
+retried a failed read at network speed because a redraw asked again immediately
+(now on a clock, like the notes channel's); `weldJobCard` ignored `Active`, so
+the drawer's "Welding 9 / 16" counted groups that had left the sheet; and
+`weldSlice` could in principle emit one `Title` twice, which the unique rule on
+the list would then refuse on every run for ever (now first-one-wins with a
+warning).
+
+**One inherited bug was deliberately NOT fixed.** In `welding.js`'s
+`flushQueue`, `e` and `QUEUE[k]` were the same object, so the post-write check
+`now.value === e.value` compared a thing with itself and always agreed: a tap
+or a re-base that landed while the PATCH was in the air was deleted as though
+it had been sent. `welding.js` now captures what it sent before the await and
+decides against that. **`station.js` has the identical shape and was left
+alone** — it is inherited rather than introduced, and changing it means
+changing the frozen glass suite. It is written down here so the next person to
+touch `station.js`'s queue fixes it there too.
+
 ### B15. Things that are not bugs and will be reported as bugs
 - **An un-tick can show as gold on the master dashboard for up to a minute.**
   SharePoint's downloadable copy lags about 36 seconds. Not fixable, corrects
@@ -343,6 +433,23 @@ commit and build: see git log
 | `the commit stamped build 20260916-1259` | **Station comments**, built 2026-09-15: a note channel from any floor station to the office, `ST.stationComments(cfg)` built once for every station, the `Station comments` list, the tablet's own-station thread, and the drawer's cross-station read-only **Floor notes** section — a Changes line per new note, nothing written to the workbook (REFERENCE.md §20). **Amendment E**, added 2026-09-16 after the owner's demo: the Components F·S·T cell blanked (E1); an unread-notes 💬 badge on the job row and on the Glass station board card, per-screen seen state in `localStorage` (`cw_notesread`), opening a job scrolling the drawer to Floor notes (E2, B17); every station's notes drawn on the board cards themselves (E3) (REFERENCE.md §20a). Real-browser checks run this time: tablet 13/13, office 12/12, amendment 22/22, headed-Edge demo approved by the owner. Build: `20260916-1259` |
 
 ---
+
+### 2026-09-16/17 — the welding station, and a shape for the next one
+
+| Commit | What it added |
+|---|---|
+| 2026-09-17, build 20260917-1212 | **The welding station**, the second floor page: `welding.html` + `welding.js` + `welding-core.js` for the PVC welders, a `Welding station` list in the `Floor stations` site (one row per job **and product group**), an office board at Show ▸ Welding station with the office's own steppers, and a read-only Welding line in the job drawer. F and S only, never T; every product group on the sheet minus a four-name deny-list; the COMMENT carried with a rule-3 strip over it. **No workbook write anywhere in the feature.** `station-core.js` was generalised by a **station definition** (default: glass, so every older call means what it meant) and the station-independent tablet shell moved into a new `station-ui.js`. `CLAUDE.md` rule 2 gains a dated third exception: the office's welding edits write the floor's counters, logged in `Dashboard Log` and never in `Station log`. Spec: `docs/specs/2026-09-16-welding-station.md`; what was built: `docs/REFERENCE.md` §21; how to add the third station: `docs/STATIONS.md`, "Adding a station" |
+
+**Owner decisions taken that day** (full wording in the spec's "Decisions
+taken"): the COMMENT reaches the floor with runs of six or more digits removed
+(recorded as a rule-3 decision); a gold F/S cell seeds that component as
+welded and a yellow one seeds nothing; the office may correct welding progress
+on a finished job, "they might make it wrong"; office edits stay out of
+`Station log` and the floor's log is shown on the office's board instead; the
+sent-to-floor filter defaults off, the same as glass; and the **site flip** is
+handled by pinning the glass page to the site its lists are already in rather
+than moving them — `ST.GLASS.site`, one word, reversible on the day the glass
+lists are copied across.
 
 ## D. Symptom index
 

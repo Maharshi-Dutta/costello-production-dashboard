@@ -3,17 +3,23 @@
 This is a static web app: no build step, no framework, no bundler, plain
 ES2017 browser JavaScript. It is the production dashboard for Costello
 Windows, reading and writing one shared SharePoint workbook (the `Production`
-sheet) through the Microsoft Graph Excel API, plus four SharePoint lists for
+sheet) through the Microsoft Graph Excel API, plus SharePoint lists for
 state that must never touch the workbook. The GitHub repository is **public**.
 
-Two pages ship from this repo:
+Three pages ship from this repo:
 
 - `index.html` + `app.js` — the master dashboard, used by the office.
 - `glass.html` + `station.js` + `station-core.js` — the glass floor station,
   used on a shared tablet, shipped 2026-09-08 — see
   [`docs/specs/2026-09-08-glass-station.md`](docs/specs/2026-09-08-glass-station.md) and its v2 and v3, and
-  `docs/STATIONS.md` for the built data model and setup. Check
-  `docs/specs/README.md` for the status of every spec.
+  `docs/STATIONS.md` for the built data model and setup.
+- `welding.html` + `welding.js` + `welding-core.js` — the PVC welding floor
+  station, on the same shared tablet, 2026-09-16 — see
+  [`docs/specs/2026-09-16-welding-station.md`](docs/specs/2026-09-16-welding-station.md) and `docs/REFERENCE.md` §21.
+  **The third station should be built from the "Adding a station" checklist in
+  `docs/STATIONS.md`, not by copying a page.**
+
+Check `docs/specs/README.md` for the status of every spec.
 
 Read `docs/REFERENCE.md` (what has been built and how, feature by feature),
 `docs/ARCHITECTURE.md`, `docs/SUPPORT.md`, `docs/STATIONS.md` and
@@ -123,8 +129,8 @@ the one that first wrote them down.
    floor's own work goes onto the record too, the floor finishing a job is
    what locks it, and only an office row stamped later unlocks it again.
 
-   There are **exactly two** exceptions, each granted by the owner in a dated
-   spec, each for a named case; a **third** is a new decision for the owner,
+   There are **exactly three** exceptions, each granted by the owner in a dated
+   spec, each for a named case; a **fourth** is a new decision for the owner,
    not a judgement call for a session.
    - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
      nowhere else): the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is
@@ -148,9 +154,26 @@ the one that first wrote them down.
      value but zero, no reconciliation pass, and never `Station people` or
      `Station log`. The body can only be built by `ST.officeClearFields(who,
      at)`, which takes a name and a time and so cannot carry a counter in.
-   Only the tablet (`station.js`) writes a By, an At, a last touch or a log
-   line — **or a note**: `Station comments` is written by a floor tablet and by
-   nothing else, one POST per note, and is read here and in no export.
+   - **The office's welding edits** (owner, **2026-09-16**,
+     [`docs/specs/2026-09-16-welding-station.md`](docs/specs/2026-09-16-welding-station.md), "Decisions taken"): on
+     the office's own **Welding station** board, the office may set and clear a
+     job's welding progress per product group — *"even on a finished job, they
+     might make it wrong"*. One click writes **exactly five fields** of one
+     `Welding station` row: that part's counter (`FramesDone` or `SashesDone`),
+     that part's `By`/`At`, and `DoneBy`/`DoneAt`. The proof that it cannot
+     write anything else is the shape of `WELDC.weldOfficeFields(part, value,
+     who, at)` — a part, a number, a name and a time, filtered again through
+     `WELDC.weldFloorOnly` on the way out, which is the same filter the tablet's
+     own queue runs on. Every such change leaves **one `Dashboard Log` line**
+     and **no `Station log` line**: rule 2's "the office never writes `Station
+     log`" is unchanged, and the owner's answer about visibility is met by the
+     **Floor log** panel on the welding board itself. Nothing on this path goes
+     near the workbook: the welding station paints no cell, in either direction.
+   Only the tablet (`station.js`, `welding.js`) writes a By, an At, a last touch
+   or a log line — **or a note**: `Station comments` is written by a floor tablet
+   and by nothing else, one POST per note, and is read here and in no export.
+   The floor's list columns are never the office's to write for any other
+   reason: not to correct one, not to tidy up, not from a reconciliation pass.
 4. **No phone number and no eircode leave the app in any export, ever.**
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or
@@ -208,6 +231,7 @@ node test_glasscolour.js
 node test_comments.js
 node test_doors.js
 node test_john.js
+node test_welding.js
 
 node verify.js   # dev-only cross-check, see below
 ```
@@ -225,8 +249,9 @@ python build.py   # stamps a ?v=<timestamp> onto every script tag and writes ver
 ```
 
 `build.py` rewrites the cache-busting query string on every `<script src="…">`
-tag matching `parser`, `graph`, `checkpoints`, `station-core`, `station`,
-`export` or `app` — on **both** `index.html` and `glass.html` — and updates
+tag matching `parser`, `graph`, `checkpoints`, `station-core`, `station-ui`,
+`station`, `welding-core`, `welding`, `export` or `app` — on **all three** of
+`index.html`, `glass.html` and `welding.html` — and updates
 the `<span id="build">` footer text on each. `glass.html` carries the same
 build stamp as `index.html`, which matters more there than anywhere else: a
 tablet left signed in for weeks is exactly where a stale cached script does

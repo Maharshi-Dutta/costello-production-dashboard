@@ -101,6 +101,74 @@ const STATION_FIELDS = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], FLOOR
 const SEED_FIELDS = ["Cut", "Hotmelt", "Glazed"];
 const FEEDER_WRITES = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], SEED_FIELDS);
 
+/* ---- a STATION DEFINITION ---------------------------------------------------
+   New on 2026-09-16, with the welding station (docs/specs/2026-09-16-welding-
+   station.md). Three functions in this file used to know the glass list's own
+   column names: feedPlan, sliceHash and floorOnly. They now take a definition
+   instead, and GLASS is the definition of the station they used to be about -
+   so every existing call site and every one of the 246 glass checks reads
+   exactly as it did, and the welding station hands in WELDC.WELD instead.
+
+   Nothing glass-specific was added to this file to make that work, and nothing
+   welding-specific may be either: a definition is data, it lives beside its own
+   station's rules (welding-core.js), and the next station is one more of them.
+
+   What a definition has to carry:
+     key / name / list  what it is called, and the list it feeds
+     site               "own" = the workbook's own site, resolved by path;
+                        "floor" = the `Floor stations` site, resolved by path.
+                        Each is the ONLY site that channel can ever answer.
+                        Owner's decision 1 of 2026-09-16. CW.stationSite(which)
+                        is what honours it, and the block comment there is the
+                        whole of what each word means.
+     fields             every column, for the $select of a read
+     feederFields       the job facts the feeder owns
+     floorFields        the columns the tablet may write, and nothing else
+     counterFields      which of those are numbers rather than stamps
+     seedFields         the counters the feeder may seed on an untouched row
+     feederOf(row)      one slice row's job facts, in list shape
+     seedOf(row)        one slice row's seed, in list shape
+     hashOf(row)        everything about a row worth re-feeding for            */
+const GLASS = {
+  key: "glass",
+  name: STATION_NAME,
+  list: STATION_LIST,
+  /* THE PIN (owner's decision 1, 2026-09-16). The Floor stations site did not
+     exist when this station shipped, so its three lists were made in the
+     workbook's own site. Creating the site for the welding station would
+     otherwise have moved this page to a site with no "Glass station" list in
+     it at its next ten-minute re-check.
+
+     "own" means THE WORKBOOK'S OWN SITE, resolved by path, with the Floor
+     stations site never looked up on that channel at all - not on an empty
+     cache, not after a forget, not on Try again. An earlier version of this
+     meant "whatever site was cached, else look the old way", which a single
+     404 on a list call was enough to defeat; see the graph.js block comment.
+
+     THIS ONE WORD IS THE WHOLE OF THE GLASS MOVE. On the day the three glass
+     lists are copied into `Floor stations`, it becomes "floor" and nothing
+     else in the app changes. */
+  site: "own",
+  stages: ALL_STAGE_KEYS,
+  fields: STATION_FIELDS,
+  feederFields: FEEDER_FIELDS,
+  floorFields: FLOOR_FIELDS,
+  counterFields: ALL_STAGE_KEYS.map(k => STAGE_FIELD[k]),
+  seedFields: SEED_FIELDS,
+  feederWrites: FEEDER_WRITES,
+  feederOf: row => feederFields(row),
+  seedOf: row => seedFields(row),
+  hashOf: r => {
+    const seed = r.seed || {};
+    return [r.title, r.job, r.customer, r.total, r.tuffTotal || 0, r.seq,
+            !!r.active, !!r.officeDone,
+            seed.cut || 0, seed.hotmelt || 0, seed.glazed || 0];
+  }
+};
+/** The definition to use when a caller named none: the glass station, which is
+    what every one of these functions was about before there was a second. */
+const stDef = d => d || GLASS;
+
 /* The SECOND exception, and the last one: an office CLEAR puts this job's
    counters back to nought (owner, 2026-09-10,
    docs/specs/2026-09-10-office-clears-the-floor.md).
@@ -448,7 +516,12 @@ function sameField(have, want) {
 function feedPlan(slice, items, opts) {
   const at = (opts && opts.at) || new Date().toISOString();
   const by = stTxt(opts && opts.by);
-  const rows = (slice || []).slice().sort(stRowOrder);
+  /* which station's columns this plan is about. Omitted = the glass station,
+     which is what this function was about before there was a second one, so
+     every existing call site is unchanged. */
+  const def = stDef(opts && opts.def);
+  const order = def.rowOrder || stRowOrder;
+  const rows = (slice || []).slice().sort(order);
 
   const byTitle = {};
   (items || []).forEach(it => {
@@ -465,25 +538,25 @@ function feedPlan(slice, items, opts) {
   rows.forEach(r => {
     const t = stKey(r.title);
     seen[t] = 1;
-    const want = feederFields(r);
+    const want = def.feederOf(r);
     const mine = byTitle[t];
     if (!mine || !mine.length) {
       /* a row this feeder is creating starts where the office's own record
          already is - that is the whole of the seeding rule on a new row */
-      adds.push(Object.assign({ Title: r.title }, want, seedFields(r), { FedAt: at, FedBy: by }));
+      adds.push(Object.assign({ Title: r.title }, want, def.seedOf(r), { FedAt: at, FedBy: by }));
       return;
     }
     const have = mine[0].fields || {};
     const diff = {};
-    FEEDER_FIELDS.forEach(k => { if (!sameField(have[k], want[k])) diff[k] = want[k]; });
+    def.feederFields.forEach(k => { if (!sameField(have[k], want[k])) diff[k] = want[k]; });
     /* and a row the floor has never tapped is still the office's to say. Once
        DoneAt is set - the first tap writes it - this is skipped for ever, so
        nothing the office does can walk over the floor's own count. */
     if (untouched(have)) {
-      const seed = seedFields(r);
+      const seed = def.seedOf(r);
       /* a blank counter IS nought here, unlike a blank job fact: a row nobody
          has ever written a number on does not need three zeros put in it */
-      SEED_FIELDS.forEach(k => { if (stNum(have[k], 0) !== seed[k]) diff[k] = seed[k]; });
+      def.seedFields.forEach(k => { if (stNum(have[k], 0) !== seed[k]) diff[k] = seed[k]; });
     }
     if (!Object.keys(diff).length) { unchanged++; return; }
     /* FedAt/FedBy say when this item was last brought up to date and by whose
@@ -515,15 +588,11 @@ function feedPlan(slice, items, opts) {
     comma cannot make two different slices hash to the same string. The seed is
     in it as well: a job the office has just ticked off has to reach the floor
     on the next load, not in ten minutes' time. */
-function sliceHash(slice) {
-  const rows = (slice || []).slice().sort(stRowOrder);
+function sliceHash(slice, def) {
+  const d = stDef(def);
+  const rows = (slice || []).slice().sort(d.rowOrder || stRowOrder);
   let s = "";
-  rows.forEach(r => {
-    const seed = r.seed || {};
-    s += JSON.stringify([r.title, r.job, r.customer, r.total, r.tuffTotal || 0, r.seq,
-                         !!r.active, !!r.officeDone,
-                         seed.cut || 0, seed.hotmelt || 0, seed.glazed || 0]) + "\n";
-  });
+  rows.forEach(r => { s += JSON.stringify(d.hashOf(r)) + "\n"; });
   let h = 0x811c9dc5;                                     // FNV-1a, 32 bit
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -763,8 +832,12 @@ function applyTap(row, stage, delta) {
    log. The PIN is compared here, on the tablet, against a column the station
    account can read - it is a deterrent on a device that is passed around a
    workshop, not a secret, and STATIONS.md says so in those words.           */
-function stationPeople(items, station) {
+function stationPeople(items, station, stageKeys) {
   const want = stTxt(station || STATION_NAME).trim().toLowerCase();
+  /* which words in the Stages column are stages at all. Omitted = the glass
+     station's four, which is what this function has always read; the welding
+     page passes its own single "weld". */
+  const known = (stageKeys && stageKeys.length) ? stageKeys : ALL_STAGE_KEYS;
   const out = [];
   (items || []).forEach(it => {
     if (!it) return;
@@ -778,7 +851,7 @@ function stationPeople(items, station) {
        to stages that actually exist */
     const seen = {};
     const stages = stTxt(f.Stages).split(/[,;/]+/).map(s => s.trim().toLowerCase())
-                     .filter(s => ALL_STAGE_KEYS.indexOf(s) >= 0)
+                     .filter(s => known.indexOf(s) >= 0)
                      .filter(s => (seen[s] ? false : (seen[s] = true)));
     out.push({ id: stTxt(it.id), name: name, stages: stages,
                pin: stTxt(f.PIN).trim(), station: stTxt(f.Station).trim() });
@@ -815,12 +888,14 @@ function personExpired(lastTapAt, now, lockMs) {
    the same filter the tablet's queue runs on the way in and on the way out, so
    a job fact typed into localStorage by somebody holding the tablet still
    cannot reach the list.                                                    */
-function floorOnly(fields) {
+function floorOnly(fields, def) {
+  const d = stDef(def);
+  const counters = d.counterFields || [];
   const out = {};
-  FLOOR_FIELDS.forEach(k => {
+  d.floorFields.forEach(k => {
     if (!fields || !(k in fields)) return;
     const v = fields[k];
-    if (ALL_STAGE_KEYS.some(s => STAGE_FIELD[s] === k)) {
+    if (counters.indexOf(k) >= 0) {
       if (typeof v === "number" && isFinite(v)) out[k] = v;   // a counter is a number
       return;
     }
@@ -1275,10 +1350,15 @@ function cardSig(g) {
     g.finished, g.officeDone,
     ALL_STAGE_KEYS.map(k => [g[STAGE_ROW[k]], g.by[k], g.at[k]])]);
 }
-function boardDiff(prev, next) {
+function boardDiff(prev, next, sigOf) {
+  /* the signature of a card is the one station-specific thing here. Omitted =
+     the glass card's, which is what it has always been; the welding tablet
+     passes WELDC.weldCardSig. Everything else - what added, changed, removed
+     and "the order moved" mean - is the same question on any board. */
+  const sig = typeof sigOf === "function" ? sigOf : cardSig;
   const was = {}, now = {};
-  (prev || []).forEach(g => { was[g.job] = cardSig(g); });
-  (next || []).forEach(g => { now[g.job] = cardSig(g); });
+  (prev || []).forEach(g => { was[g.job] = sig(g); });
+  (next || []).forEach(g => { now[g.job] = sig(g); });
   const added = [], changed = [], removed = [];
   Object.keys(now).forEach(j => {
     if (!(j in was)) added.push(j);
@@ -1400,6 +1480,7 @@ function mergeDelta(items, changes) {
 }
 
 const ST = {
+  GLASS, stDef,
   STATION_LIST, PEOPLE_LIST, LOG_LIST, STATION_SITE, STATION_NAME,
   STAGES, STAGE_KEYS, STAGE_FIELD, STAGE_ROW, STAGE_BY, STAGE_AT, stageLabel,
   ALL_STAGES, ALL_STAGE_KEYS, STAGE_TOTAL_ROW, TUFF_STAGE,

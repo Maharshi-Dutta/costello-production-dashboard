@@ -403,7 +403,7 @@ async function flushQueue() {
         /* only a 404 is a reason to doubt the cached site: a refusal or a bad
            gateway says nothing about where the list is, and dropping the site
            over one would restart the ten-minute cadence for nothing */
-        if (CW.isMissing && CW.isMissing(err) && CW.forgetStationSite) CW.forgetStationSite();
+        if (CW.isMissing && CW.isMissing(err) && CW.forgetStationSite) CW.forgetStationSite(false, ST.GLASS.site);
         console.warn("[station] counter write failed for item " + id + ":", (err && err.message) || err);
       }
       saveQueue();
@@ -488,7 +488,7 @@ function trouble(e) {
      real site over to the fallback. */
   if (CW.isMissing && CW.isMissing(e)) {
     SITEID = null;
-    if (CW.forgetStationSite) CW.forgetStationSite();
+    if (CW.forgetStationSite) CW.forgetStationSite(false, ST.GLASS.site);
   }
   if (/interaction_required|login_required/.test(m)) { PROBLEM = "reauth"; SOFT = ""; READY = false; }
   else if (/permission needed/.test(m)) { PROBLEM = "consent"; SOFT = ""; READY = false; }
@@ -501,7 +501,7 @@ function trouble(e) {
     without anyone touching it. */
 async function readPeople() {
   try {
-    if (!SITEID) SITEID = await CW.stationSite();
+    if (!SITEID) SITEID = await CW.stationSite(ST.GLASS.site);
     if (!SITEID) { PROBLEM = "site"; SOFT = ""; READY = false; render(); return false; }
     const items = await CW.listItems(ST.PEOPLE_LIST, peopleOpts());
     if (items == null) { PROBLEM = "people"; SOFT = ""; READY = false; render(); return false; }
@@ -532,7 +532,7 @@ async function readPeople() {
     falls back to the plain read and simply polls that way. */
 async function readList() {
   try {
-    if (!SITEID) SITEID = await CW.stationSite();
+    if (!SITEID) SITEID = await CW.stationSite(ST.GLASS.site);
     if (!SITEID) { PROBLEM = "site"; SOFT = ""; READY = false; render(); return false; }
     if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
     let items = null;
@@ -578,7 +578,7 @@ async function readList() {
     token only means anything in the site it was issued in. */
 let SITE_GEN = 0;
 function siteMoved() {
-  const m = CW.stationSiteMoves ? CW.stationSiteMoves() : 0;
+  const m = CW.stationSiteMoves ? CW.stationSiteMoves(ST.GLASS.site) : 0;
   if (m === SITE_GEN) return false;
   SITE_GEN = m;
   return true;
@@ -586,7 +586,7 @@ function siteMoved() {
 async function pollList() {
   /* resolved every pass, which is also what drives the ten-minute look for the
      site the lists are meant to end up in; it is a cached value in between */
-  try { SITEID = (await CW.stationSite()) || SITEID; } catch (e) { /* keep the last one */ }
+  try { SITEID = (await CW.stationSite(ST.GLASS.site)) || SITEID; } catch (e) { /* keep the last one */ }
   if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
   if (!TOKEN) return readList();
   try {
@@ -1032,7 +1032,7 @@ function wireAgain() {
      board will not come back is an id that no longer means anything */
   if (a) a.onclick = () => {
     PROBLEM = ""; SOFT = ""; SITEID = null; TOKEN = null;
-    if (CW.forgetStationSite) CW.forgetStationSite(true);   // a person asked: look now
+    if (CW.forgetStationSite) CW.forgetStationSite(true, ST.GLASS.site);   // a person asked: look now
     render(); readPeople(); readList();
   };
   const r = $("#reauth");

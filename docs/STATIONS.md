@@ -499,22 +499,220 @@ nobody needs to sign out or reload it. A person who is offered on the picker
 but should not be able to move a stage is fixed the same way: edit `Stages`
 in SharePoint, not on the tablet — there is nothing to edit there.
 
-## Adding a future station
+## Adding a station
 
-The intended path (not yet needed until a second station is built):
+Written down on 2026-09-16, the day the **second** station (welding) was
+built, so the third (PA Lam) is this list and nothing more. Everything below
+was actually done for welding; where a file is named, that file already
+contains a worked example to copy.
 
-1. Extend the `STATIONS` array in `app.js` (next to `SHEETNAMES`) with the
-   new station's name — this is what adds it to the "Sheet" dropdown on the
-   master dashboard.
-2. Create a new SharePoint list for it, following the same shape as
-   `Glass station`: feeder-owned fact columns, station-owned progress
-   columns, unique `Title`.
-3. Copy `glass.html` (and `station.js`, adapted) into a new page for the new
-   area, pointed at the new list.
+Each station keeps its data in its own list and its own page — a station
+account for one area never needs, and never gets, another area's data.
 
-This keeps every station's data isolated in its own list and its own page —
-a station account for one area never needs, and never gets, access to
-another area's data.
+### 1. Write the station's definition
+
+A **station definition** is a plain object. It is the only thing
+`station-core.js` is told about a station, and it lives beside that station's
+own rules, never inside `station-core.js`:
+
+| field | what it is |
+|---|---|
+| `key` | the word in the URL and in `STATIONS` (`"glass"`, `"welding"`) |
+| `name` | the word in the `Station` column of `Station people`, `Station log` and `Station comments` |
+| `list` | the station's own SharePoint list |
+| `site` | `"own"` = the workbook's own site, resolved by path; `"floor"` = the `Floor stations` site, resolved by path. Each is the only site that channel can ever answer. See step 7 below |
+| `stages` | the stage keys this station's people can hold (glass has four, welding has one: `weld`) |
+| `fields` | every column, for the `$select` of a read |
+| `feederFields` | the job-fact columns the feeder owns |
+| `floorFields` | the columns the tablet may write, **and nothing else** |
+| `counterFields` | which of those are numbers rather than stamps |
+| `seedFields` | the counters the feeder may seed on an untouched row |
+| `feederOf(row)` | one slice row's job facts, in list shape |
+| `seedOf(row)` | one slice row's seed, in list shape |
+| `hashOf(row)` | everything about a row worth re-feeding for |
+
+`ST.GLASS` (in `station-core.js`) and `WELDC.WELD` (in `welding-core.js`) are
+the two that exist. `ST.feedPlan`, `ST.sliceHash` and `ST.floorOnly` take one;
+omitting it means the glass definition, which is what they were about before
+there was a second station.
+
+### 2. Three files
+
+| file | what goes in it |
+|---|---|
+| `<station>-core.js` | the definition, the slice, the board/card shapes, the colour rule, the tap clamp, the write bodies, the re-base. **Pure**: no DOM, no Graph, no workbook. Loads in Node and the browser |
+| `<station>.js` | the tablet page: the queue, the poll, the drawing |
+| `<station>.html` | the tablet page's shell and styles |
+
+What the pages share lives in `station-core.js` (lists, people, PIN, the log
+line, the note channel, the delta merge, the board diff) and in
+`station-ui.js` (the theme, the sign-in gate, the "Who are you?" picker and
+its PIN pad). Copy nothing between station pages that could live in one of
+those two instead.
+
+### 3. The lists
+
+- one list of the station's own, `Title` unique, with the feeder's columns and
+  the floor's columns (the two sets must not overlap);
+- `Station people`, `Station log` and `Station comments` are **shared** by
+  every station in the site; they are never created per station. The station's
+  `name` is what separates its rows.
+
+No list is created by code, ever. A missing one says which list, plainly, on
+whichever screen is asking, and writes nothing.
+
+### 4. The people rows
+
+One row per person in `Station people`: `Title` = the name, `Station` = the
+definition's `name`, `Stages` = the stage keys they hold, `PIN` = digits or
+blank, `Active` = `Yes`.
+
+### 5. The feeder hook, in `app.js`
+
+A `feed<Station>()` beside `feedStation()`, called from `load()`'s chain **in
+its own link** so a failure of one feeder can never stop the other, nor the
+checkpoint writes, nor the glass colour writer:
+
+```js
+.then(() => feedStation(), () => {})
+.then(() => feedWelding(), () => feedWelding())
+```
+
+The poll is the same shape: its own `try` inside `stationPoll()`, its own
+tokens, its own three states, and nothing inside it may touch the other
+station's.
+
+### 6. The board entry, in `app.js`
+
+One line in `STATIONS` (next to `SHEETNAMES`) and a renderer for its key in
+`renderRows()`'s `if (state.board)` branch. That is what puts the station in
+the Show dropdown and gives it the job list's place.
+
+### 7. The site pin
+
+`CW.stationSite(which)` honours the definition's `site`:
+
+- **`"floor"`** resolves the `Floor stations` site **by path, and nothing
+  else**. There is no fallback of any kind: a missing site is `null` and the
+  page shows the quiet explained state.
+- **`"own"`** resolves **the workbook's own site, by path, and nothing else**.
+  The `Floor stations` site is never looked up on this channel — not on an
+  empty cache, not after a forget, not when somebody taps **Try again**. That
+  is the glass station, whose three lists are still in the workbook's own site
+  (the interim arrangement of 2026-09-08).
+
+Each channel keeps its own cached id (`cw_stationsite_own`,
+`cw_stationsite_floor`), its own miss clock and its own "the lists moved"
+counter, and neither can ever answer the other's site. `forgetStationSite(look,
+which)` and `stationSiteMoves(which)` take the same word.
+
+**Why it is a lookup and not a cache.** The first version of the pin returned
+whatever site was cached and otherwise fell through to the old
+resolver — which *prefers* `Floor stations`. That is not a pin. Three ordinary
+things empty the cache: a 404 on any glass list call (which calls
+`forgetStationSite`), localStorage cleared or a new device, and a browser
+profile that has never opened the dashboard. After any of them the next resolve
+landed on `Floor stations` and cached it, and the glass feeder, the glass
+colour writer and `clearFloorGlass` were pointed at a site with no glass list
+in it — permanently, from one 404. There is now no route from the `"own"`
+channel to the other site at all.
+
+**The only way the glass page ever moves** is somebody changing
+`ST.GLASS.site` from `"own"` to `"floor"` in `station-core.js`, on the day the
+three glass lists are copied into `Floor stations`. One word, and it is the
+last step of that move.
+
+### 8. Tests and docs
+
+A `test_<station>.js` in the offline pattern, added to the verification command
+in both `CLAUDE.md` files; a section in `REFERENCE.md`; the data flow in
+`ARCHITECTURE.md`; a row in `specs/README.md`; and the station's own column
+table in this file.
+
+## The Welding station data model
+
+Shipped 2026-09-16 (`docs/specs/2026-09-16-welding-station.md`). The welders'
+tablet is `welding.html`; the office sees it at **Show ▸ Welding station**.
+
+**Nothing in this feature writes the workbook.** The welding station never
+paints a cell, and neither do the office's welding edits. The gold F/S cells
+on the `Production` sheet are read **once**, as a seed, through the office's
+own `Dashboard progress` record — never as a colour and never written back.
+
+### `Welding station` — one row per job **and product group**
+
+In the **`Floor stations`** site. `Title` is unique. A job with casement
+windows and a PVC door has two rows; the job's facts are repeated on every row
+of the job, so a row is complete on its own and the tablet builds one card per
+job out of them.
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| `Title` | Single line, **unique** | feeder | `JOB\|GROUP`, e.g. `R5303\|CASEMENT WINDOWS` — the group upper-cased with whitespace collapsed |
+| `Job` | Single line | feeder | the job number |
+| `Group` | Single line | feeder | the product group as on the sheet, for display |
+| `GroupSeq` | Number | feeder | the group's column order on the sheet, so a card lists its groups the sheet's way |
+| `Customer` | Single line | feeder | customer name, max 70 characters |
+| `Comment` | Single line | feeder | the sheet's COMMENT after the rule-3 strip, max 140 characters, may be blank |
+| `SentToFloor` | Single line | feeder | the "sent to floor" cell as typed; a blank stays blank |
+| `Wnd` / `Drs` | Number | feeder | the QUANTITY cells |
+| `Frames` / `Sashes` | Number | feeder | the group's F and S cells: how many to weld |
+| `Seq` | Number | feeder | the job's position in the master list |
+| `Section` | Single line | feeder | the job's section on the sheet. The tablet shows `In production` only; the office board shows every section |
+| `Active` | Single line | feeder | `Yes` while the job is on the sheet with this group having F or S > 0; `No` afterwards. **Never deleted** |
+| `FedAt` / `FedBy` | Single line | feeder | the last feed that changed this row, and whose dashboard did it |
+| `FramesDone` / `SashesDone` | Number | the tablet; the feeder as a **seed on an untouched row only**; the office from its welding board | welded so far |
+| `FramesBy` / `FramesAt`, `SashesBy` / `SashesAt` | Single line | the tablet; the office | who last moved that counter, and when (ISO) |
+| `DoneBy` / `DoneAt` | Single line | the tablet; the office | the last touch of any counter on this row |
+
+Do **not** switch on "enforce unique values" for anything but `Title`.
+
+**Which product groups reach the floor.** Every F/S/T product group the parser
+finds on the `Production` sheet, minus a deny-list of four: `ALU CLAD WINDOWS`,
+`ALUCLAD TILT & TURN`, `BIFOLD`, `COMPOSITE`. So a new green group on the sheet
+is fed with no code change, and a new red one is one line in
+`welding-core.js`. Within a group, **F and S only**: T is never shown, however
+the template colours it — the owner's words, "there is no transomes even if it
+is green".
+
+**Seeding.** Only when the feeder is creating a row, or when `DoneAt` is empty
+(checked twice, as the glass list's seed is): `FramesDone = Frames` when the
+office's own record for `prod:<group>:f` says `done` (gold), else `0`; the same
+for sashes with `:s`. **Yellow seeds nothing.** The moment the floor's first tap
+sets `DoneAt`, the feeder never writes a counter on that row again.
+
+**Rule 3 and the COMMENT.** The comment column is free text and does carry
+phone numbers. It is stripped on the way into the list — every run of six or
+more digits and anything eircode-shaped becomes `…` — so no phone number and no
+eircode is ever stored where the floor could read one.
+
+**The colours.** Three levels, the same three words at each: no colour =
+nothing welded, **yellow** = started, **green** = every one welded. A
+Frames/Sashes line, then the product group, then the job card.
+
+### Welding rows in the shared lists
+
+- `Station people`: `Station` = `Welding`, `Stages` = `weld` (one stage —
+  "no cutting, it should just have welding").
+- `Station log`: `Station` = `Welding`, `GlassType` = the product **group**
+  (the column name is kept; nothing creates columns), `Stage` = `frames` or
+  `sashes`, `From`/`To`/`Who`/`At` as before. **Written by the tablet only.**
+- `Station comments`: `Station` = `Welding`, exactly as for glass.
+
+### What the office can do, and what it cannot
+
+The office's welding board shows one row per job, every section, in sheet
+order, with an overall bar, `Frames x/y`, `Sashes x/y`, the last touch and the
+unread-notes count. Opening a row gives **−, +, All, None** on each group's
+Frames and Sashes.
+
+An office edit writes exactly five fields — that part's counter, that part's
+`By`/`At`, and `DoneBy`/`DoneAt` — and leaves **one `Dashboard Log` line** per
+change ("Welding: R5303 CASEMENT WINDOWS frames, 3 → 6"). It writes **no line
+of `Station log`**: that list is the floor's and stays the floor's. The tablet
+sees the change as the row's last touch on its next ten-second poll, and a
+queued floor tap made *before* the office's edit is dropped and said so on the
+card.
 
 ## What the feeder does, and when
 

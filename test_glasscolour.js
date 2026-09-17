@@ -215,6 +215,14 @@ global.CW = window.CW;
 CW._setToken(() => "t");
 CW._setFile({ base: "/x/workbook", content: "/x/content", meta: "/x", siteId: WSITE });
 CW._setStationSite(FSITE);                    // the floor's lists, already found
+/* FIXTURE, 2026-09-16: and the same answer on the PINNED "own" channel, which
+   is the one the glass page and the glass feeder ask (ST.GLASS.site === "own",
+   the hard pin in graph.js). FSITE here is simply "the site the Glass station
+   list is in" - this suite is about the bodies on the wire, not about which
+   site holds the list - so seeding the pin with it leaves every path assertion
+   below exactly as it was. Seeded through localStorage because that is where
+   the pin remembers it, and where a real browser would already have it. */
+mem.cw_stationsite_own = FSITE;
 run("checkpoints.js");
 global.CP = window.CP;
 /* CHANGED 2026-09-11 (spec: status-list-is-truth, step 2). Throughout this

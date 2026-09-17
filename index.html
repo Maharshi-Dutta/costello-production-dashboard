@@ -338,6 +338,75 @@
   @media (max-width:560px){
     .stboard { grid-template-columns:1fr; padding:11px }
   }
+  /* ---- the Welding station board (2026-09-16) ----------------------------
+     A LIST, not a grid of cards: the office reads it the way it reads the job
+     list - one row per job, in sheet order, every section - and opens a row to
+     get at the steppers. The three colour levels are the floor's own words:
+     nothing welded, yellow started, green every frame and sash welded. */
+  .stboard.weldboard { display:block; padding:12px 14px }
+  .wofilt { display:flex; flex-wrap:wrap; gap:9px; align-items:center; margin-bottom:10px }
+  .wofilt .txt { min-height:38px }
+  .wofilt #wq { flex:1; min-width:180px }
+  .wocount { font-size:12px; color:var(--ink-3); margin-left:auto }
+  .wolist { display:grid; gap:7px }
+  .worow { border:1px solid var(--line); border-radius:6px; background:var(--surface) }
+  .worow.c-yellow { border-color:var(--warm-line,#e4cf8a) }
+  .worow.c-green { border-color:#a9d8ac; background:#f4fbf4 }
+  .worow.done .wototal { font-weight:700 }
+  .wohead { display:grid; grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
+            64px 90px 92px 92px auto minmax(90px,1fr); gap:9px; align-items:center;
+            padding:9px 11px; cursor:pointer; font-size:12.5px }
+  .wotog { color:var(--ink-4) }
+  .wohead .stjob { font-size:17px }
+  .wocust, .wosect, .wolast { color:var(--ink-2); overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap }
+  .wosect, .wolast { color:var(--ink-3); font-size:11.5px }
+  .wototal, .wopart { font-weight:600; white-space:nowrap }
+  .wopart { color:var(--ink-2) }
+  /* the same unread-notes idea the job rows carry, in the board's own row */
+  .wonotes { display:inline-flex; align-items:center; justify-content:center; min-width:20px;
+             height:20px; padding:0 6px; border-radius:10px; font-size:11px; font-weight:700;
+             background:var(--fab); color:#17171a }
+  .wobar { display:block; height:7px; border-radius:4px; background:var(--line-soft); overflow:hidden }
+  .wobarfill { display:block; height:100%; background:#c9a227; border-radius:4px }
+  .c-green .wobarfill { background:#3f8f46 }
+  .wobody { padding:2px 11px 11px; display:grid; gap:8px }
+  .wogrp { border:1px solid var(--line-soft); border-radius:5px; padding:8px 9px;
+           background:var(--surface-2) }
+  .wogrp.c-yellow { border-color:var(--warm-line,#e4cf8a) }
+  .wogrp.c-green { border-color:#a9d8ac }
+  .woghead { display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+             margin-bottom:6px }
+  .wogname { font-size:14px; font-weight:700; text-transform:uppercase }
+  .wogcount { font-size:12px; font-weight:600; color:var(--ink-2) }
+  .woline { display:grid; grid-template-columns:62px 62px minmax(70px,1fr) auto minmax(90px,1fr);
+            gap:9px; align-items:center; padding:4px 0; font-size:12.5px }
+  .wolab { color:var(--ink-2) }
+  .wonum { font-weight:600 }
+  .wowho { font-size:11px; color:var(--ink-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .wobtns { display:flex; gap:5px }
+  .wobtn { min-width:34px; min-height:34px; border:1px solid var(--line); border-radius:5px;
+           background:var(--surface); color:var(--ink); font-size:14px; line-height:1 }
+  .wobtn.wide { min-width:48px; font-size:12px }
+  .wobtn:disabled { opacity:.4; cursor:default }
+  .wocmt { font-size:12.5px; color:var(--ink-3); font-style:italic; padding:2px 2px 0 }
+  .wonotelist { display:grid; gap:6px; padding-top:4px }
+  .wonote { background:var(--surface-2); border:1px solid var(--line-soft); border-radius:5px;
+            padding:6px 8px; display:grid; grid-template-columns:1fr auto; gap:2px 9px }
+  /* the floor's own log, under the board - read-only, and never written here */
+  .wolog { margin-top:16px; border-top:1px solid var(--line); padding-top:11px }
+  .wologhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:7px }
+  .wologsub { font-size:11.5px; color:var(--ink-4) }
+  .wolog .stlrow { grid-template-columns:minmax(70px,auto) 62px 1fr auto }
+  /* the drawer's one welding line, under the window types */
+  .weldline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:7px 0 2px }
+  .weldnum { font-size:15px; font-weight:700 }
+  @media (max-width:900px){
+    .wohead { grid-template-columns:18px 70px 1fr auto; row-gap:5px }
+    .wohead .wosect, .wohead .wolast, .wohead .wobar { display:none }
+    .woline { grid-template-columns:58px 58px auto; row-gap:4px }
+    .woline .wobar, .woline .wowho { display:none }
+  }
   /* the floor log window: filters, the counts they add up to, and the lines */
   .lgbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
            padding:10px 14px; border-bottom:1px solid var(--line) }
@@ -694,7 +763,7 @@
       <span class="kick">Glass</span><span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260916-1259</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260917-1212</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -711,11 +780,12 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260916-1259"></script>
-<script src="graph.js?v=20260916-1259"></script>
-<script src="checkpoints.js?v=20260916-1259"></script>
-<script src="station-core.js?v=20260916-1259"></script>
-<script src="export.js?v=20260916-1259"></script>
-<script src="app.js?v=20260916-1259"></script>
+<script src="parser.js?v=20260917-1212"></script>
+<script src="graph.js?v=20260917-1212"></script>
+<script src="checkpoints.js?v=20260917-1212"></script>
+<script src="station-core.js?v=20260917-1212"></script>
+<script src="welding-core.js?v=20260917-1212"></script>
+<script src="export.js?v=20260917-1212"></script>
+<script src="app.js?v=20260917-1212"></script>
 </body>
 </html>
