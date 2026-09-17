@@ -350,8 +350,8 @@
   .wocount { font-size:12px; color:var(--ink-3); margin-left:auto }
   .wolist { display:grid; gap:7px }
   .worow { border:1px solid var(--line); border-radius:6px; background:var(--surface) }
-  .worow.c-yellow { border-color:var(--warm-line,#e4cf8a) }
-  .worow.c-green { border-color:#a9d8ac; background:#f4fbf4 }
+  .worow.c-yellow { border-color:var(--fab); background:var(--fab-bg) }
+  .worow.c-green { border-color:var(--green); background:var(--green-bg) }
   .worow.done .wototal { font-weight:700 }
   .wohead { display:grid; grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
             64px 90px 92px 92px auto minmax(90px,1fr); gap:9px; align-items:center;
@@ -368,13 +368,13 @@
              height:20px; padding:0 6px; border-radius:10px; font-size:11px; font-weight:700;
              background:var(--fab); color:#17171a }
   .wobar { display:block; height:7px; border-radius:4px; background:var(--line-soft); overflow:hidden }
-  .wobarfill { display:block; height:100%; background:#c9a227; border-radius:4px }
-  .c-green .wobarfill { background:#3f8f46 }
+  .wobarfill { display:block; height:100%; background:var(--fab); border-radius:4px }
+  .c-green .wobarfill { background:var(--green) }
   .wobody { padding:2px 11px 11px; display:grid; gap:8px }
   .wogrp { border:1px solid var(--line-soft); border-radius:5px; padding:8px 9px;
            background:var(--surface-2) }
-  .wogrp.c-yellow { border-color:var(--warm-line,#e4cf8a) }
-  .wogrp.c-green { border-color:#a9d8ac }
+  .wogrp.c-yellow { border-color:var(--fab) }
+  .wogrp.c-green { border-color:var(--green) }
   .woghead { display:flex; align-items:baseline; justify-content:space-between; gap:10px;
              margin-bottom:6px }
   .wogname { font-size:14px; font-weight:700; text-transform:uppercase }
@@ -763,7 +763,7 @@
       <span class="kick">Glass</span><span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260917-1212</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260917-1231</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -780,12 +780,12 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20260917-1212"></script>
-<script src="graph.js?v=20260917-1212"></script>
-<script src="checkpoints.js?v=20260917-1212"></script>
-<script src="station-core.js?v=20260917-1212"></script>
-<script src="welding-core.js?v=20260917-1212"></script>
-<script src="export.js?v=20260917-1212"></script>
-<script src="app.js?v=20260917-1212"></script>
+<script src="parser.js?v=20260917-1231"></script>
+<script src="graph.js?v=20260917-1231"></script>
+<script src="checkpoints.js?v=20260917-1231"></script>
+<script src="station-core.js?v=20260917-1231"></script>
+<script src="welding-core.js?v=20260917-1231"></script>
+<script src="export.js?v=20260917-1231"></script>
+<script src="app.js?v=20260917-1231"></script>
 </body>
 </html>
