@@ -293,6 +293,64 @@ alone** — it is inherited rather than introduced, and changing it means
 changing the frozen glass suite. It is written down here so the next person to
 touch `station.js`'s queue fixes it there too.
 
+### B20. "This job has four window types it has not got" — a station fed from the wrong sheet
+
+**Symptom (owner, 2026-09-17).** Jobs on the welding tablet showing product
+groups that are not on them. R5053 had `4000 CASEMENT`, `4000 TILT & TURN`,
+`SIDELIGHTS` and `PVC SMART` on its card, none of which that job has, and its
+`POLARIS 85MM CASEMENT` said 19 sashes where the sheet says 16. The
+`Welding station` list had gone from 485 rows to 786 overnight.
+
+**Not a welding bug at all.** Nothing in `welding-core.js` or the feeder had
+changed. `parser.js` merges each product group's F/S/T **across every sheet**
+by `Math.max` — one line, there since the beginning, and right for what it was
+written for: the copies are meant to say the same thing and differ only by
+being out of date, so the furthest-along number is the safe one.
+
+**The cause.** The owner inserted a column into `Production` that morning.
+`Production (2)` — John's print sheet — is **formulas that moved with it**,
+while its own **headers did not move**. So on that sheet every number ended up
+one column to the right of the header describing it: the parser read
+`Production (2)`'s POLARIS sashes out of the transoms column, found a
+`4000 CASEMENT` number where there is only a neighbour's, and `Math.max` took
+whichever was larger. The merge did exactly what it was told. What broke was
+the assumption underneath it — that two sheets' columns mean the same thing.
+
+**The fix.** `parser.js` now also keeps `j.prodsMain`: the same counts taken
+from the sheet named `Production` and merged with nothing. `weldSlice` reads
+that, and a job with no `prodsMain` is not on `Production` and is not fed at
+all. `j.prods` is deliberately unchanged — the drawer, the checkpoints, the
+exports and the John print sheet all still read the merged one, and whether
+they should is a separate decision for the owner rather than something to
+change while fixing a live bug.
+
+Same pass, same cause in miniature: `SUPER DOOR` is welded in sashes only, but
+the sheet carries a frames number in that group's F column, so the floor was
+being shown frames to weld that are somebody else's count.
+`WELD_GROUP_PARTS` now says which components a named group actually has, and
+the rest are fed as nought.
+
+**What the correction costs.** Nothing is deleted, ever. On the real list the
+next feed makes **0 adds, 629 patches, 0 deletes**: 322 rows go `Active = No`
+(267 the merge invented, 55 jobs that have genuinely left the sheet) and the
+rest are counts patched back. At 60 writes a run that is about eleven runs, so
+the list settles over a few loads rather than in one.
+
+**The lesson, and it is the general one.** *A station feeds from the main sheet
+only.* The owner said so in the first brief for the welding station and it read
+like a preference; it is a correctness rule. A copy of a sheet is only a copy
+while somebody keeps it aligned, and nothing in a workbook tells you when that
+has stopped being true. Any reader that must not inherit another sheet's
+mistakes has to name the sheet it trusts — and `Math.max` across sources is a
+silent way of trusting all of them.
+
+**How it was found, and how long it should have taken.** The owner saw it on
+the tablet. Reproducing it took one script against a fresh download
+(`scratchpad/repro_r5053.js`): print `j.prods` for the job, then print what
+each sheet says on its own. The difference was obvious in one screen. That
+script is worth keeping the shape of for any "the numbers are wrong for one
+job" report — parse, then ask each sheet separately, before reading any code.
+
 ### B15. Things that are not bugs and will be reported as bugs
 - **An un-tick can show as gold on the master dashboard for up to a minute.**
   SharePoint's downloadable copy lags about 36 seconds. Not fixable, corrects
@@ -470,6 +528,11 @@ lists are copied across.
 | A colour reverts, or takes a minute to settle | B14, then B15 |
 | A job locked itself overnight | B14, attempt 6 |
 | The tablet cannot find the `Floor stations` site | B15 |
+| A job shows product groups or components it has not got | B20 |
+| A count on a station board does not match the `Production` sheet | B20 |
+| A station list grows by hundreds of rows overnight | B20 |
+| A board is empty or frozen while another station's is fine | B19 |
+| An office edit overwrote what the floor had just done | B19 |
 
 ---
 

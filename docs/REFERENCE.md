@@ -1422,10 +1422,27 @@ the `Floor stations` site, and **nothing in the feature writes the workbook**.
 - **`Welding station`**, one row per job **and product group**, so a job with
   casement windows and a PVC door is two rows carrying the same job facts.
   `Title` = `JOB|GROUP`, unique.
-- The groups fed are **every** F/S/T product group the parser already finds on
-  the `Production` sheet, minus a deny-list of four (`ALU CLAD WINDOWS`,
-  `ALUCLAD TILT & TURN`, `BIFOLD`, `COMPOSITE`). A new green group on the sheet
-  needs no code change; a new red one is one line in `welding-core.js`.
+- The groups fed are **every** F/S/T product group the parser finds **on the
+  `Production` sheet and on no other** (`j.prodsMain`), minus a deny-list of
+  four (`ALU CLAD WINDOWS`, `ALUCLAD TILT & TURN`, `BIFOLD`, `COMPOSITE`). A
+  new green group on the sheet needs no code change; a new red one is one line
+  in `welding-core.js`.
+- **The slice reads `Production` only, and `prodsMain` is what makes that
+  true** (2026-09-17, after a live bug — `docs/HISTORY.md` B20). `j.prods` is
+  the parser's cross-sheet **maximum** of each group's F/S/T, which is right
+  for the things it was written for and wrong the moment a sheet's headers and
+  its data come apart. A column inserted into `Production` left
+  `Production (2)` — formulas that moved with it, headers that did not — with
+  every number one column right of its own header, and the max gave one job
+  four product groups it has not got and a sashes count from the column next
+  door. `j.prodsMain` is the `Production` sheet's own numbers, never merged;
+  a job with no `prodsMain` is not on `Production` and is not fed at all.
+- **A group is fed only the components it actually has.** `WELD_GROUP_PARTS`
+  in `welding-core.js` overrides the default `["frames","sashes"]` per group:
+  `SUPER DOOR` is sashes only, so the frames number on the sheet is fed as
+  **0** rather than carried, and neither board draws a Frames line for it
+  (both already skip a line with nothing to weld). The Title and the columns
+  are unchanged — nothing is created or removed, the number is simply nought.
 - Within a group, **F (frames) and S (sashes) only**. T is green on the owner's
   header template in most groups and is still never shown — "there is no
   transomes even if it is green" (owner, 2026-09-16).

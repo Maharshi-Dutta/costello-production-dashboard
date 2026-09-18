@@ -875,9 +875,14 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
      and one holding a stray word - ANY text is a door, whitespace alone is not */
   put(ws, 6, 72, "CD", "FFE699"); put(ws, 6, 73, "1 DOOR", "FFFF00");
   put(ws, 6, 74, "   "); put(ws, 6, 75, "sfcd"); put(ws, 6, 76, "n/a");
-  /* the same job on Production (2), still yellow where Production has been cleared */
+  /* the same job on Production (2), still yellow where Production has been
+     cleared - and, since 2026-09-17, carrying a DIFFERENT number for the same
+     product group. That is what the live workbook did: a column was inserted
+     into `Production`, `Production (2)` is formulas that moved with it, and its
+     headers stayed put - so every number on that sheet sits one column away
+     from the header describing it. 99 stands in for that here. */
   put(ws2, 6, 3, "R0001"); put(ws2, 6, 13, 10, "FFFF00"); put(ws2, 6, 52, 11, "FFFF00");
-  put(ws2, 6, 20, 12, "FFE699");
+  put(ws2, 6, 20, 12, "FFE699"); put(ws2, 6, 22, 77);
   /* R0002: the whole Production row is gold */
   put(ws, 7, 3, "R0002"); put(ws, 7, 13, 4); put(ws, 7, 20, 5); put(ws, 7, 51, 6);
   put(ws, 7, 14, 1); put(ws, 7, 72, "DD");
@@ -897,6 +902,28 @@ const ageHold = (id, key, ms) => vm.runInThisContext(
   assert.strictEqual(cpFileStatus(a, "prod:7000 casement:t"), "");
   assert.deepStrictEqual(a.prods[0].st.sort(), ["done", "process"], "the old product status still works");
   pass("parser: cp colours for M, N, the glass columns and F/S/T, still read, still parsed");
+
+  /* ---- 7a. `prods` merges every sheet; `prodsMain` is Production alone ----
+     Added 2026-09-17 after the live bug (docs/HISTORY.md B20). `Production (2)`
+     says 77 transoms for a group `Production` says 3. The cross-sheet Math.max
+     takes the 77 - which is what every existing consumer has always seen, and
+     is deliberately left that way in this pass - while `prodsMain` is the main
+     sheet's own answer and cannot inherit another sheet's misalignment. */
+  assert.strictEqual(a.prods[0].n, "7000 casement");
+  assert.strictEqual(a.prods[0].t, 77, "prods still takes the highest across the sheets");
+  assert.ok(Array.isArray(a.prodsMain), "every job carries prodsMain");
+  assert.strictEqual(a.prodsMain.length, 1, "one group on Production, whatever the copies say");
+  assert.strictEqual(a.prodsMain[0].n, "7000 casement");
+  assert.strictEqual(a.prodsMain[0].t, 3, "prodsMain is the Production sheet's own number");
+  assert.strictEqual(a.prodsMain[0].f, 12);
+  assert.strictEqual(a.prodsMain[0].s, 8);
+  assert.deepStrictEqual(a.prodsMain[0].st.sort(), ["done", "process"],
+    "and it carries the same status words, which are read from Production anyway");
+  /* a job on Production with nothing on any copy is identical in both */
+  assert.deepStrictEqual(b.prodsMain.map(p => [p.n, p.f, p.s, p.t]),
+                         b.prods.map(p => [p.n, p.f, p.s, p.t]),
+    "a job with no second-sheet row at all reads the same either way");
+  pass("parser: prods still merges every sheet, prodsMain is the Production sheet and nothing else");
   /* ---- 7b. the DOORS DONE cells ---- */
   const m7 = mapSheet(ws);
   assert.deepStrictEqual(m7.doors, { 1: 72, 2: 73, 3: 74, 4: 75, 5: 76 },

@@ -96,6 +96,27 @@ const WELD_FEEDER_WRITES = ["Title"].concat(WELD_FEEDER_FIELDS, ["FedAt", "FedBy
    "ALUCLAD TILT & TURN" and nothing should depend on that detail twice. */
 const WELD_DENY = ["ALU CLAD WINDOWS", "ALUCLAD TILT & TURN", "BIFOLD", "COMPOSITE"];
 
+/* ---- which COMPONENTS a group has, where it is not both ---------------------
+   Most groups have frames and sashes. A few do not, and the sheet still has a
+   number in the other column - so "it is on the sheet" is not the same as "the
+   floor welds it". A group named here is fed ONLY the parts listed:
+
+     SUPER DOOR   sashes only. The frames number on the sheet is somebody
+                  else's count and is fed as 0, not carried across.
+
+   Fed as 0 rather than left out, deliberately: the column stays on the list
+   (nothing creates or deletes columns), and a part at 0 draws no line on the
+   tablet or the office board because both already skip a line with nothing to
+   weld. So the row is complete, the Title is unchanged, and the welder is not
+   shown a component their group has not got. Matched after weldKey(). */
+const WELD_GROUP_PARTS = { "SUPER DOOR": ["sashes"] };
+/** The parts this group is welded in, in the board's own order. */
+function weldPartsFor(group) {
+  const only = WELD_GROUP_PARTS[wKey(group)];
+  if (!only) return WELD_PART_KEYS.slice();
+  return WELD_PART_KEYS.filter(k => only.indexOf(k) >= 0);
+}
+
 const WELD_CUSTOMER_MAX = 70;
 const WELD_COMMENT_MAX = 140;
 
@@ -268,13 +289,26 @@ function weldSlice(jobs, blockNames, statusOf) {
     const section = weldSectionOf(j, names);
     const wnd = Math.max(0, wInt(j.wnd, 0)), drs = Math.max(0, wInt(j.drs, 0));
     const seq = wNum(j.seq, 99999);
-    (j.prods || []).forEach((p, i) => {
+    /* `prodsMain`, NOT `prods`: the `Production` sheet's own numbers, never
+       merged with any other sheet's (parser.js, the block by j.prodsMain).
+       The owner's rule for this station from the first brief is that it reads
+       `Production` only, and on 2026-09-17 the difference stopped being
+       theoretical - a column inserted into `Production` left `Production (2)`
+       with its headers one column away from its data, and the cross-sheet max
+       gave R5053 four product groups it has not got. A job with no
+       `prodsMain` at all is not on `Production`, so it is not this station's
+       business and is not fed. */
+    (j.prodsMain || []).forEach((p, i) => {
       if (!p || !p.n) return;
       const group = weldGroupKey(p.n);
       if (!weldAllowed(group)) return;            // a red group: never fed
       /* F and S only. T is green on the template in most groups and is still
-         never shown - there are no transoms (owner, 2026-09-16). */
-      const frames = Math.max(0, wInt(p.f, 0)), sashes = Math.max(0, wInt(p.s, 0));
+         never shown - there are no transoms (owner, 2026-09-16). And only the
+         parts this group actually has: a Super door's frames number belongs to
+         somebody else and is fed as 0 rather than carried. */
+      const parts = weldPartsFor(group);
+      const frames = parts.indexOf("frames") >= 0 ? Math.max(0, wInt(p.f, 0)) : 0;
+      const sashes = parts.indexOf("sashes") >= 0 ? Math.max(0, wInt(p.s, 0)) : 0;
       if (!(frames > 0 || sashes > 0)) return;    // nothing to weld: not fed
       const title = weldTitle(job, group);
       if (emitted[title]) {
@@ -683,7 +717,7 @@ const WELDC = {
   WELD_PARTS, WELD_PART_KEYS, WELD_PART_LABEL, WELD_PART_SUB,
   WELD_TOTAL_FIELD, WELD_DONE_FIELD, WELD_BY_FIELD, WELD_AT_FIELD,
   WELD_FIELDS, WELD_FEEDER_FIELDS, WELD_FLOOR_FIELDS, WELD_COUNTER_FIELDS,
-  WELD_SEED_FIELDS, WELD_FEEDER_WRITES, WELD_DENY,
+  WELD_SEED_FIELDS, WELD_FEEDER_WRITES, WELD_DENY, WELD_GROUP_PARTS, weldPartsFor,
   WELD_CUSTOMER_MAX, WELD_COMMENT_MAX, WELD_PHONE_RE, WELD_DIGITS_RE, WELD_EIR_RE,
   weldPartLabel, weldGroupKey, weldAllowed, weldTitle, weldStripDigits,
   weldSlice, weldRowOrder, weldFeederFields, weldSeedFields, weldHashRow,

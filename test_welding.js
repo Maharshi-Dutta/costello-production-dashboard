@@ -201,13 +201,22 @@ const pass = msg => { n++; console.log("  ok  " + msg); };
      R7003  in the Finished section, with a blank "sent to floor"          */
 const NAMES = ["Can sell as second hand", "Ready to fit", "Collect & supply only",
                "Finished", "In production", "Not sent to floor"];
-const mkJob = o => Object.assign({
-  id: "R0001", cust: "Customer One", area: "Cork", eir: "", off: "", colour: "", ph3: "",
-  wnd: 0, drs: 0, glass: {}, prods: [], notes: [], sheets: ["Production"], src: {}, doors: [],
-  dates: { sold: null, stamp: null, ivana: null, ready: null, floor: null },
-  cat: "active", blk: 4, seq: 1, stage: "office", done: 0, urg: 0,
-  cp: { win: "", drs: "", glass: {}, prod: {} }
-}, o || {});
+/* `prodsMain` is the `Production` sheet's own product counts, never merged with
+   another sheet's (parser.js, 2026-09-17). A job that is only ever on
+   `Production` - which is every fixture here unless it says otherwise - has the
+   same numbers in both, so it defaults to whatever `prods` was given. A fixture
+   that wants the two to DISAGREE, the way the live workbook did, passes both. */
+const mkJob = o => {
+  const j = Object.assign({
+    id: "R0001", cust: "Customer One", area: "Cork", eir: "", off: "", colour: "", ph3: "",
+    wnd: 0, drs: 0, glass: {}, prods: [], notes: [], sheets: ["Production"], src: {}, doors: [],
+    dates: { sold: null, stamp: null, ivana: null, ready: null, floor: null },
+    cat: "active", blk: 4, seq: 1, stage: "office", done: 0, urg: 0,
+    cp: { win: "", drs: "", glass: {}, prod: {} }
+  }, o || {});
+  if (!(o && "prodsMain" in o)) j.prodsMain = j.prods;
+  return j;
+};
 const prod = (name, f, s, t) => ({ n: name, f: f || 0, s: s || 0, t: t || 0, st: [] });
 
 const JOBS = [
@@ -1022,6 +1031,123 @@ JOBS.blockNames = NAMES;
   assert.ok(warned.some(w => /R7200\|CASEMENT WINDOWS/.test(w) && /twice/.test(w)),
     "and the one that was dropped is said out loud: " + JSON.stringify(warned));
   pass("a product group that appears twice on one job is fed once, and the second is warned about");
+
+  {
+  /* ================= 17. the Production sheet, and nothing else ==============
+     The live bug of 2026-09-17 (docs/HISTORY.md B20), in the shape it really
+     had. The owner inserted a column into `Production`; `Production (2)` is
+     formulas that moved with it and headers that did not, so on that sheet
+     every number sits one column right of the header describing it. The
+     parser's cross-sheet Math.max then gave R5053 four product groups it has
+     not got, and the feeder wrote 300 wrong rows into `Welding station`.
+
+     This is that job: `prodsMain` is what `Production` says, `prods` is what
+     the merge made of it. The slice must read the first and never the second. */
+  const R5053 = mkJob({
+    id: "R5053", cust: "Customer Five", wnd: 23, drs: 4, blk: 4, seq: 7,
+    dates: { sold: null, stamp: null, ivana: null, ready: null, floor: "15.09" },
+    /* what the `Production` sheet itself says */
+    prodsMain: [prod("polaris 85mm casement", 19, 16, 6), prod("polaris 85 tilt turn", 4, 6, 6),
+                prod("pvc door", 3, 4, 0), prod("super door", 1, 2, 0), prod("composite", 0, 2, 0)],
+    /* ... and what Math.max across the sheets made of it: two counts inflated
+       from the neighbouring column, and five groups that are not on this job */
+    prods: [prod("polaris 85mm casement", 19, 19, 16), prod("polaris 85 tilt turn", 4, 6, 6),
+            prod("pvc door", 3, 4, 0), prod("super door", 4, 2, 0), prod("composite", 0, 2, 0),
+            prod("4000 casement", 6, 0, 0), prod("4000 tilt turn", 6, 0, 0),
+            prod("sidelights", 2, 0, 0), prod("bifold", 2, 0, 0), prod("pvc smart", 2, 0, 0)]
+  });
+  const fixed = W.weldSlice([R5053], NAMES, () => "");
+  assert.deepStrictEqual(fixed.map(r => r.group),
+    ["POLARIS 85MM CASEMENT", "POLARIS 85 TILT TURN", "PVC DOOR", "SUPER DOOR"],
+    "four rows, and not one of the groups the merge invented");
+  assert.deepStrictEqual(fixed.map(r => r.frames + "/" + r.sashes),
+    ["19/16", "4/6", "3/4", "0/2"], "with the Production sheet's own numbers");
+  ["4000 CASEMENT", "4000 TILT TURN", "SIDELIGHTS", "PVC SMART", "BIFOLD"].forEach(bad =>
+    assert.ok(!fixed.some(r => r.group === bad), bad + " is not on this job and is not fed"));
+  assert.ok(!fixed.some(r => r.group === "COMPOSITE"), "and COMPOSITE is deny-listed as before");
+  pass("the slice is the Production sheet's own product list, not the cross-sheet maximum");
+
+  /* the one that would have been silent: the count, not the group */
+  assert.strictEqual(fixed[0].sashes, 16,
+    "16 sashes, which is what Production says - not the 19 the neighbouring column had");
+  pass("a count inflated from the next column over does not reach the floor either");
+
+  /* a job that is not on `Production` at all is not this station's business */
+  const elsewhere = mkJob({ id: "R5099", blk: 4, seq: 8, prodsMain: [],
+    prods: [prod("casement windows", 4, 4, 0)] });
+  assert.deepStrictEqual(W.weldSlice([elsewhere], NAMES, () => ""), [],
+    "a job with nothing on Production is not fed, whatever another sheet says");
+  const noneAtAll = mkJob({ id: "R5098", blk: 4, seq: 9 });
+  delete noneAtAll.prodsMain;
+  assert.deepStrictEqual(W.weldSlice([noneAtAll], NAMES, () => ""), [],
+    "and neither is one from a parser that never filled prodsMain in");
+  pass("a job that is not on the Production sheet is never fed to the welding floor");
+
+  /* ---- the per-group component override ---- */
+  assert.deepStrictEqual(W.weldPartsFor("SUPER DOOR"), ["sashes"]);
+  assert.deepStrictEqual(W.weldPartsFor("super door"), ["sashes"], "matched after weldKey()");
+  assert.deepStrictEqual(W.weldPartsFor("PVC DOOR"), ["frames", "sashes"], "everything else has both");
+  assert.deepStrictEqual(W.weldPartsFor("ANYTHING NEW"), ["frames", "sashes"]);
+  const sd = fixed.find(r => r.group === "SUPER DOOR");
+  assert.strictEqual(sd.frames, 0, "a Super door's frames number is IGNORED, not carried");
+  assert.strictEqual(W.weldFeederFields(sd).Frames, 0, "and the row it writes says 0");
+  assert.strictEqual(sd.sashes, 2);
+  /* ... and a line with nothing to weld is not drawn on either board */
+  const sdRow = W.weldRecord(item(Object.assign({ Title: "R5053|SUPER DOOR" }, W.weldFeederFields(sd)), "1"));
+  assert.deepStrictEqual(sdRow.lines.map(l => l.part), ["sashes"],
+    "so the tablet and the office board draw the Sashes line and no Frames line");
+  assert.strictEqual(sdRow.total, 2, "and the group's total is the sashes alone");
+  /* a Super door with ONLY frames on the sheet has nothing to weld, so no row */
+  const onlyFrames = mkJob({ id: "R5097", blk: 4, seq: 10,
+    prodsMain: [prod("super door", 3, 0, 0)] });
+  assert.deepStrictEqual(W.weldSlice([onlyFrames], NAMES, () => ""), [],
+    "a Super door with frames and no sashes is not a row at all");
+  pass("SUPER DOOR is welded in sashes only: its frames number is dropped, and draws no line");
+
+  /* ================= 18. what the feeder does about the 300 wrong rows ======
+     The correction has to reach a list that already holds them. Nothing is
+     ever deleted: the four groups that are not on the job go Active = No, and
+     the two wrong counts are patched back. */
+  const seq7 = { Job: "R5053", Customer: "Customer Five", Comment: "", SentToFloor: "15.09",
+                 Wnd: 23, Drs: 4, Seq: 7, Section: "In production", Active: "Yes" };
+  const held = [
+    /* the four real groups, two of them carrying the inflated numbers */
+    item(Object.assign({ Title: "R5053|POLARIS 85MM CASEMENT", Group: "POLARIS 85MM CASEMENT",
+      GroupSeq: 0, Frames: 19, Sashes: 19 }, seq7), "801"),
+    item(Object.assign({ Title: "R5053|POLARIS 85 TILT TURN", Group: "POLARIS 85 TILT TURN",
+      GroupSeq: 1, Frames: 4, Sashes: 6 }, seq7), "802"),
+    item(Object.assign({ Title: "R5053|PVC DOOR", Group: "PVC DOOR",
+      GroupSeq: 2, Frames: 3, Sashes: 4 }, seq7), "803"),
+    item(Object.assign({ Title: "R5053|SUPER DOOR", Group: "SUPER DOOR",
+      GroupSeq: 3, Frames: 4, Sashes: 2 }, seq7), "804"),
+    /* and the four the merge invented */
+    item(Object.assign({ Title: "R5053|4000 CASEMENT", Group: "4000 CASEMENT",
+      GroupSeq: 5, Frames: 6, Sashes: 0 }, seq7), "805"),
+    item(Object.assign({ Title: "R5053|4000 TILT TURN", Group: "4000 TILT TURN",
+      GroupSeq: 6, Frames: 6, Sashes: 0 }, seq7), "806"),
+    item(Object.assign({ Title: "R5053|SIDELIGHTS", Group: "SIDELIGHTS",
+      GroupSeq: 7, Frames: 2, Sashes: 0 }, seq7), "807"),
+    item(Object.assign({ Title: "R5053|PVC SMART", Group: "PVC SMART",
+      GroupSeq: 9, Frames: 2, Sashes: 0 }, seq7), "808")
+  ];
+  const fix = ST.feedPlan(fixed, held, { at: at, by: "the office", def: W.WELD });
+  assert.strictEqual(fix.adds.length, 0, "nothing is created: all four real rows are already there");
+  const byId = {};
+  fix.patches.forEach(p => { byId[p.id] = p.fields; });
+  const wentOff = fix.patches.filter(p => p.fields.Active === "No").map(p => p.id).sort();
+  assert.deepStrictEqual(wentOff, ["805", "806", "807", "808"],
+    "the four groups that are not on the job go Active = No");
+  wentOff.forEach(id => assert.deepStrictEqual(Object.keys(byId[id]).sort(), ["Active", "FedAt", "FedBy"],
+    "and nothing else about them is touched: " + JSON.stringify(byId[id])));
+  assert.strictEqual(byId["801"].Sashes, 16, "the inflated sashes count is patched back");
+  assert.strictEqual(byId["804"].Frames, 0, "and the Super door's frames go to nought");
+  assert.ok(!byId["802"] && !byId["803"], "the two rows that were always right are not written at all");
+  assert.strictEqual(fix.unchanged, 2);
+  assert.strictEqual(JSON.stringify(fix).indexOf("delete"), -1, "and nothing anywhere is deleted");
+  assert.ok(!JSON.stringify(fix.patches).match(/FramesDone|SashesDone|DoneAt|DoneBy/),
+    "no counter and no stamp is touched by the correction: the floor's work stays where it is");
+  pass("the correction: four rows go inactive, two counts are patched back, nothing is created or deleted");
+  }
 
   /* ---- the standing gate, over every request this whole run made ---- */
   ALLREQ.forEach(r => {

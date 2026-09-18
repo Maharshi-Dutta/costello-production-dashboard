@@ -675,6 +675,27 @@ is fed with no code change, and a new red one is one line in
 the template colours it — the owner's words, "there is no transomes even if it
 is green".
 
+**THE SLICE READS `Production` AND NOTHING ELSE.** The parser keeps two sets of
+product counts per job: `j.prods`, the **maximum across every sheet**, which is
+what the drawer, the checkpoints, the exports and the John sheet have always
+read; and `j.prodsMain`, the `Production` sheet's own numbers, never merged.
+**The welding slice reads `prodsMain`.** A job with no `prodsMain` is not on
+`Production`, so it is not the welding floor's business and is not fed.
+
+This is not a nicety. On 2026-09-17 a column was inserted into `Production`;
+`Production (2)` is formulas that moved with it and headers that did not, so on
+that sheet every number ended up one column to the right of the header
+describing it. The cross-sheet maximum took the neighbours: one job gained four
+product groups it has not got and a sashes count from the column next door, and
+the feeder wrote 300 wrong rows into `Welding station`. See `docs/HISTORY.md`
+B20. If a station ever needs the counts, it takes them from the main sheet.
+
+**Components a group has not got.** `WELD_GROUP_PARTS` in `welding-core.js`
+overrides the default `["frames","sashes"]` for a named group. Today it holds
+one entry — `SUPER DOOR` is welded in **sashes only** — so a Super door's
+frames number is fed as `0` rather than carried, and no Frames line is drawn
+for it on the tablet or on the office board. Adding another is one line.
+
 **Seeding.** Only when the feeder is creating a row, or when `DoneAt` is empty
 (checked twice, as the glass list's seed is): `FramesDone = Frames` when the
 office's own record for `prod:<group>:f` says `done` (gold), else `0`; the same

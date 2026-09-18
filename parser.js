@@ -464,6 +464,11 @@ function parseWorkbook(wb) {
        all the sheets would make un-ticking something snap straight back from
        whatever the copy on Production (2) or PA Lam still says. */
     const cpHere = name === 'Production';
+    /* the same question, asked for a different reason, and named for that
+       reason: `prodsMain` is the product counts of the MAIN sheet and of no
+       other, because a station must not be able to inherit another sheet's
+       misalignment (see the block by j.prodsMain below). */
+    const mainHere = name === 'Production';
     const maxC = Math.min(ws.columnCount || 150, 150);
     const maxR = ws.rowCount || 0;
     for (let r = 1; r <= maxR; r++) {
@@ -479,7 +484,8 @@ function parseWorkbook(wb) {
       const rowDone = goldSpine >= 10 || goldAll >= 40;
 
       let j = jobs[jid];
-      if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, glass: {}, status: {}, notes: [],
+      if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, prodsMain: {},
+                                  glass: {}, status: {}, notes: [],
                                   doors: {},
                                   cp: { win: '', drs: '', glass: {}, prod: {} } }; }
       j.src[LABEL[name]] = r;
@@ -537,6 +543,31 @@ function parseWorkbook(wb) {
         if (f || s2 || t) {
           const cur = j.prods[pname] || [0, 0, 0];
           j.prods[pname] = [Math.max(cur[0], f), Math.max(cur[1], s2), Math.max(cur[2], t)];
+          /* ... AND THE SAME NUMBERS FROM THE `Production` SHEET ALONE.
+             (2026-09-17, after a live bug - docs/HISTORY.md B20.)
+
+             The line above merges every sheet by Math.max, which is right for
+             the things it was written for: a job's product counts are meant to
+             be the same everywhere, and the sheets disagree only by being out
+             of date. It stops being right the moment a sheet's HEADERS and its
+             DATA come apart. The owner inserted a column into `Production` on
+             2026-09-17; `Production (2)` is formulas that moved with it, so on
+             that sheet every number now sits one column to the RIGHT of the
+             header describing it, and the max quietly adopted the neighbour's
+             number for four product groups R5053 does not have.
+
+             `prodsMain` is the Production sheet's own answer, never merged
+             with any other sheet's, for readers that must not be able to
+             inherit another sheet's misalignment. The welding station is the
+             first: the owner's rule for it, from the first brief, is that it
+             reads `Production` only.
+
+             `prods` is deliberately left exactly as it was - see the report
+             and HISTORY B20 for who still reads it. */
+          if (mainHere) {
+            const cm = j.prodsMain[pname] || [0, 0, 0];
+            j.prodsMain[pname] = [Math.max(cm[0], f), Math.max(cm[1], s2), Math.max(cm[2], t)];
+          }
         }
         for (const sub of ['f', 's', 't']) {
           if (!cols[sub]) continue;
@@ -564,6 +595,12 @@ function parseWorkbook(wb) {
     const cmtxt = j.notes.map(n => n.t).join(' ');
     const ph = String(j.phone || '').replace(/\D/g, '');
     const prods = Object.keys(j.prods).map(k => ({ n: k, f: j.prods[k][0], s: j.prods[k][1], t: j.prods[k][2], st: Object.keys(j.status[k] || {}) }));
+    /* the same shape, from the `Production` sheet alone. Empty for a job that
+       is not on `Production` at all - which is what tells a station that this
+       job is none of its business, rather than feeding it another sheet's
+       numbers. */
+    const prodsMain = Object.keys(j.prodsMain).map(k => ({ n: k, f: j.prodsMain[k][0],
+      s: j.prodsMain[k][1], t: j.prodsMain[k][2], st: Object.keys(j.status[k] || {}) }));
     /* a whole gold row says the job is finished, so every checkpoint on it is */
     if (j.done) {
       if (j.wnd) j.cp.win = 'done';
@@ -590,7 +627,7 @@ function parseWorkbook(wb) {
       flag: j.flag || '', flagHex: j.flagHex || '',
       wnd: j.wnd || 0, drs: j.drs || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
-      prods: prods, cp: j.cp,
+      prods: prods, prodsMain: prodsMain, cp: j.cp,
       /* one entry per DOORS DONE cell that has text in it: { slot, code,
          status }. The status is the cell's fill, read the same way every other
          checkpoint colour is - and, like them, it is NOT status: it is the
