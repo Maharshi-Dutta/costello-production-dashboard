@@ -502,6 +502,27 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(W.weldLeft([]), 0);
   pass("the header's N left is the board's own, added over every card on it");
 
+  /* weldLeftByPart: the same board number as weldLeft, split into the two
+     header capsules (Frames left, Sashes left). A Super door group draws no
+     Frames line at all (WELD_GROUP_PARTS feeds it sashes only, Frames: 0 on
+     the row) and must contribute 0 to frames left, not be skipped from the
+     sum or throw it off. */
+  const byPartRows = [
+    item({ Title: "R9001|PVC DOOR", Job: "R9001", Group: "PVC DOOR", GroupSeq: 0,
+      Frames: 5, Sashes: 5, FramesDone: 2, SashesDone: 1, Seq: 1,
+      Section: "In production", Active: "Yes" }, "901"),
+    item({ Title: "R9002|SUPER DOOR", Job: "R9002", Group: "SUPER DOOR", GroupSeq: 0,
+      Frames: 0, Sashes: 4, FramesDone: 0, SashesDone: 1, Seq: 2,
+      Section: "In production", Active: "Yes" }, "902"),
+  ];
+  const byPartBoard = W.weldBoard(byPartRows);
+  const byPart = W.weldLeftByPart(byPartBoard);
+  assert.deepStrictEqual(byPart, { frames: 3, sashes: 7 },
+    "frames left is 5-2 plus 0 from the Super door group with no frames line; sashes left is (5-1)+(4-1)");
+  assert.strictEqual(byPart.frames + byPart.sashes, W.weldLeft(byPartBoard),
+    "the two capsules must add back to the one number weldLeft gives");
+  pass("weldLeftByPart splits the header's N left into frames and sashes, and a Super door contributes 0 frames");
+
   assert.deepStrictEqual(W.weldSentFilter(board, false).map(c => c.job), ["R7001", "R7005"]);
   assert.deepStrictEqual(W.weldSentFilter(board, true).map(c => c.job), ["R7001"],
     "the chip hides a job with a blank sent-to-floor date");

@@ -1504,9 +1504,11 @@ Sashes lines with `−` / `+` / `All` (which becomes `None` at the total) and a
 bar. A line with nothing to weld is not drawn; a group with nothing to weld is
 never fed. Groups on the board are **Active** and **Finished**; a finished card
 is still tappable and comes back the moment it is reduced, by the floor or by
-the office. The header carries **"N left"** (frames left plus sashes left over
-the whole board, never narrowed by the search box) and a **Sent to floor**
-chip, off by default, remembered on the device.
+the office. The header carries **two capsules, "Frames N left" and "Sashes N
+left"** (each part's own left over the whole board, never narrowed by the
+search box, added by `weldLeftByPart`; a group fed only one part, e.g. Super
+door's sashes, contributes 0 to the other without a special case) and a
+**Sent to floor** chip, off by default, remembered on the device.
 
 There is **no lock column**. Glass has `OfficeDone`, which greys the tablet;
 welding does not need one, because the office edits the same counters instead.

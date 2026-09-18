@@ -788,13 +788,16 @@ function render() {
      either - somebody looking a job number up must not make the day's work read
      shorter than it is */
   const live = boarding ? boardNow() : null;
-  const gt = $("#gtotal");
-  if (gt) {
-    const on = boarding && mayWeld();
-    gt.hidden = !on;
-    gt.style.display = on ? "" : "none";
-    gt.textContent = on ? W.weldLeftWords(W.weldLeft(live)) : "";
-  }
+  const gtf = $("#gtotalf"), gts = $("#gtotals");
+  const on = boarding && mayWeld();
+  const byPart = on ? W.weldLeftByPart(live) : null;
+  [[gtf, "Frames", byPart && byPart.frames], [gts, "Sashes", byPart && byPart.sashes]]
+    .forEach(([el, label, n]) => {
+      if (!el) return;
+      el.hidden = !on;
+      el.style.display = on ? "" : "none";
+      el.textContent = on ? label + " " + W.weldLeftWords(n) : "";
+    });
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + STU.stuAgo(LASTREAD) : "";
   const soft = $("#soft");

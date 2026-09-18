@@ -559,6 +559,21 @@ function weldSentFilter(cards, on) {
 function weldLeft(cards) {
   return (cards || []).reduce((n, c) => n + Math.max(0, wInt(c.left, 0)), 0);
 }
+/** "N left" per part (frames, sashes) over the cards given - same board number
+    as weldLeft, split by WELD_PART_KEYS instead of summed. A group fed only
+    some parts (Super door: sashes only, per WELD_GROUP_PARTS) already carries
+    0 in the part it is not fed, so it contributes 0 to that part here without
+    any extra check. */
+function weldLeftByPart(cards) {
+  const out = {};
+  WELD_PART_KEYS.forEach(k => { out[k] = 0; });
+  (cards || []).forEach(c => (c.groups || []).forEach(g => {
+    WELD_PART_KEYS.forEach(k => {
+      out[k] += Math.max(0, wInt(g[k + "Total"], 0) - wInt(g[k], 0));
+    });
+  }));
+  return out;
+}
 const weldLeftWords = n => Math.max(0, wInt(n, 0)) + " left";
 /** "6 windows · 1 door" - the quantities under the job number. */
 function weldQtyWords(c) {
@@ -725,7 +740,7 @@ const WELDC = {
   weldActive, weldInProduction, weldColour, weldRollUp,
   weldRecord, weldRecords, weldCards, weldAtCmp,
   weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldSentFilter,
-  weldLeft, weldLeftWords, weldQtyWords,
+  weldLeft, weldLeftByPart, weldLeftWords, weldQtyWords,
   weldFloorOnly, weldApplyTap, weldTapFields, weldOfficeFields,
   weldLogEntry, weldLogWords, weldRebase, weldCardSig,
   weldKey: wKey
