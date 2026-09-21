@@ -55,7 +55,7 @@ iteration is deployed; the code tolerates them either way. Columns:
 | TuffTotal | number | feeder | tuff units on the job, off the sheet's own TUFF column. **Never added to `Total`** (added 2026-09-10) |
 | Seq | number | feeder | the job's position in the master list, so the floor sees the office's order |
 | Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards |
-| OfficeDone | text | feeder; **also set to `No` by an office clear** | `Yes` when the office has ticked this job's DG and TG off. The job is then **read-only on the tablet** (added 2026-09-10) |
+| OfficeDone | text | feeder; **also set to `No` by an office clear** | `Yes` when the office has ticked this job's DG and TG off. The job's **glass stages** are then read-only on the tablet and on the office's board; **Tuff is outside the lock** since 2026-09-21 (added 2026-09-10) |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |
 | Cut | number | station; the feeder while the floor has not touched the row; **zeroed by an office clear** | glasses cut |
@@ -86,17 +86,28 @@ things left for whoever holds both. In `station-core.js` the three are
 `STAGES` / `STAGE_KEYS` and the four are `ALL_STAGES` / `ALL_STAGE_KEYS`.
 
 **The lock (`OfficeDone`).** When the office has ticked every DG and TG item
-of a job off, the feeder writes `OfficeDone = "Yes"` and that job goes
-read-only on the tablet: every stepper on the card is greyed, `tap()` refuses
-them, and the card says *"the office has marked this job finished"*. There is
+of a job off, the feeder writes `OfficeDone = "Yes"` and that job's **glass
+stages** go read-only on the tablet: the Cutting and Hotmelting steppers are
+greyed, `tap()` refuses them, and the card says *"the office has marked this
+job's glass finished"*. There is
 no new control in the office for this — it is derived from the glass
 checkpoints the drawer has always had, so **un-ticking one of them unlocks the
 job**, and only the office can. ARCH, ASTRAGAL, FANCY and EXTRA are not asked:
 they are hand-ticked and describe work the floor never sees.
-A tap already sitting in the tablet's queue when the lock arrives is **dropped
-rather than sent** — the office acted later — but never quietly: it is written
-to the console and drawn on the card in red, naming the stage and the number
-that was lost, until the office unlocks the job.
+
+**Tuff is outside the lock** (2026-09-21). `OfficeDone` is the office's word
+about the job's DG and TG; it has never said anything about tuff, which is a
+different department counting a different quantity. That cost nothing while the
+lock landed after glazing, by which time the tuff was long counted — the lock
+now lands the moment hotmelting finishes, so a locked job is routinely one the
+cutter is still counting tuff on. The Tuff stepper therefore stays live under
+the lock, on the tablet and on the office's board alike.
+
+A **glass** tap already sitting in the tablet's queue when the lock arrives is
+**dropped rather than sent** — the office acted later — but never quietly: it is
+written to the console and drawn on the card in red, naming the stage and the
+number that was lost, until the office unlocks the job. A queued **tuff** tap
+is never dropped by the lock, for the same reason its stepper stays live.
 
 **Why DG + TG.** TUFF and NOT TUFF describe those same units — adding them
 would send the floor to cut sheets that do not exist — and ARCH, ASTRAGAL,
@@ -415,8 +426,10 @@ fields of that `Glass station` row — the counter, its `By`/`At`, and
 line**: that list is the floor's record of the floor's own work, the same
 decision as the welding board's. Nothing on this path touches the workbook; the
 sheet's glass colours follow on the colour writer's next pass, from the new
-counters. A job the office has ticked off shows its steppers disabled — *"glass
-complete — clear it in the job card"*. Clicking a card's head opens that job's
+counters. A job the office has ticked off shows its **glass** steppers disabled
+— *"glass complete — clear it in the job card"* — while its **Tuff** line stays
+editable, because the lock is the office's word about the glass and says
+nothing about tuff. Clicking a card's head opens that job's
 drawer, unless the job has left the sheet, in which case there is no drawer to
 open and the head is not clickable.
 

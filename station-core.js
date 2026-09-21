@@ -589,9 +589,29 @@ function feedPlan(slice, items, opts) {
        nothing the office does can walk over the floor's own count. */
     if (untouched(have)) {
       const seed = def.seedOf(r);
+      /* A SEED IS ONLY EVER RAISED (review finding R1, 2026-09-21), and the
+         rehearsal on a saved copy of the real list is why. The office's yellow
+         used to seed `Cut = Hotmelt = total`; since the colour rule changed it
+         seeds `Cut = total, Hotmelt = 0` for the same record, and this branch
+         wrote every difference in BOTH directions - so the first load after the
+         ship would have PATCHed `Hotmelt` from the total back to nought on
+         seven rows and handed the hotmelting tablet finished work as work to
+         do. The office never "un-did" anything on those rows; only the reading
+         of its mark changed, and a re-reading is not a reason to take a number
+         away from somebody.
+
+         The ONE case that may lower is a seed that is noughts all through: that
+         is a real office un-tick (the record now says nothing of this job is
+         done), and clearing the row is the whole point of re-seeding it. */
+      const clearing = def.seedFields.every(k => !(seed[k] > 0));
       /* a blank counter IS nought here, unlike a blank job fact: a row nobody
-         has ever written a number on does not need three zeros put in it */
-      def.seedFields.forEach(k => { if (stNum(have[k], 0) !== seed[k]) diff[k] = seed[k]; });
+         has ever written a number on does not need zeros put in it */
+      def.seedFields.forEach(k => {
+        const now = stNum(have[k], 0);
+        if (now === seed[k]) return;
+        if (seed[k] < now && !clearing) return;
+        diff[k] = seed[k];
+      });
     }
     if (!Object.keys(diff).length) { unchanged++; return; }
     /* FedAt/FedBy say when this item was last brought up to date and by whose
@@ -1429,7 +1449,9 @@ function boardDiff(prev, next, sigOf) {
      DG, TG, NOT TUFF   blank   neither cutting nor hotmelting complete
                         yellow  exactly one of them complete
                         gold    both complete
-     TUFF               gold once the tuff count is complete, blank otherwise
+     TUFF               gold once the tuff count is complete, blank once it has
+                        been tapped and is not complete, and NO OPINION AT ALL
+                        while nobody has ever tapped it
 
    It walks back down as well as up - a job tapped back to nought goes yellow
    and then blank again - because the owner asked for it to be reversible: "do
@@ -1438,6 +1460,16 @@ function boardDiff(prev, next, sigOf) {
 
    "Complete" means the counter has reached that stage's own quantity and there
    is a quantity to reach: a row with no glasses on it has finished nothing.
+
+   TUFF'S THIRD ANSWER IS `null`, AND IT IS NOT THE SAME AS BLANK (review
+   finding R5, 2026-09-21). `Tuff` is the one counter the feeder may never seed,
+   so on every row the cutter has not tapped it reads nought - which said
+   nothing at all while glazing painted TUFF gold, and would now read as "the
+   floor says no tuff is done" and wipe a gold TUFF cell the office ticked by
+   hand. A `null` is carried all the way to the writer, which plans neither a
+   paint nor a clear for that column. The moment somebody taps tuff, `TuffAt`
+   is written and the column has an opinion for ever after - including "blank",
+   when it is tapped back down to nought on purpose.
 
    Nothing here reads `Glazed` any more. A row still carrying a full `Glazed`
    from before this build plans exactly what its Cut and Hotmelt say, which is
@@ -1448,14 +1480,20 @@ function stageComplete(g, k) {
   const t = Math.max(0, Math.round(stNum(g && g[STAGE_TOTAL_ROW[k]], 0)));
   return t > 0 && stClamp(g && g[STAGE_ROW[k]], t) >= t;
 }
-/** What each of the four columns should be showing: "gold", "yellow" or ""
-    (no colour at all). Pure: it reads a board record and nothing else. */
+/** Has the floor ever tapped the TUFF counter on this row? It is the one
+    counter the feeder may never seed, so the stamp is the only honest answer -
+    a nought with no stamp beside it is nobody's statement about anything. */
+const tuffSpoken = g => stTxt(g && g.at && g.at[TUFF_STAGE]).trim() !== "";
+/** What each of the four columns should be showing: "gold", "yellow", ""
+    (no colour at all) or, for TUFF alone, `null` - no opinion, so the writer
+    neither paints nor clears it. Pure: it reads a board record and nothing
+    else. */
 function glassColours(g) {
   /* how many of the two, not which: cutting before hotmelting and hotmelting
      before cutting are the same half-done job to the sheet */
   const done = STAGE_KEYS.reduce((n, k) => n + (stageComplete(g, k) ? 1 : 0), 0);
   const glass = done >= STAGE_KEYS.length ? "gold" : done > 0 ? "yellow" : "";
-  const tuff = stageComplete(g, TUFF_STAGE) ? "gold" : "";
+  const tuff = stageComplete(g, TUFF_STAGE) ? "gold" : (tuffSpoken(g) ? "" : null);
   const out = {};
   COLOUR_TYPES.forEach(t => { out[t] = t === "tuff" ? tuff : glass; });
   return out;
@@ -1864,7 +1902,7 @@ const ST = {
   STAGES, STAGE_KEYS, STAGE_FIELD, STAGE_ROW, STAGE_BY, STAGE_AT, stageLabel,
   LEGACY_STAGE_LABELS,
   ALL_STAGES, ALL_STAGE_KEYS, STAGE_TOTAL_ROW, TUFF_STAGE,
-  COLOUR_TYPES, stageComplete, glassColours, floorStamp,
+  COLOUR_TYPES, stageComplete, glassColours, tuffSpoken, floorStamp,
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,

@@ -163,6 +163,15 @@ missing:
   wrong one, tap the `Cutting ▾` button beside it. Somebody whose `Stages`
   column still holds only the old `glazed` now holds nothing and appears on
   neither tablet — give them `cut` or `hotmelt`.
+- If the card says *"the office has marked this job's glass finished"* and the
+  Cutting stepper is greyed, that is the lock, not a fault: un-tick one of that
+  job's glass checkpoints in the office to free it. **The Tuff stepper beside
+  it is not greyed** and never is — the lock is about the glass.
+- If the tablet shows the **"Which tablet is this?"** chooser on a device that
+  has been working for weeks, its remembered answer has been cleared (site data
+  wiped, a new browser profile). Answer it once and it will not ask again. A
+  typo in a `?stage=` bookmark does *not* cause this: the page falls back to
+  what the device already knew.
 
 ## PIN not accepted on the tablet
 
@@ -285,11 +294,19 @@ with it:
 - **yellow** — **exactly one of the two is finished**;
 - **gold** — **both are finished**.
 
-TUFF still has its own count and is gold on its own, with no yellow of its own.
 Before that day, yellow meant "cut *and* hotmelted" and nothing went gold until
 glazing was done, so **every job that was yellow turns gold, and some jobs that
 were blank turn yellow**, the first time an office dashboard looks at them.
 That is the change, applied to every job at once, and the owner asked for it.
+
+**TUFF is not touched unless somebody on the floor has tapped it.** It has its
+own count and is gold on its own, with no yellow of its own — but the dashboard
+says nothing at all about a job's TUFF cell while the tuff counter has never
+been tapped. That is deliberate: tuff is the one counter that never starts from
+what the office has ticked, so a nought on it means "nobody has been there
+yet", not "there is none done". A TUFF cell ticked gold by hand in the office
+stays gold. Once the cutter taps tuff, the cell follows the counter from then
+on — including back to blank if they tap it down to nought.
 
 **Glazing no longer appears on the glass tablets at all.** There is no glazing
 stepper, no glazing number and no glazing person. Nothing that was recorded has

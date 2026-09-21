@@ -251,6 +251,59 @@ what "waiting to send" means), `docs/ARCHITECTURE.md` (`cw_daysheetdraft`, the
 queue key if a new one is added), `web/CLAUDE.md` (rule 2 exception, the new
 suite), `docs/specs/README.md`.
 
+## Amendments after review (2026-09-21)
+
+Independent review of the first build (commit `cedbd90`). Twelve findings, all
+accepted; the suites were green and caught none of them, so **each fix comes
+with a test that fails without it**.
+
+- **D1 — the welding report was empty.** `stationReport` filtered the log on
+  `stage === "weld"`, but the welding tablet logs `Stage = frames | sashes`
+  (`weldLogEntry`). The definition says which log stages feed a report stage
+  (`reportLogStages`: glass `k => [k]`, welding → its part keys); the welding
+  test fixture is built through `ST.logFields(WELDC.weldLogEntry(...))`, never
+  by hand.
+- **D2 — one person's draft could be saved under another's name.** The draft
+  record carries `who` and is only ever loaded for that person; `switchPerson()`
+  (and the idle lock) closes the sheet.
+- **D3 — a half-typed office correction was wiped by the 20 s re-read.** No
+  repaint of the table body while a row is in edit mode; the read still
+  happens, the paint is owed until the edit is saved or cancelled.
+- **D4 — midnight.** A draft belongs to the day it was started: the form's
+  header shows that day, Save files it under that day (and that day's week and
+  target), and it survives until the end of the **following** day, after which
+  it is dropped. Save is disabled while all four counts and the note are empty —
+  an untouched form is not four noughts. (A day with no sheets cut but a note
+  is a real entry and may be saved.)
+- **D5 — a duplicate row doubled every total.** `dayRows` de-duplicates by
+  `Title`, oldest item id wins (as `targetOf` does), so the office window, the
+  board line, the tablet's week line and the report all read one row however
+  many SharePoint holds. Enforce-unique-values stays the owner's step; the code
+  no longer depends on it.
+- **D6 — an unsendable sheet pinned the tablet on an old build.** The day-sheet
+  queue lives in `localStorage` and is rebuilt on load, so it no longer stops
+  `checkBuild` reloading. A row refused with a 4xx three times stops saying
+  "waiting for the wifi" and says "could not be saved — tell the office", and
+  stays queued.
+- **D7 — offline at save with no successful read yet** queues like any other
+  offline save. Only a list that is genuinely not there refuses the save.
+- **D8 — rule 3: the glass Jobs sheet exported the customer name as typed.**
+  `glassReportJobs` strips it (`stripContact`, 60), as welding's feeder already
+  does; one fixture customer carries a phone number in the name.
+- **D9 — log lines were bucketed by UTC date, day sheets by local date.** One
+  definition of "day" for the whole report: the local date of the stamp
+  (`ST.dayKey(new Date(at))`).
+- **D10 — a cleared target box saved a target of 0.** The target must be a
+  whole number ≥ 1; anything else is refused with a toast and nothing is
+  written. Removing a target is not built.
+- **D11 — `web/CLAUDE.md` said the office never deletes;** `listUpsert`'s
+  duplicate-row settle can delete a surplus `Station targets` row. The rule
+  says so.
+- **D12 — the Activity sheet's "Group" column** is drawn only for a station
+  whose definition has product groups (welding); glass has none and loses the
+  column rather than saying "GLASS" on every row.
+- Also: a count is clamped to 0…9999 at the form and in `dayFields`.
+
 ## Report back
 
 Pasted suite output before and after; functions added with file:line; the

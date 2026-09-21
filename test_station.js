@@ -298,13 +298,16 @@ const stationFetch = async (url, init) => {
     return { ok: true, status: 200, json: async () => ({ build: BUILD_SERVED }) };
   return global.fetch(url, init);
 };
-function newStation() {
+/** `search` is the query string this fake device was opened with - the page
+    reads `location.search` for `?stage=` (2026-09-21). Omitted is a plain
+    `glass.html`, which is what every test before that feature assumed. */
+function newStation(search) {
   const sb = {
     console: console, setTimeout: setTimeout, clearTimeout: clearTimeout,
     setInterval: () => 0, clearInterval: clearInterval,
     localStorage: global.localStorage, document: stationDoc,
     window: { location: { origin: "http://localhost" } },
-    location: { reload: () => { RELOADED = true; } }, fetch: stationFetch,
+    location: { reload: () => { RELOADED = true; }, search: search || "" }, fetch: stationFetch,
     CW: CW, ST: ST, confirm: () => false, prompt: () => null, alert: () => {}
   };
   sb.globalThis = sb;
@@ -776,6 +779,42 @@ const person = (name, stages, pin, active, station) =>
     "and the moment the floor taps it, the office's higher count is not pushed back over theirs");
   pass("an untouched row is re-seeded when the office's own count moves, and only until the first tap");
 
+  /* ---- R1: A SEED IS ONLY EVER RAISED (2026-09-21) ----
+     Found by the manager's rehearsal on a saved copy of the real list. The
+     office's yellow used to seed `Cut = Hotmelt = total`; since the colour rule
+     changed it seeds `Cut = total, Hotmelt = 0` for the same record. This
+     branch wrote every difference in BOTH directions, so the first load after
+     the ship would have PATCHed `Hotmelt` from the total back to nought on
+     seven rows - handing the hotmelting tablet finished work as work to do,
+     over a re-reading nobody on the office side had asked for. */
+  const downSlice = ST.glassSlice(
+    [mkJob({ id: "R5303", cust: "Customer One Ltd", glass: { dg: 5, tg: 5 }, blk: 4, seq: 0 })],
+    NAMES, () => [gl("dg", 5, "process"), gl("tg", 5, "process")]);
+  assert.deepStrictEqual(downSlice[0].seed, { cut: 10, hotmelt: 0 },
+    "the office's record is yellow all through, which now seeds cutting alone");
+  const wasSeeded = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One Ltd",
+    GlassType: "GLASS", Total: 10, TuffTotal: 0, Seq: 0, Active: "Yes", OfficeDone: "No",
+    Cut: 10, Hotmelt: 10, Glazed: 0, DoneAt: "" }, "251")];
+  plan = ST.feedPlan(downSlice, wasSeeded, { at: AT, by: BY });
+  assert.strictEqual(plan.patches.length, 0,
+    "and the row an older build seeded to 10/10 is left exactly as it is: no patch at all");
+  /* one that has to go UP is still written, in the same breath */
+  wasSeeded[0].fields.Cut = 3;
+  plan = ST.feedPlan(downSlice, wasSeeded, { at: AT, by: BY });
+  assert.deepStrictEqual(plan.patches[0].fields, { Cut: 10, FedAt: AT, FedBy: BY },
+    "Cut is raised from three to ten, and Hotmelt is still not taken away");
+  /* and the ONE case that may lower: a real office un-tick, where the whole
+     seed is noughts. Clearing the row is the point of re-seeding it. */
+  const clearSlice = ST.glassSlice(
+    [mkJob({ id: "R5303", cust: "Customer One Ltd", glass: { dg: 5, tg: 5 }, blk: 4, seq: 0 })],
+    NAMES, () => [gl("dg", 5, ""), gl("tg", 5, "")]);
+  assert.deepStrictEqual(clearSlice[0].seed, { cut: 0, hotmelt: 0 }, "nothing ticked anywhere");
+  wasSeeded[0].fields.Cut = 10; wasSeeded[0].fields.Hotmelt = 10;
+  plan = ST.feedPlan(clearSlice, wasSeeded, { at: AT, by: BY });
+  assert.deepStrictEqual(plan.patches[0].fields, { Cut: 0, Hotmelt: 0, FedAt: AT, FedBy: BY },
+    "an all-nought seed still clears both counters: that is a real office un-tick");
+  pass("R1: a seed on an untouched row is only ever raised, unless the whole seed is noughts");
+
   const allPlanFields = p => p.adds.concat(p.patches.map(x => x.fields));
   const noFloor = p => allPlanFields(p).every(f =>
     Object.keys(f).every(k => ST.FEEDER_WRITES.indexOf(k) >= 0));
@@ -1114,40 +1153,67 @@ const person = (name, stages, pin, active, station) =>
     { Title: "R91", Job: "R91", GlassType: "GLASS", Seq: 1, Active: "Yes" }, f), "910")])[0];
   /* THE TABLE, re-written to the 2026-09-21 rule: how many of the two glass
      stages are complete decides the colour, and `Glazed` decides nothing at
-     all. The last two rows are the ones that used to be about glazing and are
-     now about it being ignored. */
+     all. Every fixture here carries a `TuffAt`, so TUFF has an opinion in all
+     of them; the no-opinion case is its own block below (R5). */
+  const TAT = "2026-09-20T10:00:00.000Z";
   const COLOURFIX = [
-    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, TuffAt: TAT },
      { dg: "", tg: "", tuff: "", "not tuff": "" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 0, Glazed: 0, Tuff: 0, TuffAt: TAT },
      { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 8, Glazed: 0, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 8, Glazed: 0, Tuff: 0, TuffAt: TAT },
      { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0, TuffAt: TAT },
      { dg: "gold", tg: "gold", tuff: "", "not tuff": "gold" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 11 },
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 11, TuffAt: TAT },
      { dg: "gold", tg: "gold", tuff: "gold", "not tuff": "gold" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 4, Glazed: 8, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 4, Glazed: 8, Tuff: 0, TuffAt: TAT },
      { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" }],
-    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 8, Tuff: 0 },
+    [{ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Glazed: 8, Tuff: 0, TuffAt: TAT },
      { dg: "", tg: "", tuff: "", "not tuff": "" }],
-    [{ Total: 0, TuffTotal: 0, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0 },
+    [{ Total: 0, TuffTotal: 0, Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, TuffAt: TAT },
      { dg: "", tg: "", tuff: "", "not tuff": "" }]];
   COLOURFIX.forEach((c, n) =>
     assert.deepStrictEqual(ST.glassColours(colRec(c[0])), c[1],
       "the colours of fixture " + n + " are what the 2026-09-21 rule says, read off the raw counters"));
-  /* the one case that tells the two readings apart: a job with no tuff on it
-     has NOTHING left to tuff (stageLeft says 0, and the card draws no tuff row
-     at all) - and its TUFF column must still take no colour, because nought of
-     nought was never finished by anybody */
-  const noTuff = colRec({ Total: 8, TuffTotal: 0, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0 });
-  assert.strictEqual(ST.stageLeft(noTuff, "tuff"), 0, "nothing left to tuff");
-  assert.strictEqual(ST.stageComplete(noTuff, "tuff"), false, "but nothing finished either");
-  assert.strictEqual(ST.glassColours(noTuff).tuff, "",
-    "so TUFF takes no colour: the colour rule reads the counters, not what is left");
   assert.deepStrictEqual(ST.COLOUR_TYPES, ["dg", "tg", "tuff", "not tuff"],
     "and the four columns it paints are the four it always painted");
   pass("the glass colours are exactly as they were: they read the raw counters, never the new numbers");
+
+  /* ---- R5: A TUFF COUNTER NOBODY HAS TAPPED IS NO OPINION (2026-09-21) ----
+     `Tuff` is the one counter the feeder may never seed, so on every row the
+     cutter has not reached it reads nought - which said nothing at all while
+     glazing painted TUFF gold, and would now read as "the floor says no tuff is
+     done" and wipe a gold TUFF cell the office ticked by hand. The answer is a
+     third value, `null`, carried to the writer, which then plans neither a
+     paint nor a clear. */
+  const noStamp = colRec({ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 0,
+                           DoneAt: "2026-09-20T09:00:00.000Z", CutAt: "2026-09-20T09:00:00.000Z" });
+  assert.strictEqual(ST.tuffSpoken(noStamp), false, "nobody has ever tapped tuff on this row");
+  assert.strictEqual(ST.glassColours(noStamp).tuff, null,
+    "so TUFF is null - no opinion - and NOT the empty string that means 'paint it blank'");
+  assert.notStrictEqual(ST.glassColours(noStamp).tuff, "",
+    "the two really are distinguishable, which is the whole of the fix");
+  assert.strictEqual(ST.glassColours(noStamp).dg, "gold",
+    "while the glass columns say what they always said: the row is otherwise ordinary");
+  /* tapped, and tapped back down to nought on purpose: that IS an opinion */
+  const tappedToNought = colRec({ Total: 8, TuffTotal: 11, Cut: 8, Hotmelt: 8, Tuff: 0,
+                                  TuffAt: TAT, DoneAt: TAT });
+  assert.strictEqual(ST.tuffSpoken(tappedToNought), true);
+  assert.strictEqual(ST.glassColours(tappedToNought).tuff, "",
+    "a tuff counter tapped back down to nought still clears the cell");
+  const tappedFull = colRec({ Total: 8, TuffTotal: 11, Cut: 0, Hotmelt: 0, Tuff: 11, TuffAt: TAT });
+  assert.strictEqual(ST.glassColours(tappedFull).tuff, "gold", "and a complete one is still gold");
+  /* a job with no tuff quantity at all: nought of nought was finished by
+     nobody, and nobody has tapped it either, so it is no opinion too */
+  const noTuff = colRec({ Total: 8, TuffTotal: 0, Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 0 });
+  assert.strictEqual(ST.stageLeft(noTuff, "tuff"), 0, "nothing left to tuff");
+  assert.strictEqual(ST.stageComplete(noTuff, "tuff"), false, "but nothing finished either");
+  assert.strictEqual(ST.glassColours(noTuff).tuff, null,
+    "and no opinion about it, so nothing on that job's TUFF cell is disturbed");
+  assert.strictEqual(ST.tuffSpoken(null), false, "nothing it is handed throws");
+  assert.strictEqual(ST.tuffSpoken({ at: { tuff: "   " } }), false, "and whitespace is not a stamp");
+  pass("R5: TUFF has three answers - gold, blank, and no opinion while nobody has tapped it");
 
   /* ================= 6. the tap ================= */
   const trow = { id: "1", total: 6, cut: 3, hotmelt: 0, glazed: 0 };
@@ -2246,26 +2312,68 @@ const person = (name, stages, pin, active, station) =>
     "eight writes for eight real changes, and nothing at all for the two clicks past the clamp");
   pass("the office's steppers clamp at 0 and at the total, and write only when the number really moves");
 
+  /* R3: TWO CLICKS IN ONE TICK ARE ONE WRITE (2026-09-21). `glassWriting[k]`
+     used to be set AFTER `await CW.hasListConsent()`, so both calls got past
+     the guard, both read the same row and both PATCHed from the same base - the
+     second silently undoing the first. The flag now goes up before the first
+     await. Both promises are started without awaiting between them, which is
+     exactly what a double-click on the board does. */
+  A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
+  await readStation();
+  const beforeDbl = A("stationForJob('R5303').hotmelt");
+  assert.strictEqual(beforeDbl, 0, "hotmelting has room to move, which is what this needs");
+  reset(); LOGGED.length = 0;
+  const dbl = await Promise.all([glassOfficeEdit("R5303", "hotmelt", 1),
+                                 glassOfficeEdit("R5303", "hotmelt", 1)]);
+  await settle(40);
+  assert.deepStrictEqual(dbl, [true, false], "one of the two turned round at the door");
+  assert.strictEqual(writes().filter(w => w.method === "PATCH").length, 1, "one PATCH, not two");
+  assert.strictEqual(LOGGED.length, 1, "and one Dashboard Log line, not two");
+  assert.strictEqual(A("stationForJob('R5303').hotmelt"), beforeDbl + 1,
+    "so the counter moved by one, not by one and then back to the same one");
+  assert.strictEqual(A("Object.keys(glassWriting).length"), 0, "and the line is free again afterwards");
+  await glassOfficeEdit("R5303", "hotmelt", -1);        // put it back
+  pass("R3: two office clicks in one tick are one PATCH and one log line, and the line frees itself");
+
   /* A JOB THE OFFICE HAS TICKED OFF is cleared in the job card, not nudged on
      the board - the wording the drawer already uses, and the rule enforced in
      glassOfficeEdit as well as drawn on the button */
-  ITEMS.find(x => x.id === "500").fields.OfficeDone = "Yes";
+  Object.assign(ITEMS.find(x => x.id === "500").fields, { OfficeDone: "Yes", TuffTotal: 5, Tuff: 0 });
   A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
   await readStation();
   renderRows();
   html = EL["#rows"].innerHTML;
   assert.ok(/data-gjob="R5303" data-gstage="cut" data-gact="-1" disabled/.test(html),
-    "every stepper on that card is drawn disabled");
+    "the glass steppers on that card are drawn disabled");
+  assert.ok(/data-gjob="R5303" data-gstage="hotmelt" data-gact="-1" disabled/.test(html));
   assert.ok(html.indexOf("glass complete — clear it in the job card") > 0, "with the reason under it");
   reset(); LOGGED.length = 0;
   assert.strictEqual(await glassOfficeEdit("R5303", "cut", -1), false, "and the click is refused anyway");
   assert.strictEqual(writes().length, 0, "not one request");
   assert.strictEqual(LOGGED.length, 0);
   assert.ok(!/data-gjob="R5301"[^>]*disabled/.test(html), "while the lock is one job's, not the board's");
-  ITEMS.find(x => x.id === "500").fields.OfficeDone = "No";
+  pass("a job locked by OfficeDone has its GLASS steppers disabled, and the click is refused as well as drawn off");
+
+  /* R2 on the office's own board: the lock is about the glass, so the tuff line
+     stays editable under it - the same rule the tablet's stepper follows */
+  assert.ok(!/data-gjob="R5303" data-gstage="tuff" data-gact="-1" disabled/.test(html),
+    "the tuff line is NOT drawn disabled on a locked job");
+  assert.ok(/data-gjob="R5303" data-gstage="tuff" data-gact="all"/.test(html), "and it really is there");
+  reset(); LOGGED.length = 0;
+  assert.strictEqual(await glassOfficeEdit("R5303", "tuff", "all"), true,
+    "and the handler lets it through as well as the HTML");
+  const lockTuffW = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(lockTuffW.length, 1);
+  assert.deepStrictEqual(Object.keys(lockTuffW[0].body).sort(),
+    ["DoneAt", "DoneBy", "Tuff", "TuffAt", "TuffBy"], "the ordinary five fields");
+  assert.strictEqual(lockTuffW[0].body.Tuff, 5, "All is the tuff quantity, not the glass total");
+  assert.deepStrictEqual(LOGGED, [{ job: "R5303", what: "Glass tuff", from: "0", to: "5" }],
+    "with its own Dashboard Log line");
+  pass("R2: on a locked job the office can still move Tuff, and only Tuff");
+
+  Object.assign(ITEMS.find(x => x.id === "500").fields, { OfficeDone: "No" });
   A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
   await readStation();
-  pass("a job locked by OfficeDone has its steppers disabled, and the click is refused as well as drawn off");
 
   /* A REFUSED WRITE puts the old number back and says so, because the office is
      looking at a number it has just pressed */
@@ -4206,8 +4314,8 @@ const person = (name, stages, pin, active, station) =>
   tb = S("NODES['R6001'].innerHTML");
   assert.ok(/data-stage="cut"[^>]*disabled aria-disabled="true"/.test(tb),
     "the office marked it complete, so a stage this person DOES hold is greyed too");
-  assert.ok(/data-stage="tuff"[^>]*disabled/.test(tb));
-  assert.ok(tb.indexOf("the office has marked this job finished") > 0, "with a line saying why");
+  assert.ok(tb.indexOf("the office has marked this job’s glass finished") > 0,
+    "with a line saying why - and saying GLASS, because the tuff stepper beside it is still live");
   assert.ok(tb.indexOf("not yours") < 0,
     "and not 'not yours', which would be the wrong reason on a stage they hold");
   assert.ok(!/data-stage="cut"[^>]*disabled/.test(S("NODES['R6002'].innerHTML")),
@@ -4218,7 +4326,48 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(writes().length, 0, "and tap() refuses it - the disabled button is only the drawing");
   assert.strictEqual(S("Object.keys(QUEUE).length"), 0, "nothing was queued either");
   assert.strictEqual(ITEMS[0].fields.Cut, 0);
-  pass("office-complete greys every stepper on that job and tap() refuses them");
+  pass("office-complete greys the GLASS steppers on that job and tap() refuses them");
+
+  /* ---- R2: TUFF IS OUTSIDE THE LOCK (2026-09-21) ----
+     `OfficeDone` is ST.officeComplete of the job's DG and TG: it says the
+     office has ticked the GLASS off and has never said a word about tuff. That
+     cost nothing while the lock landed after glazing, by which time the tuff
+     was long counted; the lock now lands the moment hotmelting finishes, so a
+     locked job is routinely one the cutter is still counting tuff on. */
+  assert.ok(!/data-stage="tuff"[^>]*disabled/.test(tb),
+    "the tuff stepper stays live under the office's lock");
+  assert.ok(/data-stage="tuff" data-act="1">\+<\/button>/.test(tb), "plus and all");
+  reset();
+  S("tap('700', 'tuff', 1)");
+  await settle(80);
+  const lockedTuff = writes().filter(w => w.method === "PATCH");
+  assert.strictEqual(lockedTuff.length, 1, "and tap() lets a tuff tap through on a locked job");
+  assert.deepStrictEqual(Object.keys(lockedTuff[0].body).sort(),
+    ["DoneAt", "DoneBy", "Tuff", "TuffAt", "TuffBy"], "as the ordinary five-field tuff write");
+  assert.strictEqual(ITEMS[0].fields.Tuff, 2, "one on top of the one counted earlier in this section");
+  assert.strictEqual(ITEMS[0].fields.Cut, 0, "while the glass counters are exactly where the lock left them");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("R2: the office's lock is about the glass, so the tuff stepper stays live under it");
+
+  /* ... and a queued TUFF tap is never taken away by the lock either */
+  ITEMS[0].fields.Tuff = 0;
+  S("QUEUE = {}; LOGQ = {}; BLOCKED = {}; TOKEN = null;");
+  await S("readList()");
+  S("flushing = true; tap('700', 'tuff', 3); tap('700', 'cut', 1);");
+  assert.strictEqual(S("Object.keys(QUEUE).sort().join(',')"), "700|tuff",
+    "the cut tap was refused at the door by the lock; the tuff tap is owed");
+  S("dropBlocked();");
+  assert.strictEqual(S("Object.keys(QUEUE).join(',')"), "700|tuff",
+    "and dropBlocked() leaves it alone: it is not work the lock has anything to say about");
+  assert.strictEqual(S("Object.keys(BLOCKED).length"), 0, "so nothing is reported lost on the card");
+  S("flushing = false;");
+  reset();
+  await S("flushQueue()");
+  await settle(80);
+  assert.strictEqual(ITEMS[0].fields.Tuff, 3, "and it really goes out");
+  S("if (retryT) { clearTimeout(retryT); retryT = null; } QUEUE = {}; LOGQ = {}; BLOCKED = {};");
+  ITEMS[0].fields.Tuff = 0;
+  pass("R2: a queued tuff tap survives the office's lock arriving under it");
 
   /* ---- and the office's own clear unlocks it, in the same write ----
      OWNER, 2026-09-10, on the live build: after an un-tick the card correctly
@@ -4230,12 +4379,12 @@ const person = (name, stages, pin, active, station) =>
   Object.assign(ITEMS[0].fields, { Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, OfficeDone: "Yes",
                                    DoneAt: "2026-09-10T14:00:00.000Z", DoneBy: "Person A" });
   S("TOKEN = null;"); await S("readList()");
-  assert.ok(S("NODES['R6001'].innerHTML").indexOf("the office has marked this job finished") > 0,
+  assert.ok(S("NODES['R6001'].innerHTML").indexOf("the office has marked this job’s glass finished") > 0,
     "the job is locked to begin with");
   Object.assign(ITEMS[0].fields, ST.officeClearFields("the admin", "2026-09-10T15:00:00.000Z"));
   S("TOKEN = null;"); await S("readList()");   // the tablet's own ten-second poll
   tb = S("NODES['R6001'].innerHTML");
-  assert.ok(tb.indexOf("the office has marked this job finished") < 0,
+  assert.ok(tb.indexOf("the office has marked this job’s glass finished") < 0,
     "one poll after the clear the card is not saying the job is finished any more");
   assert.ok(!/data-stage="cut"[^>]*disabled/.test(tb),
     "and the stepper this person holds is live again - no feeder run needed");
@@ -4410,6 +4559,34 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(SC("PERSON"), null, "and signs the person out, because the stage they picked has gone");
   assert.strictEqual(mem.cw_stationstage, "cut");
   pass("a device with no stage asks once, remembers the answer, and the header can change it");
+
+  /* R4 (2026-09-21): ONLY A VALID `?stage=` WINS. A typo on a kiosk bookmark
+     used to be read as "this device has been told nothing", which put a working
+     tablet in front of the chooser and signed its person out. It falls back to
+     the stage the device already knows it is. */
+  mem.cw_stationstage = "hotmelt";
+  const sbT = newStation("?stage=hotmlet");
+  const STp = code => vm.runInContext(code, sbT);
+  assert.strictEqual(STp("stageFromUrl()"), "hotmlet", "the URL really does carry the typo");
+  assert.strictEqual(STp("PAGE_STAGE"), "hotmelt",
+    "and the page is the hotmelting tablet, from what the device already knew");
+  assert.strictEqual(mem.cw_stationstage, "hotmelt", "with the remembered answer left as it was");
+  STp("PEOPLE = [{ name: 'Person H', stages: ['hotmelt'], pin: '' }]; PEOPLE_READ = true;");
+  STp("PERSON = PEOPLE[0]; LAST_TAP = Date.now(); READY = true; ITEMS = []; render();");
+  assert.ok(STp("PERSON") !== null, "nobody was signed out over a typo");
+  assert.ok(EL["#board"].innerHTML.indexOf("Which tablet is this?") < 0, "and no chooser was shown");
+  assert.strictEqual(EL["#brand"].textContent, "GLASS · HOTMELTING");
+  /* a VALID one still wins over the device, which is the whole point of it */
+  mem.cw_stationstage = "hotmelt";
+  const sbU = newStation("?stage=cut&x=1");
+  assert.strictEqual(vm.runInContext("PAGE_STAGE", sbU), "cut", "a valid ?stage= overrides the device");
+  assert.strictEqual(mem.cw_stationstage, "cut", "and is remembered for next time");
+  /* and a typo with NOTHING remembered still reaches the chooser */
+  delete mem.cw_stationstage;
+  assert.strictEqual(vm.runInContext("PAGE_STAGE", newStation("?stage=nonsense")), "",
+    "a device that has been told nothing and given a typo is still asked");
+  mem.cw_stationstage = "cut";
+  pass("R4: only a valid ?stage= wins; a typo falls back to the device, and only then to the chooser");
 
   /* A QUEUED `glazed` TAP FROM AN OLD BUILD is dropped on replay - quietly, and
      without a request. The queue's own reader drops it (there is no such stage)

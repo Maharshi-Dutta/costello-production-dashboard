@@ -375,7 +375,13 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
 
   /* ================= 1. the colour rule, on its own ================= */
   const rec = o => ST.jobRecord([row(o)], "R7001");
-  const cols = o => ST.glassColours(rec(o));
+  /* TUFF has THREE answers since 2026-09-21 (R5): gold, blank, and no opinion
+     at all while nobody has ever tapped that counter. These fixtures are about
+     the colour RULE, so they all carry a `TuffAt` and TUFF therefore has an
+     opinion in every one of them; the no-opinion case is section 1b, on its
+     own, and `cols({ TuffAt: "" })` is how it is asked for. */
+  const TAT = "2026-09-10T13:00:00.000Z";
+  const cols = o => ST.glassColours(rec(Object.assign({ TuffAt: TAT }, o)));
 
   /* THE RULE CHANGED ON 2026-09-21: glazing left the station, so the count of
      COMPLETE GLASS STAGES decides the colour. Neither = blank, one = yellow,
@@ -582,8 +588,11 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual(CALLS.length, 0);
   pass("a reversal reads back at once from the record: no flicker, and no second write");
 
-  /* and all the way back to nothing */
-  global.__items = [row({ Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneAt: isoAt(16, 0) })];
+  /* and all the way back to nothing. `TuffAt` is on the row because the floor
+     really did tap the tuff counter down on purpose, and that is an opinion
+     (R5): a tuff nobody ever touched is a different case, section 7b. */
+  global.__items = [row({ Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0,
+                          DoneAt: isoAt(16, 0), TuffAt: isoAt(16, 0) })];
   A("PENDING = {}; savePending(); STATION_ITEMS = __items; ALL = applyPending([__j], true)");
   reset();
   assert.strictEqual(await glassColourRun(), 1);
@@ -895,6 +904,49 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
     "TG is a column but the job has none; TUFF the job has but the sheet does not");
   A("PRODMAP = __m");
   pass("a column missing from the sheet, and a glass the job has none of, are both skipped");
+
+  /* ================= 7b. R5: a TUFF nobody has tapped is no opinion ==========
+     `Tuff` is the one counter the feeder may never seed, so on a row the cutter
+     has not reached it reads nought. Under the old rule glazing painted TUFF
+     gold and that nought said nothing; under the new one it would read as "the
+     floor says no tuff is done" and CLEAR a gold TUFF cell the office had
+     ticked by hand - on every job the floor has touched at all. So the plan
+     names nothing for TUFF until somebody has tapped it. */
+  const goldCpAll = { win: "", drs: "",
+                      glass: { dg: "done", tg: "done", tuff: "done", "not tuff": "done" }, prod: {} };
+  /* the office's record says TUFF is gold; the floor has cut and hotmelted the
+     job and never been near the tuff counter, and a leftover full `Glazed` is
+     on the row for good measure */
+  j = scene(mkJob({ cp: goldCpAll }),
+            row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 0, DoneAt: isoAt(15, 0), DoneBy: "Person A" }));
+  assert.strictEqual(ST.glassColours(A("stationForJob('R7001')")).tuff, null, "no opinion about TUFF");
+  reset();
+  assert.strictEqual(await glassColourRun(), 0,
+    "nothing to do: the glass columns already agree and TUFF is not the floor's to speak about");
+  await settle();
+  assert.strictEqual(fillOn("BA7"), null, "not one fill was addressed at the TUFF cell");
+  assert.strictEqual(cpRow("R7001", "glass:tuff").status, "done",
+    "and the office's own gold record of it is exactly where it was");
+  pass("R5: a row with Glazed = total, Tuff = 0 and no TuffAt plans NO TUFF write at all");
+
+  /* the same row once the floor really does tap the tuff counter down to
+     nought on purpose: that IS a statement, and the cell clears */
+  global.__items = [row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 0,
+                          DoneAt: isoAt(16, 0), TuffAt: isoAt(16, 0), TuffBy: "Person A" })];
+  A("STATION_ITEMS = __items");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1, "now there is something to say");
+  await settle();
+  assert.strictEqual(fillOn("BA7"), WHITE, "and the TUFF cell is cleared, because the floor cleared it");
+  assert.strictEqual(cpRow("R7001", "glass:tuff").status, "", "with the record saying so too");
+  /* ... and back up again */
+  global.__items = [row({ Cut: 8, Hotmelt: 8, Tuff: 11, DoneAt: isoAt(17, 0), TuffAt: isoAt(17, 0) })];
+  A("STATION_ITEMS = __items");
+  reset();
+  assert.strictEqual(await glassColourRun(), 1);
+  await settle();
+  assert.strictEqual(fillOn("BA7"), GOLD, "a complete tuff count is gold, exactly as before");
+  pass("R5: a tuff counter tapped down to nought on purpose still clears the cell, and back up is gold");
 
   /* ================= 8. a refused write, and the brake on it ================= */
   global.__jf = mkJob();
@@ -1226,7 +1278,10 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   /* THE POINT OF THE WHOLE FEATURE: all three now say the same thing */
   assert.strictEqual(A("stationForJob('R7001').cut"), 0, "the floor's row reads nought");
   assert.deepStrictEqual(ST.glassColours(A("stationForJob('R7001')")),
-    { dg: "", tg: "", tuff: "", "not tuff": "" }, "so the colour rule wants blank everywhere");
+    { dg: "", tg: "", tuff: null, "not tuff": "" },
+    "so the colour rule wants blank on the glass columns - and says nothing about TUFF, because a " +
+    "clear zeroes the counter without stamping TuffAt and the office's own half already whitened " +
+    "that cell (R5)");
   assert.strictEqual(A("stationForJob('R7001').finished"), false, "and the card is not gold any more");
   assert.deepStrictEqual(sheetNow(), { dg: WHITE, tg: WHITE, tuff: WHITE, "not tuff": WHITE,
     arch: undefined, astragal: undefined, fancy: undefined, extra: undefined },

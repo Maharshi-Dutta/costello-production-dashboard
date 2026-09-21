@@ -133,7 +133,9 @@ the one that first wrote them down.
    **copied into** the workbook — as a fill and nothing else — so people can
    see it in Excel; the copy is never read back as status. `OfficeDone`
    means "the record says this job's glass is done": still a feeder column
-   the tablet can never write, still greying the steppers — but since the
+   the tablet can never write, still greying the **glass** steppers (since
+   2026-09-21 it has never greyed Tuff — that is a different department's
+   count and the lock says nothing about it) — but since the
    floor's own work goes onto the record too, the floor finishing a job is
    what locks it, and only an office row stamped later unlocks it again.
 

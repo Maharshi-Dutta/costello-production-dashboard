@@ -86,12 +86,19 @@ function applyTheme(t) {
    set up once by opening `glass.html?stage=hotmelt` and never asked again. A
    device that has been told neither is asked, once, on screen.
 
-   A word that is not one of this station's own stages is not a stage: a typo in
-   the URL falls through to the chooser rather than drawing a page of nothing. */
+   A word that is not one of this station's own stages is not a stage, and
+   ONLY A VALID URL VALUE WINS (review finding R4, 2026-09-21): a typo in the
+   URL - `?stage=hotmlet` on a kiosk bookmark - falls back to the stage the
+   device already knows it is, and only a tablet that has never been told
+   anything is asked. Taking the typo as "told nothing at all" would have put a
+   working tablet in front of the chooser and signed its person out, which is
+   the worst of the three answers. */
 let PAGE_STAGE = "";
+/** Is this word one of this station's stages? */
+const knownStage = k => ST.STAGE_KEYS.indexOf(String(k == null ? "" : k).trim().toLowerCase()) >= 0
+  ? String(k).trim().toLowerCase() : "";
 function setStage(k) {
-  const want = String(k == null ? "" : k).trim().toLowerCase();
-  PAGE_STAGE = ST.STAGE_KEYS.indexOf(want) >= 0 ? want : "";
+  PAGE_STAGE = knownStage(k);
   if (PAGE_STAGE) { try { localStorage.setItem(STAGE_KEY, PAGE_STAGE); } catch (e) {} }
 }
 function stageFromUrl() {
@@ -103,7 +110,8 @@ function stageFromUrl() {
 function stageFromDevice() {
   try { return localStorage.getItem(STAGE_KEY) || ""; } catch (e) { return ""; }
 }
-setStage(stageFromUrl() || stageFromDevice());
+/* the URL only wins when it says something this station understands */
+setStage(knownStage(stageFromUrl()) || stageFromDevice());
 /** Does THIS page count tuff? The cutter taps it, and only the cutter. */
 const tuffHere = () => PAGE_STAGE === "cut";
 /** The stages of one person that this page draws: its own, and tuff on the
@@ -219,13 +227,23 @@ const owingAnything = () => !!(Object.keys(QUEUE).length || Object.keys(LOGQ).le
                                Object.keys(DAYQ).length);
 
 /* ---- the office's lock ------------------------------------------------------
-   The office can mark a job's glass finished, and that job then goes read-only
-   here: the steppers grey out and tap() refuses them, the same way a stage
-   somebody does not hold is already refused. Only the office can take it off
-   again. The tablet learns it from the OfficeDone column and from nothing else
-   - it still cannot see the workbook.
+   The office can mark a job's GLASS finished, and that job's glass stages then
+   go read-only here: the steppers grey out and tap() refuses them, the same way
+   a stage somebody does not hold is already refused. Only the office can take
+   it off again. The tablet learns it from the OfficeDone column and from
+   nothing else - it still cannot see the workbook.
 
-   The awkward case is a tap already sitting in the queue when the lock arrives:
+   TUFF IS OUTSIDE IT (review finding R2, 2026-09-21). `OfficeDone` is
+   ST.officeComplete of the job's DG and TG - it says the office has ticked the
+   GLASS off, and it has never said anything about tuff, which is a different
+   department counting a different quantity. That distinction did no harm while
+   the lock landed only after glazing, by which time the tuff was long counted;
+   since 2026-09-21 the lock lands the moment hotmelting finishes, so a locked
+   job is routinely one the cutter is still counting tuff on. So the tuff
+   stepper stays live under the lock, tap() lets it through, and dropBlocked()
+   never takes a queued tuff tap away.
+
+   The awkward case is a GLASS tap already sitting in the queue when the lock arrives:
    the wifi was out, or the write is still in the air. Sending it would put the
    floor's number over a job the office has just called finished, and on a
    locked row nobody on the floor could correct it afterwards. The office acted
@@ -256,6 +274,10 @@ function dropBlocked() {
   Object.keys(QUEUE).forEach(k => {
     const e = QUEUE[k];
     if (!e || !lock[String(e.id)]) return;
+    /* the lock is about the job's GLASS, so a tuff tap is not its business:
+       dropping one would delete work the cutter did while the office was
+       ticking the glass off (R2) */
+    if (e.stage === ST.TUFF_STAGE) return;
     const job = ST.jobKey(e.job);
     const note = BLOCKED[job] || { job: job, stages: [], at: "" };
     note.stages = note.stages.filter(s => s.stage !== e.stage)
@@ -865,10 +887,11 @@ function tap(id, stage, delta) {
   if (stage !== PAGE_STAGE && !(tuffHere() && stage === ST.TUFF_STAGE)) return;
   const row = boardNow().find(g => g.id === id);
   if (!row) return;
-  /* the office has marked this job's glass finished. Only the office can undo
+  /* the office has marked this job's GLASS finished. Only the office can undo
      that, so there is nothing the floor can do here but see it. Same belt and
-     braces as the stage check above: the buttons are drawn disabled too. */
-  if (row.officeDone) return;
+     braces as the stage check above: the buttons are drawn disabled too. Tuff
+     is not glass and is not locked with it (R2). */
+  if (row.officeDone && stage !== ST.TUFF_STAGE) return;
   const job = row.job;
   /* somebody is working the screen, whether or not the number could move:
      a stepper already at the total is still a hand on the tablet */
@@ -925,10 +948,12 @@ function stepHtml(g, stage, label) {
   /* each stage against its own quantity: cutting and hotmelting count the
      job's glasses, tuff counts the sheet's own TUFF number */
   const total = Math.max(0, Math.round(Number(g[ST.STAGE_TOTAL_ROW[stage]]) || 0));
-  /* the office's lock is not about who is holding the tablet, so it greys every
-     stepper on the card rather than the ones a person does not hold */
+  /* the office's lock is not about who is holding the tablet, so it greys the
+     glass steppers on the card rather than the ones a person does not hold -
+     but it says nothing about TUFF, which stays live under it (R2) */
   const holds = ST.canStage(PERSON, stage);
-  const mine = holds && !g.officeDone;
+  const locked = g.officeDone && stage !== ST.TUFF_STAGE;
+  const mine = holds && !locked;
   const off = mine ? "" : ' disabled aria-disabled="true"';
   const b = (t, act, cls, dead) => '<button class="' + cls + '" data-id="' + esc(g.id) + '" data-stage="' + stage +
     '" data-act="' + act + '"' + (dead ? ' disabled aria-disabled="true"' : off) + '>' + t + '</button>';
@@ -948,7 +973,7 @@ function stepHtml(g, stage, label) {
          space the row already had, so a card with four stages on it is no
          taller than it was with one number in the headline. */
       (holds ? '<span class="stepleft tab">' + esc(ST.leftWords(ST.stageLeft(g, stage))) + '</span>'
-             : g.officeDone ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
+             : locked ? "" : ' <span class="nomine">not yours</span>') + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") +
       '<span class="stepn tab' + (full ? " full" : "") + '">' + v + '</span>' + b("+", "1", "sbtn") +
       b(none || !full ? "All" : "None", full ? "none" : "all", "sall", none) + '</span>' +
@@ -985,7 +1010,9 @@ function cardInner(g) {
           (g.tuffTotal > 0 ? " · " + g.tuffTotal + " tuff" : "")) + '</span>' +
     '</div>' +
     '<div class="steps">' + stages.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
-    (g.officeDone ? '<div class="officedone">the office has marked this job finished</div>' : "") +
+    /* "glass", not "job": since 2026-09-21 the tuff stepper beside it is still
+       live under this line, and a word that said otherwise would be wrong */
+    (g.officeDone ? '<div class="officedone">the office has marked this job’s glass finished</div>' : "") +
     (lost ? '<div class="unsaved">' + esc(lost.stages.map(s =>
         ST.stageLabel(s.stage) + " " + s.value).join(", ")) +
         ' was not saved — the office marked this job finished first</div>' : "") +

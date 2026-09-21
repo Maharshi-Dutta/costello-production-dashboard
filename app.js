@@ -3014,12 +3014,21 @@ async function weldOfficeEdit(id, part, act) {
   if (weldWriting[k]) return false;                       // one at a time per line
   if (WELDC.weldApplyTap(rec, part, act) == null) return false;   // not a part of this station
   if (WELD_OK !== true) { toast(WELD_WHY || WELD_LIST_MISSING, true); return false; }
-  /* gated by list consent like every list write, and skipped quietly without
-     it - never a popup somebody did not ask for */
-  if (CW.hasListConsent && !(await CW.hasListConsent())) { toast(WELD_NEED_CONSENT, true); return false; }
-  const who = feedWho(), at = new Date().toISOString();
+  /* THE FLAG GOES UP BEFORE THE FIRST AWAIT (review finding R3, 2026-09-21).
+     It used to be set after the consent check, so two clicks in one tick both
+     got past the guard above, both read the same row and both PATCHed from the
+     same base. The early return below clears it again. */
   weldWriting[k] = 1;
   redrawWelding();
+  /* gated by list consent like every list write, and skipped quietly without
+     it - never a popup somebody did not ask for */
+  if (CW.hasListConsent && !(await CW.hasListConsent())) {
+    delete weldWriting[k];
+    redrawWelding();
+    toast(WELD_NEED_CONSENT, true);
+    return false;
+  }
+  const who = feedWho(), at = new Date().toISOString();
   let from = rec[part], value = null, stale = false;
   try {
     WELD_SITEID = await weldSiteId();
@@ -4260,6 +4269,14 @@ function glassColourPlan(j) {
     const total = Math.round(Number((j.glass || {})[type]) || 0);
     if (!(total > 0)) return;                // the job has none of this glass
     const item = "glass:" + type;
+    /* NO OPINION IS NOT BLANK (review finding R5, 2026-09-21). `glassColours`
+       answers `null` for TUFF while nobody has ever tapped that counter - it is
+       the one counter the feeder may never seed, so its nought is not a
+       statement by anybody. Reading that as "blank" would clear a gold TUFF
+       cell the office ticked by hand on every job the floor has touched at all,
+       which under the old rule glazing quietly painted gold instead. Neither a
+       paint nor a clear: the column is simply not in the plan. */
+    if (want[type] == null) return;
     /* A COLOUR THIS FEATURE DOES NOT OWN. The sheet's own Cut green, or
        something somebody used for a reason of their own: it owns gold, yellow
        and nothing, and it does not paint over anything else in either
@@ -6509,13 +6526,27 @@ async function glassOfficeEdit(job, stage, act) {
   if (ST.applyTap(rec, stage, act) == null) return false; // not a stage of this station
   /* the office's own lock. The board draws these disabled, and the rule is
      enforced here as well: a job the record says is finished is cleared in the
-     job card, not nudged on the board. */
-  if (rec.officeDone) return false;
+     job card, not nudged on the board. TUFF is outside it (R2): OfficeDone is
+     ST.officeComplete of the job's DG and TG and says nothing about tuff, and
+     since the lock lands at hotmelting rather than at glazing a locked job is
+     routinely one whose tuff is still being counted. */
+  if (rec.officeDone && stage !== ST.TUFF_STAGE) return false;
   if (STATION_OK !== true) { toast(STATION_WHY || STATION_LIST_MISSING, true); return false; }
-  if (CW.hasListConsent && !(await CW.hasListConsent())) { toast(STATION_NEED_CONSENT, true); return false; }
-  const who = feedWho(), at = new Date().toISOString();
+  /* THE FLAG GOES UP BEFORE THE FIRST AWAIT (review finding R3, 2026-09-21),
+     which is the whole of the double-click fix. It used to be set after the
+     consent check, so two clicks in one tick both got past the guard above,
+     both read the same row and both PATCHed from the same base - the second
+     one silently undoing the first. Every early return below it clears it
+     again, or the line would be dead until the page reloaded. */
   glassWriting[k] = 1;
   redrawStation();
+  if (CW.hasListConsent && !(await CW.hasListConsent())) {
+    delete glassWriting[k];
+    redrawStation();
+    toast(STATION_NEED_CONSENT, true);
+    return false;
+  }
+  const who = feedWho(), at = new Date().toISOString();
   let from = rec[ST.STAGE_ROW[stage]], value = null, stale = false;
   try {
     const siteId = await CW.stationSite(glassSite());
@@ -6575,7 +6606,9 @@ function stationMerge(id, fields) {
     same thing and should not look like two features. */
 function stOfficeStepsHtml(g, stage) {
   const busy = !!glassWriting[String(g.id) + "|" + stage];
-  const off = busy || g.officeDone;
+  /* the lock is the office's word about this job's GLASS, so the tuff line
+     stays live under it - the same rule the tablet's own stepper follows (R2) */
+  const off = busy || (g.officeDone && stage !== ST.TUFF_STAGE);
   const b = (t, act) => '<button class="wobtn" data-gjob="' + esc(g.job) +
     '" data-gstage="' + esc(stage) + '" data-gact="' + esc(act) + '"' +
     (off ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
