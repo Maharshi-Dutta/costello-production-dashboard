@@ -324,10 +324,69 @@ function jobPhase(j) {
    catches up, and clearing the hand-set phase drops straight back to it. */
 let phaseHook = null;
 function setPhaseHook(fn) { phaseHook = typeof fn === "function" ? fn : null; }
+
+/* ---- the third voice: the floor (2026-09-21) --------------------------------
+   The owner, the day the glazing station was asked for: "when glazing is in
+   process or done the phase bar in the master dashboard should move the
+   progress into the In glazing section. And when something is in welding, in
+   process or done, it should be In fabrication. If something is marked in
+   glazing it means it has gone through fabrication; if glazing is not marked
+   but welding is, it is in fabrication."
+
+   So the floor's lists are a third opinion beside the sheet's own evidence and
+   the hand-set phase, and it is read the same way the other two are: the
+   HIGHEST of the three wins, so the floor can only ever move a job forward.
+   A counter tapped back to nought withdraws that voice and the phase falls back
+   to whichever of the other two was next.
+
+   NOTHING IS STORED. This is computed on every render out of lists that are
+   already in memory: no `Dashboard phases` row, no list write, no workbook
+   write. The hook is how app.js - the only side that can see those lists -
+   hands the answer in, exactly as handPhase does for the phases list.       */
+const FLOOR_FAB = 3;                              // PHASES: "In fabrication"
+const FLOOR_GLAZE = 4;                            // PHASES: "In glazing"
+/** What the floor's records say about one job, or null for "nothing to say".
+    `{welded, glazed}` are counters, and any movement at all on one of them is
+    the whole test - "in process or done", in the owner's words. Glazing
+    outranks welding, because a job being glazed has been through fabrication
+    whether or not anybody recorded the welding. Pure. */
+function floorPhaseOf(rec) {
+  if (!rec) return null;
+  if (Number(rec.glazed) > 0) return FLOOR_GLAZE;
+  if (Number(rec.welded) > 0) return FLOOR_FAB;
+  return null;
+}
+let floorHook = null;
+function setFloorHook(fn) { floorHook = typeof fn === "function" ? fn : null; }
+/** The floor's phase for one job, or null when no list has been read yet or
+    neither counter has moved. A hook that throws says nothing rather than
+    taking the job list down with it. */
+function floorPhase(j) {
+  if (!floorHook || !j) return null;
+  let rec = null;
+  try { rec = floorHook(j); } catch (e) { return null; }
+  return floorPhaseOf(rec);
+}
 function effectivePhase(j) {
   const sheet = jobPhase(j);
   const hand = phaseHook ? phaseHook(j) : null;
-  return hand == null ? sheet : Math.max(sheet, hand);
+  const floor = floorPhase(j);
+  let n = sheet;
+  if (hand != null && hand > n) n = hand;
+  if (floor != null && floor > n) n = floor;
+  return n;
+}
+/** Which voice the phase came from: "sheet" | "hand" | "welding" | "glazing".
+    On a tie the person and the sheet are named first, because the floor only
+    ever RAISES a phase - if it agrees with the sheet it did not decide
+    anything. It is what the drawer's strip says out loud. */
+function phaseSource(j) {
+  const sheet = jobPhase(j);
+  const hand = phaseHook ? phaseHook(j) : null;
+  const floor = floorPhase(j);
+  const best = Math.max(sheet, hand == null ? -1 : hand);
+  if (floor == null || floor <= best) return (hand != null && hand > sheet) ? "hand" : "sheet";
+  return floor >= FLOOR_GLAZE ? "glazing" : "welding";
 }
 const phaseName = j => PHASES[effectivePhase(j)];
 
@@ -636,6 +695,7 @@ if (typeof window !== "undefined") window.CP = {
   itemState, cpItems, cpTotal, cpStatus, cpFileStatus, cpColumn, cpLabel, cpColour, cpStatusFor, cpClamp,
   cpDoors, cpDoorAt, cpDerived, cpChildren, cpDerivedOf, cpOwnState, cpDoorWarning, CP_RANK,
   jobPhase, phaseName, PHASES, effectivePhase, setPhaseHook,
+  floorPhase, floorPhaseOf, setFloorHook, phaseSource, FLOOR_FAB, FLOOR_GLAZE,
   CP_LIST, CP_LIST_FIELDS, cpTitle, cpRow, cpRowPut, cpRowsSet, cpRowsAll, cpRowsFrom, cpRowFields,
   cpImportPlan, cpWordForHex, CP_WORD_HEX, cpSetImportPending, cpImportPending, cpFileState,
   cpSetProgress, cpStored, cpWriteItem, cpWriteGroup,
@@ -645,4 +705,6 @@ if (typeof window !== "undefined") window.CP = {
 /* the pipeline is read by the drawer and by every job row, so it is a plain
    global as well, the way the parser's own helpers are */
 if (typeof window !== "undefined") { window.jobPhase = jobPhase; window.phaseName = phaseName; window.PHASES = PHASES;
-                                     window.effectivePhase = effectivePhase; window.setPhaseHook = setPhaseHook; }
+                                     window.effectivePhase = effectivePhase; window.setPhaseHook = setPhaseHook;
+                                     window.setFloorHook = setFloorHook; window.phaseSource = phaseSource;
+                                     window.floorPhase = floorPhase; }

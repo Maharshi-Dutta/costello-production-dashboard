@@ -511,6 +511,13 @@ function parseWorkbook(wb) {
       for (const k in m.qty) {
         const c = row.getCell(m.qty[k]), v = num(c);
         if (v && !j[k]) j[k] = v;
+        /* ... AND THE SAME TWO NUMBERS FROM `Production` ALONE (2026-09-21).
+           `j.wnd`/`j.drs` take the first sheet that has a number, which is
+           `Production` whenever `Production` has one and somebody else's sheet
+           when it has not. That is the same door B20 came through, so a station
+           that must read `Production` only gets its own pair - see the block by
+           j.prodsMain below, which is this rule's first half. */
+        if (mainHere && v) j[k + 'Main'] = Math.max(j[k + 'Main'] || 0, v);
         if (cpHere) cpBump(j.cp, k === 'wnd' ? 'win' : 'drs', cpOf(fillOf(c)));
       }
       for (const k in m.glass) {
@@ -626,6 +633,10 @@ function parseWorkbook(wb) {
          trade / hold, with the hex that said so, for the exports */
       flag: j.flag || '', flagHex: j.flagHex || '',
       wnd: j.wnd || 0, drs: j.drs || 0,
+      /* the same two off `Production` and no other sheet, for a station that
+         must not inherit another sheet's misalignment (the glazing station is
+         the first: its Total is windows + doors) */
+      wndMain: j.wndMain || 0, drsMain: j.drsMain || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
       prods: prods, prodsMain: prodsMain, cp: j.cp,
       /* one entry per DOORS DONE cell that has text in it: { slot, code,

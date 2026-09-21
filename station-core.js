@@ -364,9 +364,13 @@ function stItemAge(a, b) {
     not in production, and neither is a job that has left the sheet (cat past). */
 function inProduction(j, blockNames) {
   if (!j || j.cat === "past") return false;
-  const name = stTxt((blockNames || [])[j.blk]);
-  return /^\s*in production/i.test(name);
+  return sectionInProduction((blockNames || [])[j.blk]);
 }
+/** The same question asked of a SECTION NAME rather than of a job - which is
+    what a station list row carries, because the feeder copies the name onto it.
+    One regex for both, so a tablet's filter and the feeder's slice can never
+    disagree about what "In production" is. */
+const sectionInProduction = name => /^\s*in production/i.test(stTxt(name));
 
 /* Rows sort by the office's own order first, so the floor sees the office's
    order, and by Title after it, so one slice always makes one plan. */
@@ -2011,7 +2015,7 @@ const ST = {
   daySheetOf, daySheetStages, dayFieldsFor, dayCountShort, dayKey, stClock, isoWeek, DAY_NAMES,
   dayTitle, dayCount, DAY_COUNT_MAX, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
   targetTitle, targetFields, targetOf, glassReportJobs, REPORT_CUSTOMER_MAX,
-  inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
+  inProduction, sectionInProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
   stageLeft, heldStages, jobLefts, boardLefts, applyTap, boardDiff, mergeDelta,

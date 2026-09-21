@@ -3306,6 +3306,669 @@ function weldDrawerLine(j) {
     '<button class="ghost" id="weldopen">open the welding board</button></div>';
 }
 
+/* ================= the glazing station, in the office =========================
+   Shipped 2026-09-21 (docs/specs/2026-09-21-glazing-station.md). The THIRD
+   floor station, built from the "Adding a station" checklist in
+   docs/STATIONS.md rather than by copying a page: the columns and the rules are
+   glazing-core.js' `GLAZE` definition, the list mechanics are the same
+   station-core.js functions the other two feeders use, and everything below is
+   this dashboard's half - feed the list, poll it, draw the board, and let the
+   office correct the counter.
+
+   FOUR THINGS TO KEEP IN MIND BEFORE CHANGING ANY OF IT:
+
+   1. NOTHING HERE WRITES THE WORKBOOK. Not a fill, not a value, not a row. The
+      only workbook write anywhere in this feature is the `Dashboard Log` line
+      an office edit leaves, which is a dashboard-owned sheet (rule 2).
+   2. THE QUANTITIES COME OFF `Production` ALONE (j.wndMain + j.drsMain, the
+      parser's Production-only pair). Never `j.wnd`/`j.drs`, which take the
+      first sheet that has a number - that is the door HISTORY B20 came through.
+   3. The office's edits write the floor's counter. That is a dated exception in
+      CLAUDE.md rule 3, and it goes in `Dashboard Log` and NEVER in
+      `Station log` - there is no call to ST.logFields on this path at all.
+   4. A failure here can never stop the glass feed, the welding feed, the
+      checkpoint writes or the colour writer. Every entry point has its own try
+      and reports into its own three states.                                  */
+const GLZ_SITE_MISSING = "The “Floor stations” SharePoint site is not there yet, or this account " +
+  "cannot see it, so the glazing board cannot be shown. Ask the manager — nothing in the Excel file is involved.";
+const GLZ_LIST_MISSING = "The “Glazing station” list is not in the “Floor stations” site yet. " +
+  "Ask the manager to add it — nothing in the Excel file is involved.";
+const GLZ_LOG_MISSING = "The “Station log” list is not in the “Floor stations” site yet, so who " +
+  "glazed what cannot be shown here. Ask the manager to add it.";
+const GLZ_NEED_CONSENT = STATION_NEED_CONSENT;
+
+let GLZ_ITEMS = null;           // the Glazing station list, as last read
+let GLZ_OK = null;              // null: not looked · false: no site, no list, no permission · true
+let GLZ_WHY = "";
+let GLZ_ERR = "";               // a passing failure: the last board stays, a line above it
+let GLZ_LOG = [];               // the Station log, in the floor's site, Glazing lines
+let GLZ_LOG_OK = null, GLZ_LOG_WHY = "";
+let GLZ_NOTES = null;           // Station comments, in the floor's site
+let GLZ_NOTES_OK = null;
+let GLZ_SITEID = null;
+let GLZ_SITE_GEN = 0;
+let GLZ_TOK = { items: null, log: null, notes: null };
+let glzBusy = false, glzPolling = false;
+let GLZ_FEED = { hash: "", at: 0 };
+let GLZ_FEED_ERR = "";
+const GLZ_FEED_KEY = "cw_glzfeed";
+try { GLZ_FEED = JSON.parse(localStorage.getItem(GLZ_FEED_KEY) || "null") || GLZ_FEED; } catch (e) {}
+function saveGlzFeed() { try { localStorage.setItem(GLZ_FEED_KEY, JSON.stringify(GLZ_FEED)); } catch (e) {} }
+/* what is in the board's search box and which section it is narrowed to.
+   Screen state: nothing is written anywhere. */
+let GLZ_Q = "", GLZ_SECT = "";
+let glzWriting = {};            // item id -> an office write in flight
+
+/** Is the glazing station's code even on this page? index.html loads
+    glazing-core.js; a harness that does not gets a board that says so once and
+    never throws. */
+const glzOn = () => typeof GLZC !== "undefined" && !!GLZC && typeof ST !== "undefined";
+/** The site the glazing lists are in: `Floor stations`, and nothing else. */
+async function glzSiteId() { return await CW.stationSite(GLZC.GLAZE.site); }
+const glzOpts = () => ({ siteId: GLZ_SITEID, fields: GLZC.GLZ_FIELDS });
+
+/** What a failed read means, in one place, for this station's own three states
+    and nothing else's. It can never touch STATION_OK or WELD_OK: a different
+    list is a different question. */
+function glzTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  const gone = !!(CW.isMissing && CW.isMissing(e));
+  if (gone) {
+    GLZ_SITEID = null;
+    if (CW.forgetStationSite) CW.forgetStationSite(false, GLZC.GLAZE.site);
+  }
+  if (/permission needed/.test(m)) { GLZ_OK = false; GLZ_WHY = GLZ_NEED_CONSENT; GLZ_ERR = ""; return; }
+  if (gone) { GLZ_OK = false; GLZ_WHY = GLZ_SITE_MISSING; GLZ_ERR = ""; return; }
+  /* anything else - offline, a bad gateway, a refused token - leaves the last
+     board on screen with a line above it */
+  GLZ_ERR = "cannot reach the glazing lists just now — retrying";
+  console.warn("[glazing] " + m);
+}
+
+/** Read the Glazing station list, quietly. Never pops a consent window, never
+    toasts, never throws. */
+async function readGlazing() {
+  if (!glzOn() || typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      GLZ_OK = false; GLZ_WHY = GLZ_NEED_CONSENT; GLZ_ERR = ""; return null;
+    }
+    GLZ_SITEID = await glzSiteId();
+    if (!GLZ_SITEID) { GLZ_OK = false; GLZ_WHY = GLZ_SITE_MISSING; GLZ_ERR = ""; return null; }
+    const items = await CW.listItems(GLZC.GLZ_LIST, glzOpts());
+    if (items == null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; GLZ_ERR = ""; return null; }
+    GLZ_ITEMS = items; GLZ_OK = true; GLZ_WHY = ""; GLZ_ERR = "";
+    GLZ_TOK.items = null;                     // a full read: the next poll starts a fresh delta
+    return items;
+  } catch (e) { glzTrouble(e); return null; }
+}
+/** The floor's log and the floor's notes, for the panel under the board. Both
+    read-only here, for ever. Each can be missing on its own without taking the
+    board away. */
+async function readGlazingLog() {
+  if (!glzOn() || !GLZ_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.LOG_LIST, { siteId: GLZ_SITEID, fields: ST.LOG_FIELDS });
+    if (items == null) { GLZ_LOG_OK = false; GLZ_LOG_WHY = GLZ_LOG_MISSING; return null; }
+    GLZ_LOG = stationLogRecent(items);
+    GLZ_LOG_OK = true; GLZ_LOG_WHY = "";
+    GLZ_TOK.log = null;
+    return GLZ_LOG;
+  } catch (e) { glzTrouble(e); return null; }
+}
+async function readGlazingNotes() {
+  if (!glzOn() || !GLZ_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.COMMENT_LIST, { siteId: GLZ_SITEID, fields: ST.COMMENT_FIELDS });
+    if (items == null) { GLZ_NOTES_OK = false; GLZ_NOTES = []; return null; }
+    GLZ_NOTES = stationNotesRecent(items);
+    GLZ_NOTES_OK = true;
+    GLZ_TOK.notes = null;
+    return GLZ_NOTES;
+  } catch (e) { glzTrouble(e); return null; }
+}
+
+/* ---- the feeder -------------------------------------------------------------
+   Beside feedStation() and feedWelding(), never inside either, and in its own
+   link at the call site.
+
+   THERE IS NO SEED HERE, which makes this the simplest of the three: the plan's
+   patches can only ever carry feeder columns, because `GLAZE.seedFields` is
+   empty and `seedOf` answers {}. So there is no weldFeedPatch-shaped guard to
+   write - the plan is sent as it stands, and no path in it can name a floor
+   column at all. */
+async function glzAdd(fields, opts) {
+  try { return await CW.listAdd(GLZC.GLZ_LIST, fields, opts); }
+  catch (e) {
+    /* the Title is unique on the list, so a refusal usually means another
+       dashboard made the row first - patch it instead. There is no seed to
+       leave out, so every field but the Title goes. */
+    const mine = await CW.listItemsFor(GLZC.GLZ_LIST, fields.Title, opts);
+    if (!mine.length) throw e;                    // a real failure: nothing was created
+    const body = {};
+    Object.keys(fields).forEach(k => { if (k !== "Title") body[k] = fields[k]; });
+    return CW.listPatch(GLZC.GLZ_LIST, mine[0].id, body, opts);
+  }
+}
+const GLZ_AGAIN_MS = 30000;
+let glzAgainT = null;
+function glzFeedAgain() {
+  if (glzAgainT) return;
+  glzAgainT = setTimeout(() => { glzAgainT = null; feedGlazing().catch(() => {}); }, GLZ_AGAIN_MS);
+}
+
+async function feedGlazing() {
+  if (!glzOn()) return null;
+  if (glzBusy) return null;                              // only one feed at a time
+  if (glzPolling) { glzFeedAgain(); return null; }       // a poll is merging a delta right now
+  if (typeof CW === "undefined" || !CW || !CW.listAdd) return null;
+  glzBusy = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) { GLZ_FEED_ERR = ""; return null; }
+    const slice = GLZC.glzSlice(ALL, BLOCKNAMES);
+    const hash = ST.sliceHash(slice, GLZC.GLAZE);
+    if (hash === GLZ_FEED.hash && Date.now() - (GLZ_FEED.at || 0) < STATION_FEED_MS) {
+      GLZ_FEED_ERR = "";                                 // nothing to do is not a failure
+      return null;
+    }
+    GLZ_SITEID = await glzSiteId();
+    if (!GLZ_SITEID) { GLZ_OK = false; GLZ_WHY = GLZ_SITE_MISSING; GLZ_ERR = ""; return null; }
+    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves(GLZC.GLAZE.site) : 0;
+    if (fgen !== GLZ_SITE_GEN) glzSiteMoved(fgen);
+    const opts = glzOpts();
+    const items = await CW.listItems(GLZC.GLZ_LIST, opts);
+    if (items == null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; GLZ_ERR = ""; return null; }
+    GLZ_OK = true; GLZ_WHY = ""; GLZ_ERR = ""; GLZ_ITEMS = items; GLZ_TOK.items = null;
+    const plan = ST.feedPlan(slice, items,
+      { at: new Date().toISOString(), by: feedWho(), def: GLZC.GLAZE });
+    const all = plan.adds.map(f => () => glzAdd(f, opts))
+      .concat(plan.patches.map(p => () => CW.listPatch(GLZC.GLZ_LIST, p.id, p.fields, opts)));
+    const work = all.slice(0, STATION_FEED_MAX);
+    const r = await stationSend(work);
+    GLZ_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
+    /* the hash is only remembered when the whole plan went out: a run cut short
+       by the 60-write cap, or that lost a write, must run again */
+    const whole = !r.failed && work.length === all.length;
+    GLZ_FEED = whole ? { hash: hash, at: Date.now() } : { hash: "", at: Date.now() };
+    saveGlzFeed();
+    if (!whole) glzFeedAgain();
+    console.log("[glazing] fed " + r.sent + " of " + all.length +
+                " (" + plan.adds.length + " new, " + plan.patches.length + " changed, " +
+                plan.unchanged + " already right)");
+    if (r.sent) {
+      const after = await CW.listItems(GLZC.GLZ_LIST, opts);
+      if (after) { GLZ_ITEMS = after; GLZ_TOK.items = null; }
+    }
+    return r;
+  } catch (e) {
+    GLZ_FEED_ERR = (e && e.message) || String(e);
+    console.warn("[glazing] feed failed:", GLZ_FEED_ERR);
+    glzTrouble(e);
+    glzFeedAgain();
+    return null;
+  } finally {
+    glzBusy = false;
+    setStationFoot();
+  }
+}
+
+/** The glazing lists have moved to another site. Everything held about them was
+    true of the old one: the tokens and the "already fed" hash go with it. */
+function glzSiteMoved(gen) {
+  GLZ_SITE_GEN = gen;
+  GLZ_TOK = { items: null, log: null, notes: null };
+  GLZ_FEED = { hash: "", at: 0 }; saveGlzFeed();
+  console.log("[glazing] the glazing lists have moved: feeding and re-reading the new site");
+}
+
+/* ---- the poll ---------------------------------------------------------------
+   Its own, on the station clock, in its own try inside stationTick. A glazing
+   list that flaps must not put "cannot reach the floor's lists" over a glass or
+   a welding board that read perfectly well, and must not return before the
+   glass colour writer has had its turn. */
+async function glzDeltaOne(key, list, fields) {
+  const opts = { siteId: GLZ_SITEID, fields: fields };
+  if (GLZ_TOK[key]) opts.token = GLZ_TOK[key];
+  const had = opts.token || null;
+  let d;
+  try {
+    d = await CW.listDelta(list, opts);
+  } catch (e) {
+    if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+    /* a stale token, or a list that will not serve a delta at all: read it the
+       plain way this pass and start a fresh token next time */
+    GLZ_TOK[key] = null;
+    const all = await CW.listItems(list, { siteId: GLZ_SITEID, fields: fields });
+    if (all == null) return null;
+    return { rows: all, fresh: true };
+  }
+  if (d == null) return null;                     // the list is not there any more
+  GLZ_TOK[key] = d.next || null;
+  if (!had) return { rows: d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields })),
+                     fresh: true };
+  if (!d.items.length) return { rows: null, fresh: false };
+  return { rows: d.items, fresh: false };
+}
+async function glzPoll() {
+  if (!glzOn() || glzPolling || glzBusy) return false;
+  if (GLZ_OK !== true) return false;              // nothing read yet: nothing to keep current
+  if (!CW.listDelta) return false;
+  glzPolling = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) return false;
+    GLZ_SITEID = await glzSiteId();
+    if (!GLZ_SITEID) return false;
+    const gen = CW.stationSiteMoves ? CW.stationSiteMoves(GLZC.GLAZE.site) : 0;
+    if (gen !== GLZ_SITE_GEN) glzSiteMoved(gen);
+    let moved = false;
+    const got = await glzDeltaOne("items", GLZC.GLZ_LIST, GLZC.GLZ_FIELDS);
+    /* NULL MEANS THE LIST IS NOT THERE ANY MORE, and it is not a throw. Read as
+       "nothing moved" it would leave this feed reporting healthy for ever and
+       enumerating a list that does not exist every ten seconds. */
+    if (got === null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; }
+    else if (got.rows) {
+      GLZ_ITEMS = got.fresh ? got.rows : ST.mergeDelta(GLZ_ITEMS || [], got.rows);
+      moved = true;
+    }
+    if (GLZ_LOG_OK === true) {
+      const lg = await glzDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
+      if (lg === null) { GLZ_LOG_OK = false; GLZ_LOG_WHY = GLZ_LOG_MISSING; }
+      else if (lg.rows) {
+        GLZ_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(GLZ_LOG || [], lg.rows));
+        moved = true;
+      }
+    }
+    if (GLZ_NOTES_OK === true) {
+      const nt = await glzDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
+      if (nt === null) { GLZ_NOTES_OK = false; GLZ_NOTES = GLZ_NOTES || []; }
+      else if (nt.rows) {
+        GLZ_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(GLZ_NOTES || [], nt.rows));
+        moved = true;
+      }
+    }
+    GLZ_ERR = "";
+    if (moved) redrawGlazing();
+    return moved;
+  } catch (e) {
+    glzTrouble(e);
+    return false;
+  } finally {
+    glzPolling = false;
+  }
+}
+/** Redraw the glazing board, and nothing else on the page. Held off while the
+    list is in use - somebody typing in the board's own search box - and then
+    owed, exactly as the other two repaints are.
+
+    OFF THE BOARD it still has something to do (2026-09-21): the job list's
+    status word can be the floor's, so a glazing row moving repaints the rows
+    down the same quiet path a glass counter does. */
+function redrawGlazing() {
+  if (state.board !== "glazing") { floorPhaseRepaint(); return; }
+  if (rowsInUse()) { ROWS_STALE = true; return; }
+  ROWS_STALE = false;
+  quietRows();
+}
+/* The reads the board needs, asked once each, whoever asks first - the same
+   shape as weldReadIfNeeded, and with the same two rules: ALREADY READ MEANS
+   RETURN, not "call the callback anyway" (these are called from inside a
+   renderer, so answering synchronously makes renderRows() call itself without
+   end), and a read that failed is not tried again at network speed. */
+let glzReading = null, glzLogReading = null, glzNotesReading = null;
+const GLZ_RETRY_MS = 15000;
+const glzSoft = { board: 0, log: 0, notes: 0 };
+const glzSoftMs = { board: 0, log: 0, notes: 0 };
+function glzAgain(which, ms) { glzSoft[which] = Date.now(); glzSoftMs[which] = ms; }
+function glzDue(which) {
+  return !glzSoft[which] || Date.now() - glzSoft[which] >= glzSoftMs[which];
+}
+function glzReadIfNeeded(then) {
+  if (GLZ_OK !== null) return;
+  if (!glzDue("board")) return;
+  if (!glzReading) {
+    glzAgain("board", GLZ_RETRY_MS);            // armed before the read, not after
+    glzReading = readGlazing().then(r => {
+      glzReading = null;
+      if (GLZ_OK === null) glzAgain("board", GLZ_RETRY_MS);
+      else glzSoft.board = 0;
+      return r;
+    }, () => { glzReading = null; });
+  }
+  glzReading.then(() => { if (then) then(); });
+}
+function glzLogReadIfNeeded(then) {
+  if (GLZ_LOG_OK !== null || !GLZ_SITEID) return;
+  if (!glzDue("log")) return;
+  if (!glzLogReading) {
+    glzAgain("log", GLZ_RETRY_MS);
+    glzLogReading = readGlazingLog().then(r => {
+      glzLogReading = null;
+      if (GLZ_LOG_OK === null) glzAgain("log", GLZ_RETRY_MS); else glzSoft.log = 0;
+      return r;
+    }, () => { glzLogReading = null; });
+  }
+  glzLogReading.then(() => { if (then) then(); });
+}
+function glzNotesReadIfNeeded(then) {
+  if (GLZ_NOTES_OK !== null || !GLZ_SITEID) return;
+  if (!glzDue("notes")) return;
+  if (!glzNotesReading) {
+    glzAgain("notes", GLZ_RETRY_MS);
+    glzNotesReading = readGlazingNotes().then(r => {
+      glzNotesReading = null;
+      if (GLZ_NOTES_OK === null) glzAgain("notes", GLZ_RETRY_MS); else glzSoft.notes = 0;
+      return r;
+    }, () => { glzNotesReading = null; });
+  }
+  glzNotesReading.then(() => { if (then) then(); });
+}
+
+/* ---- the office's own edit --------------------------------------------------
+   The owner asked for it in as many words (decision 3, 2026-09-21): "I should
+   be able to edit glazing from that window."
+
+   What one click writes, and all it CAN write: the counter, its By and At, and
+   the last-touch pair - GLZC.glzOfficeFields, run through GLZC.glzFloorOnly,
+   which is ST.floorOnly with this station's definition and the same filter the
+   tablet's own queue runs on. A job fact cannot get into it, because there is
+   no argument it could come in by: the builder takes a number, a name and a
+   time.
+
+   What it does NOT write: a `Station log` line. That list is the floor's and
+   stays the floor's. The change goes into `Dashboard Log` through noteChange,
+   exactly as the welding board's does. */
+async function glzOfficeEdit(id, act) {
+  if (!glzOn() || !CW.listPatch) return false;
+  const rec = (glzRecordsNow().byId || {})[String(id)];
+  if (!rec) return false;
+  const k = String(id);
+  if (glzWriting[k]) return false;                        // one at a time per row
+  if (GLZ_OK !== true) { toast(GLZ_WHY || GLZ_LIST_MISSING, true); return false; }
+  /* THE FLAG GOES UP BEFORE THE FIRST AWAIT (the welding board's review finding
+     R3): set after the consent check, two clicks in one tick both got past the
+     guard above, both read the same row and both PATCHed from the same base.
+     Every early return below clears it again. */
+  glzWriting[k] = 1;
+  redrawGlazing();
+  /* gated by list consent like every list write, and skipped quietly without it
+     - never a popup somebody did not ask for */
+  if (CW.hasListConsent && !(await CW.hasListConsent())) {
+    delete glzWriting[k];
+    redrawGlazing();
+    toast(GLZ_NEED_CONSENT, true);
+    return false;
+  }
+  const who = feedWho(), at = new Date().toISOString();
+  let from = rec.glazed, value = null, stale = false;
+  try {
+    GLZ_SITEID = await glzSiteId();
+    if (!GLZ_SITEID) throw new Error(GLZ_SITE_MISSING);
+    /* READ THE ROW BEFORE DERIVING THE NUMBER - the welding board's reason,
+       word for word: the board's copy is up to ten seconds old and the floor is
+       tapping the same counter, so a "+" against a stale 3 would destroy the
+       forty-six taps that landed in between, with the office's later stamp on
+       it. A read that will not answer throws into the catch and nothing is
+       sent. */
+    const now = await CW.listItem(GLZC.GLZ_LIST, rec.id, glzOpts());
+    if (!now || !now.fields) throw new Error(GLZ_LIST_MISSING);
+    const fresh = GLZC.glzRecord({ id: rec.id, fields: now.fields });
+    stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
+    from = fresh.glazed;
+    value = GLZC.glzApplyTap(fresh, act);
+    if (value == null || value === from) {
+      /* the floor has already put it where this click was going to */
+      delete glzWriting[k];
+      glzMerge(rec.id, now.fields);
+      redrawGlazing();
+      if (stale) toast(rec.job + ": updated from the floor first.");
+      return false;
+    }
+    const body = GLZC.glzFloorOnly(GLZC.glzOfficeFields(value, who, at));
+    await CW.listPatch(GLZC.GLZ_LIST, rec.id, body, glzOpts());
+    /* the local copy carries the fresh row's own fields as well as the write,
+       so the board is not left showing a stale number beside the new one */
+    glzMerge(rec.id, Object.assign({}, now.fields, body));
+  } catch (e) {
+    delete glzWriting[k];
+    console.warn("[glazing] office edit refused:", (e && e.message) || e);
+    toast(rec.job + ": that change could not be saved — it still reads " + from + ". " + friendly(e), true);
+    redrawGlazing();
+    return false;
+  }
+  delete glzWriting[k];
+  redrawGlazing();
+  /* the floor had moved the row between the board's last poll and this click,
+     so the number this write started from is not the one that was on screen.
+     Said out loud, quietly, once. */
+  if (stale) toast(rec.job + ": updated from the floor first — glazing is " + value + " now.");
+  /* one line per change, in the office's own log and nowhere else */
+  noteChange(rec.job, GLZC.glzLogWords(rec.job), String(from), String(value));
+  return true;
+}
+/** Put one row's new fields into this dashboard's copy of the list at once, so
+    the board reads them without waiting for the ten-second poll. A NEW array,
+    because glzRecordsNow() caches on its identity. */
+function glzMerge(id, fields) {
+  GLZ_ITEMS = (GLZ_ITEMS || []).map(it => String(it.id) === String(id)
+    ? { id: it.id, fields: Object.assign({}, it.fields || {}, fields) } : it);
+}
+
+/* ---- what the board draws --------------------------------------------------- */
+let GRECS = null, GRECS_OF = false;
+/** Every glazing card of the list, built once per version of it. The array
+    itself is the cache key, exactly as stationRecords() and weldRecordsNow()
+    use: every path that changes GLZ_ITEMS replaces the array. */
+function glzRecordsNow() {
+  if (GRECS_OF === GLZ_ITEMS) return GRECS;
+  GRECS_OF = GLZ_ITEMS;
+  const cards = glzOn() ? GLZC.glzOfficeBoard(GLZ_ITEMS || []) : [];
+  const byId = {}, byJob = {};
+  cards.forEach(c => { byId[String(c.id)] = c; byJob[c.job] = c; });
+  GRECS = { cards: cards, byId: byId, byJob: byJob };
+  return GRECS;
+}
+let GLOGROWS = null, GLOGROWS_OF = false;
+function glzLogRowsNow() {
+  if (GLOGROWS_OF === GLZ_LOG) return GLOGROWS;
+  GLOGROWS_OF = GLZ_LOG;
+  GLOGROWS = ST.logRows(GLZ_LOG || [], GLZC.GLZ_NAME);
+  return GLOGROWS;
+}
+/** The floor's notes about one job, from the glazing tablet. Read-only here. */
+function glzNotesFor(job) {
+  return ST.commentRows(GLZ_NOTES || [], { job: job, station: GLZC.GLZ_NAME });
+}
+
+/** The sections the board offers to narrow by, in the sheet's own order. */
+function glzSections(cards) {
+  const seen = [];
+  cards.forEach(c => { if (c.section && seen.indexOf(c.section) < 0) seen.push(c.section); });
+  return seen;
+}
+function glzCardsShown() {
+  const all = glzRecordsNow().cards;
+  let rows = GLZC.glzFilter(all, String(GLZ_Q || "").trim());
+  if (GLZ_SECT) rows = rows.filter(c => c.section === GLZ_SECT);
+  /* the finished ones go to the bottom, gold, exactly as they do on the floor's
+     own screen: the two boards are read side by side over the phone */
+  return rows.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
+}
+
+/** One job's row on the office's glazing board: the counter, the office's own
+    steppers, the last touch and the notes. `.wobtn` is the welding board's own
+    button class, shared on purpose - the three boards do the same thing and
+    should not look like three features. */
+function glzRowHtml(c) {
+  const busy = !!glzWriting[String(c.id)];
+  const b = (t, act) => '<button class="wobtn" data-zid="' + esc(c.id) +
+    '" data-zact="' + esc(act) + '"' + (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
+  const notes = glzNotesFor(c.job);
+  const live = !!byId(c.job);
+  return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") +
+      '" data-zjob="' + esc(c.job) + '">' +
+    '<div class="wohead' + (live ? " stopen" : "") + '"' +
+        (live ? ' data-zopen="' + esc(c.job) + '"' : "") + '>' +
+      '<span class="cond tab stjob">' + esc(c.job) + '</span>' +
+      '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
+      '<span class="wosect">' + esc(c.section || "—") + '</span>' +
+      '<span class="wototal tab">' + c.glazed + ' / ' + c.total + '</span>' +
+      weldBarHtml(c.glazed, c.total) +
+      '<span class="wopart tab">' + esc(GLZC.glzQtyWords(c) || "—") + '</span>' +
+      '<span class="wobtns">' + b("&minus;", "-1") + b("+", "1") +
+        b("All", "all") + b("None", "none") + '</span>' +
+      '<span class="wonotes-slot">' + (notes.length ? '<span class="wonotes" title="' +
+        esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' +
+        notes.length + '</span>' : "") + '</span>' +
+      '<span class="wolast">' + (c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
+    '</div>' +
+    (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
+    (notes.length ? '<div class="wonotelist">' + notes.map(n =>
+      '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
+      '<span class="cmwhen">' + esc(ST.commentAgo(n.at)) + '</span>' +
+      '<div class="cmtext">' + esc(n.text) + '</div></div>').join("") + '</div>' : "") +
+  '</div>';
+}
+
+/** The whole board: the filter bar, the rows, and the floor's log under them. */
+function glzBoardHtml() {
+  if (!glzOn()) return '<div class="empty">The glazing board did not load.</div>';
+  if (GLZ_OK === null) return '<div class="empty">' + esc(STATION_CHECKING) + '</div>';
+  if (GLZ_OK !== true)
+    return '<div class="empty" style="line-height:1.6">' + esc(GLZ_WHY || GLZ_LIST_MISSING) + '</div>';
+  const cards = glzCardsShown();
+  /* a passing failure never takes the board away: it says so above whatever was
+     last read, because a stale board beats a blank one */
+  const trouble = GLZ_ERR ? '<div class="sttrouble">' + esc(GLZ_ERR) + '</div>' : "";
+  const sects = glzSections(glzRecordsNow().cards);
+  const bar = '<div class="wofilt">' +
+    '<input class="txt" id="zq" placeholder="Find a job or a customer" value="' + esc(GLZ_Q) + '">' +
+    '<select class="txt" id="zsect"><option value="">Every section</option>' +
+      sects.map(s => '<option value="' + esc(s) + '"' + (GLZ_SECT === s ? " selected" : "") + '>' +
+        esc(s) + '</option>').join("") + '</select>' +
+    '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
+    '</div>';
+  const body = !cards.length
+    ? '<div class="empty" style="line-height:1.6">No glazing jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>'
+    : cards.map(glzRowHtml).join("");
+  return trouble + bar + '<div class="wolist">' + body + '</div>' + glzLogPanelHtml();
+}
+
+/* The floor's log, under the board - the same shape the welding board's has,
+   read-only, filtered to Glazing, newest first. */
+const GLZ_LOG_SHOW = 40;
+function glzLogPanelHtml() {
+  glzLogReadIfNeeded(() => { if (state.board === "glazing") redrawGlazing(); });
+  glzNotesReadIfNeeded(() => { if (state.board === "glazing") redrawGlazing(); });
+  const head = '<div class="wologhead"><span class="kick">Floor log</span>' +
+    '<span class="wologsub">Who glazed what, and when. Written by the tablet only — ' +
+    'the office never writes a line of it, and nothing in the Excel file is involved.</span></div>';
+  if (GLZ_LOG_OK === null) return '<div class="wolog">' + head +
+    '<div class="cphint">' + esc(STATION_CHECKING) + '</div></div>';
+  if (GLZ_LOG_OK !== true) return '<div class="wolog">' + head +
+    '<div class="cphint">' + esc(GLZ_LOG_WHY || GLZ_LOG_MISSING) + '</div></div>';
+  const rows = glzLogRowsNow();
+  const counts = ST.logCounts(rows);
+  const chip = c => '<span class="lgcount">' + esc(c.key) + ' <strong class="tab">' + c.units + '</strong>' +
+    ' <span class="lgc2">' + c.lines + ' line' + (c.lines === 1 ? "" : "s") + '</span></span>';
+  const lines = rows.slice(0, GLZ_LOG_SHOW).map(r =>
+    '<div class="stlrow"><span class="stlwho">' + esc(r.who || "—") + '</span>' +
+    '<span class="stn">' + esc(r.job) + '</span>' +
+    '<span class="stlwhat">Glazing · ' + r.from + ' → ' + r.to + '</span>' +
+    '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>').join("");
+  return '<div class="wolog">' + head +
+    (counts.people.length ? '<div class="lgcrow"><span class="kick">Per person</span>' +
+      counts.people.map(chip).join("") + '</div>' : "") +
+    (rows.length ? '<div class="stlog">' + lines + '</div>' +
+      (rows.length > GLZ_LOG_SHOW ? '<div class="cphint">' + rows.length +
+        ' lines in the last ' + ST.LOG_DAYS + ' days; the newest ' + GLZ_LOG_SHOW + ' are shown.</div>' : "")
+     : '<div class="cphint">Nothing recorded on the glazing floor yet.</div>') +
+  '</div>';
+}
+
+/** Wire the board: the two filters, the office's steppers, and the card head's
+    way into the job drawer. */
+function wireGlzBoard(host) {
+  if (!host || !host.querySelector) return;
+  const q = host.querySelector("#zq");
+  if (q) q.oninput = () => {
+    GLZ_Q = q.value || "";
+    const at = q.selectionStart;
+    renderRows();
+    const n2 = $("#zq");
+    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
+  };
+  const se = host.querySelector("#zsect");
+  if (se) se.onchange = () => { GLZ_SECT = se.value || ""; renderRows(); };
+  (host.querySelectorAll("[data-zact]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (el.disabled) return;
+      const act = el.dataset.zact;
+      glzOfficeEdit(el.dataset.zid, act === "all" || act === "none" ? act : Number(act))
+        .catch(e => console.warn("[glazing] " + ((e && e.message) || e)));
+    };
+  });
+  (host.querySelectorAll("[data-zopen]") || []).forEach(el => {
+    el.onclick = ev => {
+      /* a stepper inside the head must not also open the drawer */
+      if (ev && ev.target && ev.target.dataset && ev.target.dataset.zact) return;
+      const j = el.dataset.zopen;
+      if (!byId(j)) return;
+      state.sel = j; state.edit = false; openDrawer();
+    };
+  });
+}
+
+/** One read-only line in the job drawer, under the Welding line: how far the
+    glazing floor has got, and the way to their board. It is a LINE and not a
+    column: per-job detail goes in the card (owner's rule, 2026-09-09). It
+    writes nothing and it is not a checkpoint. */
+function glzDrawerLine(j) {
+  if (!glzOn() || !j) return "";
+  glzReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
+  if (GLZ_OK !== true) return "";
+  const c = GLZC.glzJobCard(GLZ_ITEMS || [], j.id);
+  if (!c || !c.total) return "";
+  return '<div class="weldline"><span class="kick">Glazing</span>' +
+    '<span class="weldnum tab">' + c.glazed + ' / ' + c.total + '</span>' +
+    (c.at ? '<span class="stwho">' + esc(c.by || "—") + ' · ' + esc(stWhen(c.at)) + '</span>' : "") +
+    '<button class="ghost" id="glzopen">open the glazing board</button></div>';
+}
+
+/* ---- the floor's voice in the phase bar (section E) --------------------------
+   checkpoints.js owns the phase and takes the floor as a third opinion beside
+   the sheet's own evidence and the hand-set phase; this is the hook that hands
+   it the two counters. Read-only, out of lists already in memory, computed on
+   every render and STORED NOWHERE - no list write, no workbook write, no
+   `Dashboard phases` row.
+
+   Both maps are the cached per-version ones (weldRecordsNow / glzRecordsNow),
+   so this is two object lookups per job row rather than two walks of a list. A
+   station whose list has not been read yet simply says nothing, which is what
+   keeps the phase from flickering backwards when one arrives late.          */
+function floorPhaseRec(j) {
+  if (!j || !j.id) return null;
+  const id = String(j.id).trim().toUpperCase();
+  const w = (typeof WELDC !== "undefined" && WELD_OK === true)
+    ? (weldRecordsNow().byJob || {})[id] : null;
+  const g = (glzOn() && GLZ_OK === true) ? (glzRecordsNow().byJob || {})[id] : null;
+  if (!w && !g) return null;
+  return { welded: w ? w.done : 0, glazed: g ? g.glazed : 0 };
+}
+if (typeof setFloorHook === "function") setFloorHook(floorPhaseRec);
+
+/** A floor list moved while the plain job list is on screen. The status word on
+    a row can be the floor's now, so the rows have to hear about it - down the
+    same quiet path a glass counter moving uses, and never with a timer of its
+    own. Cheap: chipsNow() is one pass over the rows already drawn. */
+function floorPhaseRepaint() {
+  if (state.board) return;                    // a board draws its own
+  if (state.sel && $("#dhost")) renderDrawer();
+  if (rowsInUse()) { ROWS_STALE = true; return; }
+  if (chipsNow() !== ROWS_CHIPS) { ROWS_STALE = false; quietRows(); }
+}
+
 /* Every job the floor has a row for, in one map, built once per version of the
    list. The job list asks about every row it draws - hundreds of questions,
    several times a minute once the floor is working - and answering each one by
