@@ -176,9 +176,17 @@ const GLASS = {
      (2026-09-21). Cutting only for now, by the owner's decision 3; hotmelting
      or welding get one by gaining a line here and nothing else. The keys are
      the list's own column names; the words are what the tablet asks for. */
+  /* [column, the question the tablet asks, the heading a table puts over it].
+     The short one is there because the office's window has one row per sheet
+     and no room for "Other obscure sheets cut" over a column of numbers - and
+     without it the four counts read as "12 4 0 2" with nothing to say which is
+     which (found in a screenshot, 2026-09-21). dayCountShort falls back to the
+     long one, so a station that gives only two is still drawn. */
   daySheets: {
-    cut: { counts: [["Clear", "Clear glass sheets cut"], ["KGlass", "K-glass sheets cut"],
-                    ["Satin", "Satin sheets cut"], ["Obscure", "Other obscure sheets cut"]],
+    cut: { counts: [["Clear", "Clear glass sheets cut", "Clear"],
+                    ["KGlass", "K-glass sheets cut", "K-glass"],
+                    ["Satin", "Satin sheets cut", "Satin"],
+                    ["Obscure", "Other obscure sheets cut", "Obscure"]],
            unit: "sheets" }
   },
   /* the stages a report may be run for: the two real ones. Tuff is a counter
@@ -1654,6 +1662,21 @@ const TARGET_MISSING_OFFICE = "The “Station targets” list is not in the floo
 const DAY_UNREACHABLE = "The day sheets could not be read just now — retrying.";
 const DAY_SAVED_WORDS = "ask the office to correct a mistake";
 
+/** The heading a table puts over one count column, falling back to the
+    question the tablet asks when a definition gives no short one. */
+const dayCountShort = c => stTxt((c || [])[2] || (c || [])[1] || (c || [])[0]);
+/** A stamp as the LOCAL clock reads it, "14:02" - and "" for anything that is
+    not a time. One implementation for both screens: the office's stWhen builds
+    its own line on top of this, the tablet says "saved 14:02" with it, and
+    neither of them slices the ISO string, which is the UTC clock and is an
+    hour out all summer. */
+function stClock(iso) {
+  const d = new Date(stTxt(iso));
+  if (isNaN(d.getTime())) return "";
+  const p = n => (n < 10 ? "0" : "") + n;
+  return p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
 /** This stage's day sheet, or null - the whole of "which pages have one". */
 function daySheetOf(def, stage) {
   const ds = (stDef(def).daySheets || {})[stTxt(stage).trim().toLowerCase()];
@@ -1956,7 +1979,7 @@ const ST = {
   stripContact, STRIP_MAX,
   DAY_LIST, TARGET_LIST, DAY_BASE_FIELDS, TARGET_FIELDS, DAY_NOTE_MAX,
   DAY_MISSING_FLOOR, DAY_MISSING_OFFICE, TARGET_MISSING_OFFICE, DAY_UNREACHABLE, DAY_SAVED_WORDS,
-  daySheetOf, daySheetStages, dayFieldsFor, dayKey, isoWeek, DAY_NAMES,
+  daySheetOf, daySheetStages, dayFieldsFor, dayCountShort, dayKey, stClock, isoWeek, DAY_NAMES,
   dayTitle, dayCount, DAY_COUNT_MAX, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
   targetTitle, targetFields, targetOf, glassReportJobs, REPORT_CUSTOMER_MAX,
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,

@@ -1173,7 +1173,9 @@ function pickerHtml() {
 function dayLineHtml(r, counts) {
   return '<div class="dayline"><span class="daylday">' + esc(r.day) + '</span>' +
     '<span class="dayldow">' + esc(r.weekday.slice(0, 3)) + '</span>' +
-    counts.map(c => '<span class="daylnum tab">' + esc(c[1].split(" ")[0]) + ' ' +
+    /* the definition's own short label, not the first word of the long one -
+       which read "Other 2" for the obscure count */
+    counts.map(c => '<span class="daylnum tab">' + esc(ST.dayCountShort(c)) + ' ' +
       (r.counts[c[0]] || 0) + '</span>').join("") +
     '<span class="dayltot tab">' + r.total + '</span></div>';
 }
@@ -1199,7 +1201,9 @@ function daySheetHtml() {
      what to do about a mistake */
   if (saved || owed) {
     const row = saved || ST.dayRows([{ id: "", fields: owed.fields }], counts)[0];
-    const when = saved ? "saved " + String(saved.savedAt).slice(11, 16) + " — " + ST.DAY_SAVED_WORDS
+    /* the LOCAL clock (ST.stClock), not a slice of the ISO stamp: a sheet
+       saved at 12:28 read "11:28" here all summer */
+    const when = saved ? "saved " + ST.stClock(saved.savedAt) + " — " + ST.DAY_SAVED_WORDS
                        : owedWords(owed);
     return head +
       '<div class="dayread">' +

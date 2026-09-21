@@ -6335,7 +6335,10 @@ function stWhen(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return "";
   const p = n => (n < 10 ? "0" : "") + n;
-  const hm = p(d.getHours()) + ":" + p(d.getMinutes());
+  /* the clock itself comes from station-core, so this page and the tablet say
+     the same time about the same stamp and neither of them slices the ISO
+     string (that is the UTC clock, an hour out all summer) */
+  const hm = ST.stClock(iso);
   const age = Date.now() - d.getTime();
   if (age >= 0 && age < 6 * 86400000) return STDAYS[d.getDay()] + " " + hm;
   return p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " + hm;
@@ -6963,10 +6966,23 @@ function paintDaySheets(force) {
       counts.map(c => '<span class="dsnum tab">' + (r.counts[c[0]] || 0) + '</span>').join("") +
       '<span class="dstot tab">' + r.total + '</span>' +
       '<span class="dsnotetext">' + esc(r.note) + '</span>' +
-      '<span class="dsacts"><span class="dswhen">' + esc(String(r.savedAt).slice(11, 16)) +
+      '<span class="dsacts"><span class="dswhen">' + esc(ST.stClock(r.savedAt)) +
         (r.editedBy ? ' · edited by the office (' + esc(r.editedBy) + ')' : "") + '</span>' +
         '<button class="chip" data-dsedit="' + esc(r.id) + '">Edit</button></span></div>';
   };
+
+  /* ONE STICKY HEADING ROW over the whole list. The four counts were bare
+     numbers - "12 4 0 2 18" with nothing to say which column was K-glass -
+     and the labels come off the STATION DEFINITION, so a station with three
+     counts or five gets its own headings and this function keeps none of its
+     own. It is the same grid template as a row, so the headings sit over the
+     cells they name however many there are. */
+  const headRow = '<div class="dsrow dshead">' +
+    cell("Day", "dsday") + cell("Who", "dswho") +
+    counts.map(c => '<span class="dsnum">' + esc(ST.dayCountShort(c)) + '</span>').join("") +
+    '<span class="dstot">Total</span>' +
+    '<span class="dsnotetext">Note</span>' +
+    '<span class="dsacts">Saved</span></div>';
 
   let shown = 0;
   const body = DAY_OK === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
@@ -6975,7 +6991,7 @@ function paintDaySheets(force) {
     : !rows.length ? '<div class="empty">No day sheet matches that.</div>'
     /* how many count columns this station's definition has, handed to the CSS
        once: the grid is the same shape for a station with three or with five */
-    : '<div class="dslist" style="--dsn:' + counts.length + '">' + weeks.map(g => {
+    : '<div class="dslist" style="--dsn:' + counts.length + '">' + headRow + weeks.map(g => {
         const mine = g.rows.slice(0, Math.max(0, DAYF.show - shown));
         shown += mine.length;
         if (!mine.length) return "";

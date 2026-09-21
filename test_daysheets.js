@@ -235,8 +235,13 @@ const consent = yes => { CW.hasListConsent = async () => !!yes; };
    than starting a second one that the `flushing` guard would turn straight back. */
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
 
-const COUNTS = [["Clear", "Clear glass sheets cut"], ["KGlass", "K-glass sheets cut"],
-                ["Satin", "Satin sheets cut"], ["Obscure", "Other obscure sheets cut"]];
+/* [column, the question the tablet asks, the heading a table puts over it] -
+   written out here, from the spec, so every assertion is against the BRIEF and
+   not against the definition's own copy of it. */
+const COUNTS = [["Clear", "Clear glass sheets cut", "Clear"],
+                ["KGlass", "K-glass sheets cut", "K-glass"],
+                ["Satin", "Satin sheets cut", "Satin"],
+                ["Obscure", "Other obscure sheets cut", "Obscure"]];
 /* The columns the spec's Data model table names, written out here so every
    assertion is against the BRIEF and not against the code's own copy of it. */
 const SPEC_DAY_COLUMNS = ["Title", "Station", "Stage", "Day", "Who", "Clear", "KGlass", "Satin",
@@ -870,6 +875,66 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   A("DAYF.week = ''; DAYF.weekday = '0'; paintDaySheets();");
   assert.ok(html("#dsbody").indexOf("2026-09-21") >= 0, "and the weekday filter picks Mondays");
   pass("the day sheets window builds: the target control, the filters, the weeks and their subtotals");
+
+  /* ===== the heading row =====
+     Without it the four counts are bare numbers - "12 4 0 2 18" with nothing
+     to say which column is K-glass (seen in a screenshot). The labels come off
+     the STATION DEFINITION, in the same order as the cells under them, so a
+     station with three counts or five gets its own headings and app.js keeps
+     no list of its own. */
+  A("DAYF.weekday = ''; DAYF.from = '2026-09-01'; DAYF.to = '2026-09-30'; paintDaySheets();");
+  const listed = html("#dsbody");
+  const headAt = listed.indexOf('class="dsrow dshead"');
+  assert.ok(headAt >= 0, "there is one heading row");
+  assert.strictEqual(listed.indexOf('class="dsrow dshead"', headAt + 1), -1, "exactly one");
+  assert.ok(headAt < listed.indexOf('class="dsrow"'), "at the top of the list, before any sheet");
+  const headHtml = listed.slice(headAt, listed.indexOf("</div>", listed.indexOf("dsacts", headAt)));
+  /* the definition's OWN short labels, in the definition's own order */
+  const shorts = ST.daySheetOf(ST.GLASS, "cut").counts.map(c => ST.dayCountShort(c));
+  assert.deepStrictEqual(shorts, ["Clear", "K-glass", "Satin", "Obscure"],
+    "the definition carries a short label for every count");
+  let at = -1;
+  shorts.forEach(label => {
+    const found = headHtml.indexOf(">" + label + "<", at);
+    assert.ok(found > at, 'the heading row is missing "' + label + '", or it is out of order');
+    at = found;
+  });
+  assert.ok(headHtml.indexOf(">Day<") >= 0 && headHtml.indexOf(">Who<") >= 0 &&
+            headHtml.indexOf(">Total<") >= 0 && headHtml.indexOf(">Note<") >= 0,
+    "with Day, Who, Total and Note around them");
+  /* and it really is the definition's list, not a copy in app.js. A quoted
+     label is a copy; the word in a comment explaining the fix is not. */
+  assert.ok(!/["']K-glass["']/.test(src("app.js")),
+    "no label is written down in app.js: they can only have come from the definition");
+  assert.ok(!/["']Other obscure/.test(src("app.js")));
+  assert.strictEqual(ST.dayCountShort(["X", "The long question"]), "The long question",
+    "a definition that gives no short label falls back to the long one");
+  pass("the day sheets table has one heading row, from the definition, in the cells' own order");
+
+  /* ===== the clock is LOCAL, on both screens =====
+     `savedAt` is an ISO stamp; slicing it out gives the UTC clock, so a sheet
+     saved at 12:28 Irish time read 11:28 in the office all summer. This is
+     zone-independent: it asks what the helper answers (proved local against
+     Date's own getHours, which is local by definition) and that neither screen
+     slices the stamp any more. */
+  const clockAt = "2026-09-21T11:28:00.000Z";
+  const asDate = new Date(clockAt), pad = n => (n < 10 ? "0" : "") + n;
+  assert.strictEqual(ST.stClock(clockAt), pad(asDate.getHours()) + ":" + pad(asDate.getMinutes()),
+    "ST.stClock is the local clock, wherever this runs");
+  assert.strictEqual(ST.stClock("not a time"), "", "and says nothing about what is not a time");
+  assert.strictEqual(ST.stClock(""), "");
+  assert.ok(A("stWhen(" + JSON.stringify(clockAt) + ")").indexOf(ST.stClock(clockAt)) >= 0,
+    "the office's own stWhen is built on it");
+  const savedRow = A("dayRowsNow()[0]");
+  assert.ok(html("#dsbody").indexOf(ST.stClock(savedRow.savedAt)) >= 0,
+    "and a row's “saved at” is that clock");
+  [src("app.js"), src("station.js")].forEach(f =>
+    assert.ok(!/savedAt\s*\)?\s*\.slice\(11/.test(f) && !/savedAt\).slice\(11, 16\)/.test(f),
+      "neither screen slices the ISO stamp for a clock any more"));
+  assert.ok(src("station.js").indexOf("ST.stClock(saved.savedAt)") >= 0,
+    "the tablet's “saved 14:02” is the same helper");
+  /* the window is left OPEN: the edit-mode test below carries on with it */
+  pass("“saved at” is the local clock on both screens, from one helper, never a slice of the stamp");
 
   /* ===== D3: a half-typed correction is not wiped by the poll =====
      The floor's poll re-reads this list every twenty seconds while the window

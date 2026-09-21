@@ -1858,6 +1858,18 @@ changing the target today cannot rewrite what last week was measured against.
 A week with no stored target falls back to the live one, which is what the
 current week needs before anybody has saved a sheet in it.
 
+The table carries **one sticky heading row**, built from the station
+definition: Day · Who · each count's **short** label (the third element of its
+`counts` entry — `ST.dayCountShort` falls back to the long question when a
+definition gives none) · Total · Note · Saved. `app.js` holds no list of its
+own, so a station with three counts or five gets its own headings. Without it
+the counts were bare numbers with nothing to say which column was which.
+
+**Every time on both screens is the local clock** (`ST.stClock`, one
+implementation in `station-core.js`, which the office's `stWhen` is built on
+and the tablet's "saved 14:02" uses). Slicing the ISO stamp gives the UTC
+clock, and a sheet saved at 12:28 read 11:28 all summer.
+
 **A duplicate row is read once.** `ST.dayRows` de-duplicates by `Title` with
 the oldest item id winning, the same rule `buildJobs`, `weldRecords` and
 `targetOf` use. Enforce-unique-values on `Title` is still the owner's step in

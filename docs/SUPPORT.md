@@ -325,7 +325,8 @@ asks for the day's four counts and a line about anything that got in the way.
 
 **The cutter cannot change a sheet once it is saved. The office can.** That is
 the owner's decision, and the tablet says so where the sheet was: *"saved 17:02
-— ask the office to correct a mistake"*. In the office, Show ▸ Glass station,
+— ask the office to correct a mistake"*. Every time on both screens is the
+clock on the wall here, not UTC. In the office, Show ▸ Glass station,
 the **Day sheets** chip, **Edit** on the row: the four counts and the note, and
 nothing else. The correction is stamped with who made it, shown on the row as
 "edited by the office", and written to `Dashboard Log`. Nothing is ever deleted.
