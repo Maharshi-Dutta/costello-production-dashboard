@@ -48,6 +48,16 @@ that wants to change one has to ask. The date is when the owner said it.
 | A19 | 2026-09-14 | **A doors quantity that disagrees with the coded cells is a warning, not a decision.** The drawer's Doors line and the home list's hover say "quantity says 3 · 2 doors listed"; nothing is blocked and no colour changes. | Owner: *"that mean the quantity is wrong and should give a warning."* The sheet is the master for how much work there is; the dashboard says when it does not add up and leaves it to a person. |
 | A20 | 2026-09-16 | **The saved view named after a colleague in `app.js` keeps its name.** The rename to "Sheet order" was declined. | Standing item since the station-comments review flagged the rule-4 violation; the owner's call, not the session's, and the answer is no for now. |
 | A21 | 2026-09-16 | **The unread-notes icon's seen state is per screen, not shared.** Two office computers each show 💬 on a job until each one, separately, opens that job. | Amendment E's own design: the state is a plain `localStorage` key, and nothing writes it to a shared list. Sharing it across screens is possible later but was not asked for. |
+| A22 | 2026-09-21 | **Glazing is the last step of the whole job, not a glass step.** It gets its own station rather than folding into glass. | Owner: "glazing is the last step for the whole job, not just glass, so it will be its own dashboard with its section." |
+| A23 | 2026-09-21 | The new glass colour rule (yellow = one of cutting/hotmelting done, gold = both) applies to every job at once, but only a row the floor or the office actually touches repaints. | The two existing gates — an untapped row, an office record newer than the floor's stamp — still hold a colour until somebody acts; the rule says what yellow and gold mean, not "repaint every row overnight." |
+| A24 | 2026-09-21 | **Recorded data is not touched to land this ship.** `Glazed`/`GlazedBy`/`GlazedAt` stay on `Glass station` exactly as they are, read and written by nothing; old `glazed` log lines still show, labelled "Glazing." | "Do not change any data already recorded." |
+| A25 | 2026-09-21 | **Tuff moves back inside "shown finished"**, reversing one clause of A9: still outside the glass total and the office lock, but a job still owing tuff is not drawn gold or sunk into Finished. | Owner, after the demo: "why are moving the jobs to complete when tuff is left? if job has tuff and is not done dont move it, if done then move." |
+| A26 | 2026-09-21 | The weekly target is **one number — total sheets per week** — not one per glass type, not per day. | Simplest number the office can set and the cutter can read against. |
+| A27 | 2026-09-21 | **The cutter cannot correct a saved day sheet. The office can**, from the dashboard. | The end-of-day sheet is the cutter's own record; only the office is trusted to amend it after the fact. |
+| A28 | 2026-09-21 | **Glazing counts one number per job — windows plus doors —** read off the `Production` sheet alone, never the cross-sheet merge. | Standing rule since 2026-09-18: `Production (2)` and the other sheets are not real data. |
+| A29 | 2026-09-21 | **Glazing complete → Ready to deliver will be one click in the office, not automatic.** Not built yet; the seam (`GLZC.finished`, the office board already knowing which jobs are complete) is left for it. | Owner's "yes" to the manager's recommendation over the automatic option: the row move is the heaviest write the dashboard makes (insert, copy, verify, delete) and the owner wants to see it before it fires. |
+| A30 | 2026-09-21 | **No unlock of a locked job from any office board**, glazing included. | Owner: "no." Unlocking stays the job card's Clear, same as glass. |
+| A31 | 2026-09-21 | Rehearsal finding R4941 ("cannot remove TG") raised and dropped, not fixed. | Owner's call after seeing it live. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -402,6 +412,84 @@ one, too".
 **Found by:** the second independent review, before ship, not by a live
 report.
 
+### B21. Review R1 — the new seed would have undone finished hotmelting on first load
+
+**Would have been the symptom:** the first load after ship patches `Hotmelt`
+back from a finished total to 0 on rows the floor had already done (7 live
+rows on the saved copy, e.g. 43 → 0), handing the hotmelting tablet finished
+work as work to do.
+**Cause:** the new seed answers `{cut: total, hotmelt: 0}` for an untouched
+row whose office record is yellow, but `feedPlan`'s untouched branch wrote
+any difference between seed and list in **both** directions — so a
+higher-than-seed value already on the row was lowered to match.
+**Fix:** an untouched row's seed field is only ever raised, never lowered,
+unless the whole seed is noughts (a real office un-tick).
+
+### B22. Review R2 — the earlier office lock froze Tuff and dropped its queued taps
+
+**Cause:** the office lock now lands at hotmelt-complete instead of after
+glazing. It used to freeze the Tuff stepper too, and `dropBlocked()` deleted
+any tuff taps queued while the cutter kept working.
+**Fix:** `OfficeDone` locks the glass stages only — Tuff stays tappable on
+the Cutting page and the office board under a locked job, and its queued
+taps are never dropped by the lock.
+
+### B23. D1 — the welding station report came back empty
+
+**Cause:** `stationReport` filtered the log on `Stage === "weld"`, but the
+welding tablet logs `Stage = frames | sashes`; the test fixture had been
+hand-built with the wrong stage and agreed with the bug.
+**Fix:** the station definition now says which log stages feed a report
+stage (`reportLogStages`); the welding fixture is built through
+`weldLogEntry` itself, never typed by hand.
+
+### B24. D2/D4 — a day-sheet draft with no owner and no bedtime
+
+**Cause:** the draft was keyed without the person, so `switchPerson()` could
+load one person's half-typed sheet under another; and a draft that crossed
+midnight had nothing telling it which day it belonged to or when to be
+dropped.
+**Fix:** the draft carries `who` and closes on `switchPerson()`/the idle
+lock; it is filed under the day it was started and dropped at the end of the
+**following** day.
+
+### B25. D13 — the glass tablet scrolled sideways at 800px
+
+**Cause:** a bare `1fr` grid track is `minmax(auto, 1fr)`, not
+`minmax(0, 1fr)`; one `nowrap` span was enough to widen the track past the
+viewport, and a leftover 700px two-column media query sat inside the
+tablet's own 700–1100px band and fought it. A test had been asserting the
+sideways scroll as correct.
+**Fix:** explicit `minmax(0,1fr)` tracks, the stray media query removed.
+
+### B26. G2 — a job kept reading "In glazing" long after it left the floor
+
+**Cause:** a floor row outlives its job's section by design — nothing clears
+it when the job moves on by hand — and the phase bar's floor voice had no
+gate on that, so a job moved anywhere else kept reading whatever the floor
+last said, forever.
+**Fix:** the floor's voice is gated on the job still being in a live
+section, the same test the tablets already use to decide what they show;
+once a job leaves that scope the floor says nothing and `effectivePhase`
+falls back to the sheet or a hand-set phase, as before this station existed.
+
+### B27. Process — an implementer agent died mid-build on a usage limit
+
+**Cause:** the agent hit its usage limit mid-task and stopped.
+**Fix:** the working tree was snapshotted as a WIP commit before anything
+else touched it, and the same agent resumed with its own context intact;
+nothing was lost.
+**Lesson:** commit WIP to the branch after every agent hand-back — done all
+day on this ship, which is why nothing worse is recorded here.
+
+### B28. Measured, not fixed — the idle job list repaints itself about three times a minute
+
+**Symptom:** the owner's "flickering" — the master list visibly redraws with
+nothing on it changed.
+**Measured:** a test rig sending a real no-change delta shows the ~230-row
+list rebuilding roughly three times a minute on its own.
+**Cause:** not yet traced. Left open, section E.
+
 ---
 
 ## C. Build log
@@ -512,6 +600,30 @@ handled by pinning the glass page to the site its lists are already in rather
 than moving them — `ST.GLASS.site`, one word, reversible on the day the glass
 lists are copied across.
 
+---
+
+### 2026-09-21 — glazing leaves glass, the cutter's day sheet, station reports, the glazing station
+
+Build `20260921-1858`. One push to `main`: ten branch commits landed as they
+are, plus one ship commit, and `b5103ba` (the welding board's fixed 34px
+notes track, built 2026-09-18) riding along unpushed until now. Three
+briefs: [`specs/2026-09-21-glass-split-no-glazing.md`](specs/2026-09-21-glass-split-no-glazing.md)
+(glazing out of the glass station, one tablet page per stage, the new
+yellow-means-one/gold-means-both colour rule, an editable office board),
+[`specs/2026-09-21-day-sheets-and-station-reports.md`](specs/2026-09-21-day-sheets-and-station-reports.md)
+(the cutter's end-of-day sheet, a weekly target the office sets, one Excel
+report template for every station), and
+[`specs/2026-09-21-glazing-station.md`](specs/2026-09-21-glazing-station.md)
+(the third floor station, sections A–E; section F — glazing complete →
+Ready to deliver — briefed but not built). Three independent reviews, 5 + 13
++ 3 findings, all fixed before ship (B21–B26). Suites at ship: move 7,
+checkpoints 70, alerts 30, export 54, phases 26, phases-list 35, station
+270, glasscolour 72, john 31, doors 29, comments 58, welding 61, daysheets
+54, glazing 53, digest 26/0. Real-browser harness: glass/office 61/61,
+glazing 26/26. Rehearsed on a saved copy of the real `Glass station` list
+(138 active rows, 116 never tapped by the floor): zero gold cells wiped,
+zero counters lowered.
+
 ## D. Symptom index
 
 | What you see | Read |
@@ -564,3 +676,24 @@ lists are copied across.
   quiet explained state without it.
 - The permanent `Floor stations` site, once the owner has Global Administrator
   (A5).
+- The owner still has to run the new list scripts: `Station day sheets` and
+  `Station targets` in the workbook's own site, `Glazing station` in
+  `Floor stations`; switch on enforce-unique on Title by hand on each if the
+  API refuses it, as with `Welding station`.
+- Each glass tablet must be told its stage once — the `?stage=` bookmark or
+  the on-page chooser.
+- A glazer row (or rows) needed in `Station people`: Station `Glazing`,
+  Stages `glaze`.
+- **Section F** (glazing complete → one-click Move to Ready to deliver) is
+  briefed (A29) but not built.
+- **The flicker (B28):** the idle job list rebuilds its ~230 rows about
+  three times a minute with nothing changed; cause not traced.
+- The glass lists' move to `Floor stations` (`ST.GLASS.site` `"own"` →
+  `"floor"`) still to do.
+- **G4** (welding's and glazing's polls each delta their own copy of the
+  shared `Station log`/`Station comments` tokens) and **G5** (a hand-set
+  phase click on a floor-set step can't then be withdrawn by the floor) left
+  by decision, not required for this ship.
+- `#weldopen` is a dead button outside Edit mode.
+- The "Floor log" chip opens the glass log on every board, not that board's
+  own station.
