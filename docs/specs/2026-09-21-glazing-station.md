@@ -214,6 +214,58 @@ page; what the phase bar now means and that the floor only ever moves it
 forward), `docs/ARCHITECTURE.md` (any new localStorage key; the third feeder),
 `web/CLAUDE.md` (rule exception, pages list, checks), `docs/specs/README.md`.
 
+## Amendments after review (2026-09-21)
+
+Independent review of the first build. Rehearsal note: checked finding G6
+against the real workbook copy — 0 of 232 active (non-`past`) jobs have
+quantities on another sheet but nothing on `Production`; the gap only exists
+among jobs already off the sheet, which are not fed. Not a live problem;
+no fix needed. All other findings below are to be fixed.
+
+- **G1 — `redrawWelding()` lost the floor-phase repaint on the plain job
+  list.** Section E's "repaint through the existing quiet path" only reached
+  `redrawGlazing()`. `redrawWelding()` must take the same off-board branch:
+  when the welding list moves and no board is open, call the phase repaint
+  before returning. A welding-only job's badge must not wait for the glass
+  list or a workbook reload to catch up.
+- **G2 — a job that has left In production keeps reading "In glazing" (or
+  "In fabrication") forever, even after the office has moved it on by hand.**
+  Section F was deliberately not built, so nothing clears a finished floor
+  row's contribution when the job moves sections. The floor's voice must only
+  speak for a job that is still in a live section: gate `floorPhaseRec` on
+  `ST.sectionInProduction` (or the wider "not past/won't take/second hand"
+  test the phase pipeline already uses) for both the welding and the glazing
+  record, the same test the tablets already use to decide what they show.
+  Once a job leaves that scope the floor says nothing, and `effectivePhase`
+  falls back to the sheet and any hand-set phase, exactly as before this
+  station existed.
+- **G3 — `stationAfterFeed()` needs its own try.** Not a live bug today (its
+  two new calls cannot currently throw synchronously), but it now sits ahead
+  of `glassColourRun()` in one promise chain with no guard of its own: wrap
+  its body in try/catch so a future change to the welding or glazing read
+  path can never silently skip a load's colour write.
+- **G4 — noted, not required for this ship:** `weldPoll` and `glzPoll` now
+  both run on every open dashboard (previously only when that board was
+  open) and each deltas its own copy of the shared `Station log` /
+  `Station comments` tokens in the `Floor stations` site — a few redundant
+  requests a minute per open screen, not a correctness problem. Leave it; if
+  it ever shows up as load (`HISTORY.md` B7), the fix is one shared delta
+  channel for those two lists.
+- **G5 — low, not required for this ship:** clicking the step the floor put
+  a job on writes a hand-set phase at that same step, which the floor can
+  then never withdraw by itself (the glazer taps back to nought, the
+  hand-set row still says In glazing). Only reachable by a deliberate click
+  in Edit mode; leave for a future brief on the hand-set picker.
+- **Spec correction, not a bug:** decision 2 ("every job in the In
+  production section") is read literally in the brief's own test list, but
+  the build feeds every section except `past` — matching welding's own
+  scope exactly, which decision 2 also asked for ("the same scope as
+  welding"). The build is right; the brief's bullet was the looser of the
+  two. Consequence: the `Glazing station` list holds around 700 rows (one
+  per job on the sheet, not per job×group), and the office board lists all
+  of them with no default narrowing — say so to the owner before they open
+  it the first time.
+
 ## Report back
 
 Pasted suite output before and after; files added; functions added/changed

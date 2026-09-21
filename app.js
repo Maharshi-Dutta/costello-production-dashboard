@@ -2931,9 +2931,17 @@ async function weldPoll() {
 }
 /** Redraw the welding board, and nothing else on the page. Held off while the
     list is in use - somebody typing in the board's own search box - and then
-    owed, exactly as the glass repaint is. */
+    owed, exactly as the glass repaint is.
+
+    OFF THE BOARD IT STILL HAS SOMETHING TO DO (review finding G1, 2026-09-21).
+    Since the phase bar hears the floor, a job's status word on the plain job
+    list can be the welding list's - so a welding row moving while nobody has a
+    board open has to reach those rows, down the same quiet path a glass counter
+    uses. This used to return bare, so a welding-only job's badge waited for the
+    glass list to move or for a workbook reload. redrawGlazing() had the branch
+    from the day it was written; this is the pair of it. */
 function redrawWelding() {
-  if (state.board !== "welding") return;
+  if (state.board !== "welding") { floorPhaseRepaint(); return; }
   if (rowsInUse()) { ROWS_STALE = true; return; }
   ROWS_STALE = false;
   quietRows();
@@ -3969,9 +3977,32 @@ function glzDrawerLine(j) {
    Both maps are the cached per-version ones (weldRecordsNow / glzRecordsNow),
    so this is two object lookups per job row rather than two walks of a list. A
    station whose list has not been read yet simply says nothing, which is what
-   keeps the phase from flickering backwards when one arrives late.          */
+   keeps the phase from flickering backwards when one arrives late.
+
+   THE FLOOR ONLY SPEAKS FOR A JOB STILL IN A LIVE SECTION (review finding G2,
+   2026-09-21). A floor row is never deleted - it goes Active = No when its job
+   leaves the sheet, and its counter is left exactly where the floor put it, on
+   purpose. Section F was deliberately not built, so NOTHING clears a finished
+   glazing row when the office moves the job on by hand: without this gate a job
+   sitting in Ready to fit, or Collect & supply, or anywhere past production
+   would read "In glazing" for ever, and the one reading the office cannot argue
+   with is the one that outranks the sheet.
+
+   ST.inProduction is the gate, and it is the wider of the two the review
+   offered: it is ST.sectionInProduction of the job's own section - the same
+   test the tablets use to decide what they show - PLUS the `cat === "past"`
+   guard, so a job that has left the sheet altogether is covered by the same
+   line. It is asked of the JOB rather than of the list row because the sheet is
+   a feed ahead of the row: the office moves the job, this load's parse sees it,
+   and the floor falls silent on that load rather than on the next feed. Once
+   the feeder has run the two agree.
+
+   Falling silent is not "not fed" and not "nothing done" - it is the floor
+   having no opinion, so effectivePhase falls back to the sheet and any hand-set
+   phase, exactly as it did before this station existed.                     */
 function floorPhaseRec(j) {
   if (!j || !j.id) return null;
+  if (typeof ST === "undefined" || !ST.inProduction(j, BLOCKNAMES)) return null;
   const id = String(j.id).trim().toUpperCase();
   const w = (typeof WELDC !== "undefined" && WELD_OK === true)
     ? (weldRecordsNow().byJob || {})[id] : null;
@@ -4021,8 +4052,21 @@ function stationRecords() {
     chips, press F5 six minutes later, and without this the rows would carry no
     chips for the rest of that session - which is the very complaint the chip
     was built to answer. The read is the shared one the board and the drawer
-    ask for: once per session, whoever asks, and it answers at once thereafter. */
+    ask for: once per session, whoever asks, and it answers at once thereafter.
+
+    ITS OWN TRY (review finding G3, 2026-09-21). Nothing in here can throw
+    synchronously today, but it sits in one promise chain AHEAD of
+    glassColourRun() as `.then(stationAfterFeed, () => {})` - and the link after
+    it carries an onRejected of its own. So a throw in here does not merely lose
+    a repaint: the rejection is swallowed by the NEXT link's handler and the
+    colour writer is silently skipped for that whole load. A render and three
+    read-if-needed calls are not worth a load's glass colours, so the body
+    catches its own and says so in the console. */
 function stationAfterFeed() {
+  try { stationAfterFeedBody(); }
+  catch (e) { console.warn("[station] after-feed render failed: " + ((e && e.message) || e)); }
+}
+function stationAfterFeedBody() {
   if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); }
   else renderRows();
   stationReadIfNeeded(() => { if (!state.board) renderRows(); });

@@ -888,7 +888,116 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(zd.target, null);
   pass("the station appears in the report window by being defined, and reads no day-sheet list");
 
-  /* ================= 16. the gates ================= */
+  /* ================= 16. the three review findings (G1-G3) =================
+     Each of these fails on the build that went to review. They are here rather
+     than folded into the sections above because each is about a JOIN between
+     two parts that were separately right - which is the only kind of fault an
+     offline suite of pure functions can miss. */
+
+  /* ---- G1: a welding row moving repaints the plain job list ----------------
+     Section E's "repaint through the existing quiet path" reached
+     redrawGlazing() and not redrawWelding(), which returned bare off its own
+     board. So a job whose phase is the WELDING list's kept its old badge until
+     the glass list happened to move or somebody reloaded the workbook. */
+  A("state.board = null; state.sel = null;");
+  A("__quiet = 0; __origQuiet = quietRows; quietRows = function () { __quiet++; };");
+  /* the rows on screen, and what they were saying when they were drawn */
+  A("ROWS_DRAWN = [ALL.find(j => j.id === 'R8001')]; ROWS_CHIPS = chipsNow(); ROWS_STALE = false;");
+  A("__quiet = 0;");
+  A("redrawWelding();");
+  assert.strictEqual(A("__quiet"), 0, "nothing moved, so nothing is repainted");
+  /* the welders finish the job while the office is looking at the plain list */
+  A("WELD_ITEMS[0].fields.FramesDone = 4; WELD_ITEMS[0].fields.SashesDone = 4;");
+  A("WELD_ITEMS = WELD_ITEMS.slice(); WRECS = null; WRECS_OF = false;");
+  A("redrawWelding();");
+  assert.strictEqual(A("__quiet"), 0,
+    "a counter moving is not a repaint on its own - the phase did not change");
+  /* ... and now one that really does change the phase: glazing withdrawn, so
+     the job falls back to welding's word and the badge has to follow */
+  A("GLZ_ITEMS[0].fields.Glazed = 0; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  A("__quiet = 0;");
+  A("redrawWelding();");
+  assert.strictEqual(A("__quiet"), 1,
+    "a welding poll off the board repaints the rows when a job's floor phase changed");
+  assert.strictEqual(A("PHASES[effectivePhase(ALL.find(j => j.id === 'R8001'))]"), "In fabrication",
+    "and the word it repaints to is welding's");
+  /* the glazing side has always done it; both are asserted so neither can
+     regress on its own. The spy does not render, so what the rows are
+     "currently saying" has to be brought up to date by hand first - that is
+     what the real quietRows() does through renderRows(). */
+  A("ROWS_CHIPS = chipsNow();");
+  A("GLZ_ITEMS[0].fields.Glazed = 8; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  A("__quiet = 0;");
+  A("redrawGlazing();");
+  assert.strictEqual(A("__quiet"), 1, "and so does a glazing poll off the board");
+  A("quietRows = __origQuiet;");
+  pass("G1: a floor list moving off its own board repaints the job list when a phase changed");
+
+  /* ---- G2: the floor only speaks for a job in a live section ---------------
+     A floor row is never deleted - it goes Active = No when its job leaves the
+     sheet, and its counter stays where the floor put it. Section F was
+     deliberately not built, so NOTHING clears a finished glazing row when the
+     office moves the job on by hand. Without the gate the job reads "In
+     glazing" for ever, and it is the reading that outranks the sheet. */
+  const R8001 = () => A("ALL.find(j => j.id === 'R8001')");
+  A("ALL.find(j => j.id === 'R8001').blk = 4;");            // In production
+  assert.strictEqual(A("effectivePhase(ALL.find(j => j.id === 'R8001'))"), 4,
+    "in production with a full glazing row: In glazing");
+  assert.strictEqual(A("phaseSource(ALL.find(j => j.id === 'R8001'))"), "glazing");
+  /* the office moves it on by hand. The floor's row is untouched - still
+     Active = Yes, still Glazed = Total - and must stop being heard. */
+  A("ALL.find(j => j.id === 'R8001').blk = 1;");            // Ready to fit
+  assert.strictEqual(A("glzRecordsNow().byJob['R8001'].glazed"), 8,
+    "the floor's row is exactly as it was: nothing was cleared, deleted or reset");
+  assert.strictEqual(A("floorPhaseRec(ALL.find(j => j.id === 'R8001'))"), null,
+    "but the floor has no opinion about a job that has left production");
+  assert.strictEqual(A("effectivePhase(ALL.find(j => j.id === 'R8001'))"),
+                     A("jobPhase(ALL.find(j => j.id === 'R8001'))"),
+    "so the phase is the sheet's own reading, exactly as before this station existed");
+  assert.strictEqual(A("phaseSource(ALL.find(j => j.id === 'R8001'))"), "sheet");
+  assert.notStrictEqual(A("PHASES[effectivePhase(ALL.find(j => j.id === 'R8001'))]"), "In glazing");
+  /* welding is gated by the same line, not only glazing */
+  A("GLZ_ITEMS[0].fields.Glazed = 0; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  assert.strictEqual(A("floorPhaseRec(ALL.find(j => j.id === 'R8001'))"), null,
+    "the welding record is gated by the same test, not only the glazing one");
+  /* a hand-set phase still works on such a job: the floor is silent, not the
+     whole pipeline */
+  A("PHASES_SET = { R8001: { phase: 5, name: 'Quality check', who: 'the office', at: '2026-09-21T09:00:00.000Z' } };");
+  assert.strictEqual(A("effectivePhase(ALL.find(j => j.id === 'R8001'))"), 5,
+    "and a hand-set phase is still heard on a job the floor has fallen silent about");
+  A("PHASES_SET = {};");
+  /* a job gone from the sheet altogether is covered by the same one line */
+  A("ALL.find(j => j.id === 'R8001').blk = 4; ALL.find(j => j.id === 'R8001').cat = 'past';");
+  A("GLZ_ITEMS[0].fields.Glazed = 8; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  assert.strictEqual(A("floorPhaseRec(ALL.find(j => j.id === 'R8001'))"), null,
+    "a job that has left the sheet is covered by the same guard, not a second one");
+  A("ALL.find(j => j.id === 'R8001').cat = 'active';");
+  assert.strictEqual(A("effectivePhase(ALL.find(j => j.id === 'R8001'))"), 4,
+    "and putting it back in production gives the floor its voice again");
+  pass("G2: the floor speaks only for a job still in a live section, and falls silent rather than clearing anything");
+
+  /* ---- G3: stationAfterFeed cannot skip the colour writer -----------------
+     It sits in one promise chain as `.then(stationAfterFeed, () => {})` and the
+     link AFTER it carries an onRejected of its own - so a throw in here is not
+     a lost repaint, it is the rejection being swallowed by the next link's
+     handler and glassColourRun() silently skipped for the whole load. The two
+     links below are load()'s own, with a marker where the colour writer is. */
+  A("__origSRIN = stationReadIfNeeded;");
+  A("stationReadIfNeeded = function () { throw new Error('boom in the station read'); };");
+  A("__glassRan = 0;");
+  await A("Promise.resolve().then(stationAfterFeed, () => {}).then(() => { __glassRan++; }, () => {})");
+  assert.strictEqual(A("__glassRan"), 1,
+    "a throw inside stationAfterFeed must not stop the load reaching glassColourRun");
+  A("stationReadIfNeeded = __origSRIN;");
+  /* and the guard is not swallowing a real failure in silence */
+  A("__warned = 0; __origWarn = console.warn; console.warn = function (m) { if (/after-feed/.test(String(m))) __warned++; };");
+  A("stationReadIfNeeded = function () { throw new Error('boom'); };");
+  A("stationAfterFeed();");
+  assert.strictEqual(A("__warned"), 1, "and it says so in the console rather than going quiet");
+  A("console.warn = __origWarn; stationReadIfNeeded = __origSRIN;");
+  pass("G3: stationAfterFeed catches its own, so a load's glass colours are never skipped for a render");
+
+  /* ================= 17. the gates ================= */
   const zsrc = src("glazing-core.js") + src("glazing.js") + src("glazing.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
    "/workbook", "downloadWorkbook", "parseWorkbook", "ExcelJS"].forEach(bad =>

@@ -675,8 +675,16 @@ example to copy.
   glazing. A station that reads `j.wnd`, `j.drs` or `j.prods` is reading a
   cross-sheet merge and is one inserted column away from [`HISTORY.md`](HISTORY.md) B20.
 - If the station has an opinion about **where a job has got to**, it belongs in
-  `effectivePhase`'s floor voice (`checkpoints.js`, `setFloorHook`) and it is
-  **computed, never stored**.
+  `effectivePhase`'s floor voice (`checkpoints.js`, `setFloorHook`), it is
+  **computed, never stored**, and it must be **gated on the job still being in a
+  live section**. A floor row outlives its job's time in production by design —
+  it is never deleted, only deactivated — so an ungated voice asserts a stale
+  phase for ever, and it is the voice that outranks the sheet (review finding
+  G2, 2026-09-21).
+- Whatever repaints the plain job list when your list moves must be wired on
+  **every** station's redraw, not only the new one. The glazing build wired
+  `redrawGlazing()` and left `redrawWelding()` returning bare, so welding-only
+  jobs kept a stale badge (review finding G1).
 
 Each station keeps its data in its own list and its own page — a station
 account for one area never needs, and never gets, another area's data.
@@ -1042,7 +1050,18 @@ the sheet's own evidence and the hand-set phase, and it is read the same way:
 - the result is the **highest** of the three, so the floor can only ever move a
   job forward and never past what the sheet or a person says;
 - a counter tapped back to nought withdraws that voice and the phase falls back
-  to the next highest.
+  to the next highest;
+- **and the floor only ever speaks for a job still in a live section.** A floor
+  row is never deleted — it goes `Active = No` when its job leaves the sheet,
+  and its counter stays exactly where the floor put it. Nothing clears a
+  finished glazing row when the office moves the job on by hand, so without this
+  a job in Ready to fit would read "In glazing" for ever. `floorPhaseRec` is
+  gated on `ST.inProduction(j, BLOCKNAMES)` — `ST.sectionInProduction` of the
+  job's own section, the same test the tablets use, plus the `past` guard — and
+  it gates the welding record and the glazing record alike. Once a job leaves
+  that scope **the floor says nothing**; it does not clear, reset or delete
+  anything, and the phase falls back to the sheet and any hand-set phase exactly
+  as it did before this station existed.
 
 **Nothing is stored for it.** It is computed on every render out of lists
 already in memory: no `Dashboard phases` row, no list write, no workbook write.
@@ -1056,7 +1075,9 @@ is deliberately harmless: a station that has read nothing says nothing, so the
 phase starts at whatever the sheet says and is *raised* when the lists arrive —
 it never flickers backwards. The repaint goes down the existing quiet path
 (`chipsNow()` carries each drawn row's floor phase, `floorPhaseRepaint()` takes
-it), and no timer was added for it.
+it), and no timer was added for it. **Both** `redrawWelding()` and
+`redrawGlazing()` take that branch when they are off their own board, so a
+welding-only job's badge does not have to wait for the glass list to move.
 
 ## What the feeder does, and when
 
