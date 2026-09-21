@@ -18,8 +18,12 @@ Three pages ship from this repo:
 - `welding.html` + `welding.js` + `welding-core.js` — the PVC welding floor
   station, on the same shared tablet, 2026-09-16 — see
   [`docs/specs/2026-09-16-welding-station.md`](docs/specs/2026-09-16-welding-station.md) and `docs/REFERENCE.md` §21.
-  **The third station should be built from the "Adding a station" checklist in
-  `docs/STATIONS.md`, not by copying a page.**
+- `glazing.html` + `glazing.js` + `glazing-core.js` — the glazing floor station,
+  2026-09-21, the **third**, built from the "Adding a station" checklist in
+  `docs/STATIONS.md` and not by copying a page — see
+  [`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md) and `docs/REFERENCE.md` §24.
+  One number per job: units glazed out of windows + doors. **The fourth station
+  is the same checklist again.**
 
 Check `docs/specs/README.md` for the status of every spec.
 
@@ -146,10 +150,12 @@ the one that first wrote them down.
    station-stage per day — the cutter's end-of-day sheet, append-only from the
    tablet) and **`Station targets`** (one row per station-stage — the weekly
    target, written by the office and read-only on every tablet)
-   ([`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md)).
+   ([`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md)) — and one more
+   station list, **`Glazing station`** (one row per job, `Floor stations` site)
+   ([`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md)).
 
-   There are **exactly five** exceptions, each granted by the owner in a dated
-   spec, each for a named case; a **sixth** is a new decision for the owner,
+   There are **exactly six** exceptions, each granted by the owner in a dated
+   spec, each for a named case; a **seventh** is a new decision for the owner,
    not a judgement call for a session.
    - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
      nowhere else): the feeder writes `Cut`/`Hotmelt` on a row it is
@@ -226,8 +232,24 @@ the one that first wrote them down.
      same settle `Dashboard phases` and `Dashboard print notes` have always
      used. It can only ever remove a duplicate of the row it is writing, and
      never a day sheet. Nothing on this path goes near the workbook.
-   Only the tablet (`station.js`, `welding.js`) writes a By, an At, a last touch
-   or a log line — **or a note**: `Station comments` is written by a floor tablet
+   - **The office's glazing edits** (owner, **2026-09-21**,
+     [`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md), decision 3: *"I should be able to
+     edit glazing from that window"*): on the office's own **Glazing station**
+     board, the office may set and clear a job's `Glazed` counter. One click
+     writes **exactly five fields** of one `Glazing station` row: `Glazed`,
+     `GlazedBy`, `GlazedAt`, `DoneBy` and `DoneAt`. The proof that it cannot
+     write anything else is the shape of `GLZC.glzOfficeFields(value, who, at)`
+     — a number, a name and a time — filtered again through
+     `GLZC.glzFloorOnly` on the way out, which is `ST.floorOnly` with this
+     station's definition and the same filter the tablet's own queue runs on.
+     Every such change leaves **one `Dashboard Log` line** (`noteChange`,
+     "Glazing: <job>", from → to) and **no `Station log` line**. Nothing on this
+     path goes near the workbook: the glazing station paints no cell, in either
+     direction, and **there is no seed** — there is no office record of glazing
+     to seed from, so `GLAZE.seedFields` is empty and the feeder's whole
+     vocabulary holds not one floor column.
+   Only the tablet (`station.js`, `welding.js`, `glazing.js`) writes a By, an At,
+   a last touch or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.
    The floor's list columns are never the office's to write for any other
    reason: not to correct one, not to tidy up, not from a reconciliation pass.
@@ -274,7 +296,9 @@ failing test doesn't get masked by a later command in the same pipeline.
 set -o pipefail
 node --check parser.js && node --check graph.js && node --check checkpoints.js \
   && node --check export.js && node --check app.js \
-  && node --check station-core.js && node --check station.js
+  && node --check station-core.js && node --check station-ui.js && node --check station.js \
+  && node --check welding-core.js && node --check welding.js \
+  && node --check glazing-core.js && node --check glazing.js
 
 node test_move.js
 node test_checkpoints.js
@@ -290,6 +314,7 @@ node test_doors.js
 node test_john.js
 node test_welding.js
 node test_daysheets.js
+node test_glazing.js
 
 node verify.js   # dev-only cross-check, see below
 ```
@@ -308,8 +333,9 @@ python build.py   # stamps a ?v=<timestamp> onto every script tag and writes ver
 
 `build.py` rewrites the cache-busting query string on every `<script src="…">`
 tag matching `parser`, `graph`, `checkpoints`, `station-core`, `station-ui`,
-`station`, `welding-core`, `welding`, `export` or `app` — on **all three** of
-`index.html`, `glass.html` and `welding.html` — and updates
+`station`, `welding-core`, `welding`, `glazing-core`, `glazing`, `export` or
+`app` — on **all four** of
+`index.html`, `glass.html`, `welding.html` and `glazing.html` — and updates
 the `<span id="build">` footer text on each. `glass.html` carries the same
 build stamp as `index.html`, which matters more there than anywhere else: a
 tablet left signed in for weeks is exactly where a stale cached script does

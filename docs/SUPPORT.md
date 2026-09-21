@@ -200,6 +200,65 @@ Two different reasons, both normal:
   feed also skips a run when nothing has changed and the last one was under
   ten minutes ago, so a very fresh change can take a few minutes to appear.
 
+## The glazer's page, and what its one number means
+
+The glazer's tablet is **`glazing.html`**, signed in with the same station
+account as the other floor pages. It shows one card per job in production with
+**one number on it: units glazed, out of the job's windows plus doors.** Not per
+glass type, not per product group, not per stage — the glazer counts finished
+units. − , + and **All** move it; All becomes **None** once it is at the total,
+so a mistake is undone the same way it was made. A finished job goes green and
+drops into the collapsed "Finished · n" group at the bottom.
+
+Three things that are asked about it:
+
+- **"It says nothing to glaze."** The quantities come off the `Production`
+  sheet's own WND and DRS cells and no other sheet's. A job with neither is
+  never fed to the glazing floor at all. If a job *should* be there, check those
+  two cells on `Production` — not on `Production (2)`, which is not real data.
+- **"The number is different from the glass tablet's."** It is meant to be. The
+  glass tablets count *glasses* (DG + TG); this one counts *units* (windows +
+  doors). They are different things and are never added together.
+- **There is no end-of-day sheet here.** The cutter has one; the glazer does
+  not, because the owner has not asked for one. It is one line of definition to
+  switch on when they do.
+
+The office reads it at **Show ▸ Glazing station**, can set and clear the counter
+there, and sees the same numbers in a read-only **Glazing** line in any job's
+card. Every office change is logged in `Dashboard Log`; none of it goes near the
+Excel file.
+
+## The status word says "In glazing" and nothing on the sheet says so
+
+That is the phase bar hearing the floor, which it has done since 2026-09-21 at
+the owner's request. Three things decide where a job has got to, and the
+**furthest on** of the three wins:
+
+1. what the **sheet** itself shows (the checkpoint colours and the "sent to
+   floor" date) — this has always been there;
+2. a phase somebody **set by hand** in the job card — also already there;
+3. and now the **floor**: any welding recorded on the job makes it at least
+   *In fabrication*, and any glazing recorded makes it at least *In glazing*.
+   Glazing outranks welding, because a job being glazed has been through
+   fabrication whether or not the welding was recorded.
+
+**The floor can only ever move a job forward.** It can never take one back past
+what the sheet or a person says: a job the sheet shows as finished stays
+finished, and a job somebody set to Quality check by hand stays there. Un-tap
+the counter back to nought and the floor simply stops having an opinion — the
+phase falls back to whichever of the other two was next.
+
+**Nothing is saved for it.** It is worked out fresh every time the screen draws,
+from the floor's own lists. There is no row in `Dashboard phases`, nothing in
+the Excel file, and nothing to clear if it looks wrong — correct the counter on
+the floor's board and the word changes with it. The job card's phase strip says
+where the word came from ("Moved here by the floor — from the glazing station")
+whenever it is the floor's.
+
+If the word looks behind, the floor's list has probably not been read yet on
+that browser: it is read once per session after the workbook loads, and a
+refresh is enough.
+
 ## The office board or drawer says "cannot reach SharePoint — retrying"
 
 This is different from a missing site or list: it means the site and lists

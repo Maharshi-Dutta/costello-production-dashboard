@@ -2851,11 +2851,13 @@ const person = (name, stages, pin, active, station) =>
     "while R5303 still gets its own three");
   pass("the drawer's timeline matches its job exactly, so R530 never lists R5303's work");
 
-  /* 2026-09-16: the next station went exactly where this check said it would.
-     The assertion is kept, widened by one line rather than rewritten: glass is
-     still first and still called what it was called, and adding the welding
-     board really was one entry in this array plus a renderer for its key. */
-  assert.deepStrictEqual(STATIONS, [["glass", "Glass station"], ["welding", "Welding station"]],
+  /* 2026-09-16, and again 2026-09-21: each next station went exactly where this
+     check said it would. The assertion is kept and widened by ONE LINE per
+     station rather than rewritten - glass is still first and still called what
+     it was called, and adding the welding board and then the glazing board
+     really was one entry in this array plus a renderer for its key. */
+  assert.deepStrictEqual(STATIONS, [["glass", "Glass station"], ["welding", "Welding station"],
+                                    ["glazing", "Glazing station"]],
     "one array next to SHEETNAMES is where the next station goes");
   assert.strictEqual(SHEETNAMES[0], "Production", "SHEETNAMES is untouched, for the export and the row chips");
   pass("the dropdown is driven by one STATIONS array, and SHEETNAMES is left exactly as it was");

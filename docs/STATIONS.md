@@ -647,10 +647,36 @@ in SharePoint, not on the tablet — there is nothing to edit there.
 
 ## Adding a station
 
-Written down on 2026-09-16, the day the **second** station (welding) was
-built, so the third (PA Lam) is this list and nothing more. Everything below
-was actually done for welding; where a file is named, that file already
-contains a worked example to copy.
+Written down on 2026-09-16, the day the **second** station (welding) was built,
+and **followed for the third (glazing) on 2026-09-21** — which is the evidence
+that it works: the glazing station is three new files, one `STATIONS` line, one
+feeder, one poll and one renderer, and it changed nothing in the other two
+stations' behaviour (their suites kept every count). Everything below was
+actually done twice; where a file is named, that file already contains a worked
+example to copy.
+
+**What the third one added to this list** (read these before starting a fourth):
+
+- `seedFields` may be **empty**. Glazing has no office record to seed from, so
+  `GLAZE.seedFields` is `[]` and `seedOf` answers `{}`. That makes the feeder
+  *simpler*, not harder: with no seed field in the plan, no patch can ever name
+  a floor column, so there is no `weldFeedPatch`-shaped "re-read the row before
+  seeding" guard to write at all.
+- `daySheets` may be **absent**, and then the station has no day sheet anywhere
+  — no button on the tablet, no chip in the office, no read of either list.
+- Borrow before writing. Glazing's core calls `ST.floorOnly`, `ST.stripContact`,
+  `ST.sectionInProduction`, `ST.atCmp`, `ST.feedPlan`, `ST.sliceHash`,
+  `ST.logFields`, `ST.boardDiff`, `ST.mergeDelta`, `ST.stationPeople` and
+  `ST.stationComments` rather than repeating any of them. Only the definition,
+  the slice, the card shape, the clamp, the write body and the re-base are its
+  own.
+- **A quantity a station reads must come off `Production` alone.** `j.prodsMain`
+  was the first Production-only field; `j.wndMain`/`j.drsMain` joined it for
+  glazing. A station that reads `j.wnd`, `j.drs` or `j.prods` is reading a
+  cross-sheet merge and is one inserted column away from [`HISTORY.md`](HISTORY.md) B20.
+- If the station has an opinion about **where a job has got to**, it belongs in
+  `effectivePhase`'s floor voice (`checkpoints.js`, `setFloorHook`) and it is
+  **computed, never stored**.
 
 Each station keeps its data in its own list and its own page — a station
 account for one area never needs, and never gets, another area's data.
@@ -683,10 +709,10 @@ own rules, never inside `station-core.js`:
 | `reportLogStages(stage)` | which **`Station log` stages** feed one report stage. Glass answers `[stage]`; welding answers its part keys (`frames`, `sashes`), because its tablet logs one line per part and never the word "weld". Getting this wrong is invisible: the report simply comes out with no Activity sheet and an empty Days, which is how the welding report shipped at first |
 | `reportGroupLabel` | *optional*: the heading for the product-group column of the report's Activity sheet, for a station whose log lines carry one (welding: `"Group"`). A station that names none loses the column rather than printing its own name down it |
 
-`ST.GLASS` (in `station-core.js`) and `WELDC.WELD` (in `welding-core.js`) are
-the two that exist. `ST.feedPlan`, `ST.sliceHash` and `ST.floorOnly` take one;
-omitting it means the glass definition, which is what they were about before
-there was a second station.
+`ST.GLASS` (in `station-core.js`), `WELDC.WELD` (in `welding-core.js`) and
+`GLZC.GLAZE` (in `glazing-core.js`) are the three that exist. `ST.feedPlan`,
+`ST.sliceHash` and `ST.floorOnly` take one; omitting it means the glass
+definition, which is what they were about before there was a second station.
 
 ### 2. Three files
 
@@ -728,6 +754,7 @@ checkpoint writes, nor the glass colour writer:
 ```js
 .then(() => feedStation(), () => {})
 .then(() => feedWelding(), () => feedWelding())
+.then(() => feedGlazing(), () => feedGlazing())
 ```
 
 The poll is the same shape: its own `try` inside `stationPoll()`, its own
@@ -886,6 +913,150 @@ of `Station log`**: that list is the floor's and stays the floor's. The tablet
 sees the change as the row's last touch on its next ten-second poll, and a
 queued floor tap made *before* the office's edit is dropped and said so on the
 card.
+
+## The Glazing station data model
+
+Shipped 2026-09-21 ([`docs/specs/2026-09-21-glazing-station.md`](specs/2026-09-21-glazing-station.md)). The **third**
+station, and the first one built from "Adding a station" above rather than from
+a page. The glazer's tablet is `glazing.html`; the office sees it at
+**Show ▸ Glazing station**.
+
+Glazing used to be the glass station's third stage. The owner took it out on
+2026-09-21: *"glazing is the last step for the whole job, not just glass, so it
+will be its own dashboard with its section."* The glass list's `Glazed`,
+`GlazedBy` and `GlazedAt` columns are **not** reused and are not read by this
+station — they stay on `Glass station` exactly as they are, written by nothing.
+
+**Nothing in this feature writes the workbook**, from either side. The only
+workbook write anywhere in it is the `Dashboard Log` line an office edit leaves,
+which is a dashboard-owned sheet (rule 2).
+
+### `Glazing station` — one row per **job**
+
+In the **`Floor stations`** site. `Title` is unique.
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| `Title` | Single line, **unique** | feeder | the job number, upper-case, e.g. `R5303` |
+| `Job` | Single line | feeder | the same job number |
+| `Customer` | Single line | feeder | customer name, max 70 characters, **stripped** per rule 3 |
+| `Section` | Single line | feeder | the job's section on the sheet. The tablet shows `In production` only; the office board shows every section |
+| `Seq` | Number | feeder | the job's position in the master list, so the floor sees the office's order |
+| `Active` | Single line | feeder | `Yes` while the job is on the sheet with something to glaze; `No` afterwards. **Never deleted** |
+| `Windows` / `Doors` | Number | feeder | the job's quantities **on the `Production` sheet** |
+| `Total` | Number | feeder | `Windows + Doors` — the units to glaze |
+| `Comment` | Multiple lines of text | feeder | the sheet's COMMENT after the rule-3 strip, max 140 characters, may be blank |
+| `FedAt` / `FedBy` | Single line | feeder | the last feed that changed this row, and whose dashboard did it |
+| `Glazed` | Number | the tablet; the office from its glazing board | units glazed so far, 0…`Total` |
+| `GlazedBy` / `GlazedAt` | Single line | the same | who last moved the counter, and when (ISO) |
+| `DoneBy` / `DoneAt` | Single line | the same | the last touch of any counter on this row |
+
+Do **not** switch on "enforce unique values" for anything but `Title`.
+
+**THE QUANTITIES COME OFF `Production` AND NO OTHER SHEET.** `j.wnd`/`j.drs`
+take the *first* sheet that has a number, which is `Production` whenever
+`Production` has one and somebody else's sheet when it has not — the same door
+[`HISTORY.md`](HISTORY.md) B20 came through. The parser therefore carries
+`j.wndMain`/`j.drsMain`, the Production-only pair, beside `j.prodsMain` which
+welding reads, and **the glazing slice reads those**. A job with no `Production`
+quantity at all reads nought, so it is not this station's business and is not
+fed. A job whose `Total` would be `0` is never fed.
+
+**There is no seed**, and that is a fact about the office rather than an
+omission: glazing was never an office checkpoint, so there is no record anywhere
+of a job already glazed. `GLAZE.seedFields` is empty and `seedOf` answers `{}`,
+so the feeder's whole vocabulary holds not one floor column — which is why this
+station needs no `weldFeedPatch`-shaped guard. An untouched row starts at
+nought.
+
+**The colours.** Three levels, the same three words welding uses: no colour =
+nothing glazed, **yellow** = started, **green** = every unit glazed.
+
+### Glazing rows in the shared lists
+
+- `Station people`: `Station` = `Glazing`, `Stages` = `glaze` (one stage).
+- `Station log`: `Station` = `Glazing`, `GlassType` = the literal `GLAZING` (the
+  column name is kept; nothing creates columns), `Stage` = `glaze`,
+  `From`/`To`/`Who`/`At` as before. **Written by the tablet only.**
+- `Station comments`: `Station` = `Glazing`, exactly as for the other two.
+- `Station day sheets` / `Station targets`: **not used.** `GLAZE` has no
+  `daySheets` entry, so the tablet draws no button, reads neither list and sends
+  no request for either.
+
+### Creating the list (the owner, once)
+
+A plain, generic list named exactly `Glazing station`, in the `Floor stations`
+site, with these columns (`Title` already exists):
+
+| column | type |
+|---|---|
+| Job, Customer, Section, Active, FedAt, FedBy, GlazedBy, GlazedAt, DoneBy, DoneAt | Single line of text |
+| Comment | Multiple lines of text (plain text) |
+| Seq, Windows, Doors, Total, Glazed | Number (0 decimal places) |
+
+Then turn **enforce unique values on `Title`** — that is what lets the feeder
+upsert safely without ever creating a duplicate row for a job. It starts empty.
+Until it exists both screens say so plainly and nothing is written anywhere; no
+list is created by code, ever.
+
+Then add the glazer to `Station people`: `Title` = the name shown on the tablet,
+`Station` = `Glazing`, `Stages` = `glaze`, `PIN` = 4–6 digits or blank,
+`Active` = `Yes`. Read the PIN warning above before relying on it for anything.
+
+### What the office can do, and what it cannot
+
+The office's glazing board shows one row per job, every section, in sheet order,
+with the counter, a bar, the windows/doors breakdown, the last touch and the
+unread-notes count, and **−, +, All, None** on the row itself. Finished jobs go
+gold and sort last. The card's head opens that job's drawer, unless the job has
+left the sheet, in which case there is no drawer to open and the head is not
+clickable. **Floor log** sits under the board, read-only and filtered to
+Glazing; **Report** is the usual chip beside the board.
+
+An office edit writes exactly five fields — `Glazed`, `GlazedBy`, `GlazedAt`,
+`DoneBy`, `DoneAt` — and leaves **one `Dashboard Log` line** per change
+("Glazing: R5303, 3 → 6"). It writes **no line of `Station log`**. The row is
+read once immediately before the PATCH, so a tap the board had not yet seen is
+never overwritten; a double-click is one write, because the busy flag goes up
+before the first await.
+
+The **job drawer** gains a read-only **Glazing** line under the Welding line:
+`n / Total`, who last moved it and when, and a button to the board. There is no
+new column on the job row (owner's rule, 2026-09-09).
+
+### The phase bar hears the floor (2026-09-21)
+
+The owner: *"when glazing is in process or done the phase bar in the master
+dashboard should move the progress into the In glazing section. And when
+something is in welding, in process or done, it should be In fabrication. If
+something is marked in glazing it means it has gone through fabrication; if
+glazing is not marked but welding is, it is in fabrication."*
+
+So the floor is a **third voice** in `effectivePhase` (`checkpoints.js`), beside
+the sheet's own evidence and the hand-set phase, and it is read the same way:
+
+- any welding recorded on the job (frames or sashes done > 0) → at least
+  **In fabrication**;
+- any glazing recorded (`Glazed` > 0) → at least **In glazing**;
+- glazing outranks welding;
+- the result is the **highest** of the three, so the floor can only ever move a
+  job forward and never past what the sheet or a person says;
+- a counter tapped back to nought withdraws that voice and the phase falls back
+  to the next highest.
+
+**Nothing is stored for it.** It is computed on every render out of lists
+already in memory: no `Dashboard phases` row, no list write, no workbook write.
+`test_glazing.js` asserts zero requests of any kind across the whole phase
+section. The drawer's phase strip says so in words when the phase is the
+floor's — "Moved here by the floor — from the glazing station" — the way it
+already distinguishes hand-set from sheet.
+
+The two floor lists may not have been read when the job list first draws, which
+is deliberately harmless: a station that has read nothing says nothing, so the
+phase starts at whatever the sheet says and is *raised* when the lists arrive —
+it never flickers backwards. The repaint goes down the existing quiet path
+(`chipsNow()` carries each drawn row's floor phase, `floorPhaseRepaint()` takes
+it), and no timer was added for it.
 
 ## What the feeder does, and when
 

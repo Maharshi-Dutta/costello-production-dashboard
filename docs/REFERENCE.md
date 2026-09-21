@@ -2013,3 +2013,153 @@ themselves, and it now does.
   owner asks and says which counts they want).
 - PDF station reports. Charts. Emailing a report. Per-day or per-glass-type
   targets.
+
+## 24. The glazing station, and the phase bar hearing the floor
+
+Built 2026-09-21. Spec: [`docs/specs/2026-09-21-glazing-station.md`](specs/2026-09-21-glazing-station.md). The **third**
+floor station, and the first one built from the "Adding a station" checklist in
+[`docs/STATIONS.md`](STATIONS.md) rather than from a page.
+
+### What it is
+
+The owner, the same day glazing left the glass station: *"glazing is the last
+step for the whole job, not just glass, so it will be its own dashboard with its
+section."* And, after the demo: *"make the glazing dashboard as well, and I
+should be able to see what is glazed in the glaze station window in the main
+dashboard. I should be able to edit glazing from that window."*
+
+```
+Production sheet ──parse──▶ ALL ──glzSlice──▶ feedGlazing() ──▶ `Glazing station`
+                                (wndMain + drsMain)                    │
+                                                                       ▼
+index.html + app.js  ◀──Glazed / GlazedBy / GlazedAt / DoneBy / DoneAt──┤
+  Show ▸ Glazing station, the drawer's Glazing line, the phase bar      │
+glazing.html + glazing.js ──────────────────────────────────────────────┘
+```
+
+**One number per job**: units glazed, out of the job's windows plus doors
+(owner's decision 1). No stages, no product groups, no glass types — which is
+why `glazing.js` is materially shorter than `welding.js` rather than a copy of
+it: a card is a job, one stepper and a note box.
+
+### The five things worth knowing
+
+- **No workbook write anywhere in it**, from either side. The only workbook
+  write in the whole feature is the `Dashboard Log` line an office edit leaves,
+  which is a dashboard-owned sheet (rule 2). `test_glazing.js` asserts on the
+  request log that the entire run contains no `/workbook`, no `/drive` and no
+  `DELETE`.
+- **`Production` only.** `j.wnd`/`j.drs` take the *first* sheet that has a
+  number, so `parser.js` gained `j.wndMain`/`j.drsMain` — the Production-only
+  pair, beside `j.prodsMain` which welding reads — and the slice reads those. A
+  fixture whose two disagree (`wnd: 11, wndMain: 3`) is in the suite, because
+  that is exactly the shape [`HISTORY.md`](HISTORY.md) B20 took.
+- **No seed.** Glazing was never an office checkpoint, so there is nothing to
+  seed from: `GLAZE.seedFields` is `[]` and `seedOf` answers `{}`. That makes
+  the feeder the simplest of the three — with no seed field in the plan, no
+  patch can ever name a floor column, so there is no "re-read the row before
+  seeding" guard to write.
+- **Five fields, one builder, both sides.** A tap from the tablet and a click on
+  the office's board go through the same `glzTapFields(value, who, at)` and the
+  same `glzFloorOnly` (which is `ST.floorOnly` with this station's definition).
+  There is no second body-builder that could carry a job fact in. The office
+  writes **no** `Station log` line — there is no call to `ST.logFields` on that
+  path at all — and leaves one `Dashboard Log` line ("Glazing: R5303, 3 → 6").
+- **No day sheet.** `GLAZE` has no `daySheets` entry, so the tablet draws no
+  button, the office shows no chip and neither day-sheet list is read.
+
+### What was shared, and what was not
+
+Borrowed from `station-core.js` rather than repeated: `feedPlan`, `sliceHash`,
+`floorOnly`, `logFields`, `stationComments`, `stationPeople`, `mergeDelta`,
+`boardDiff`, `stripContact`, `atCmp`, `canStage`, `pinOk`, `personExpired`,
+`REFRESH_MS`, `PERSON_LOCK_MS`. From `station-ui.js`: the theme, the sign-in
+gate, the "Who are you?" picker and its PIN pad.
+
+One helper moved *into* `station-core.js` for this: **`ST.sectionInProduction`**,
+the "is this section name In production" regex. `ST.inProduction` (the job-side
+question) now calls it, so the feeder's slice test and a tablet's row filter can
+never disagree about what the phrase means. Welding's own one-line
+`weldInProduction` was deliberately **left alone** — moving it would be churn on
+a frozen suite for no behaviour change.
+
+Deliberately **not** extracted: the tablet's queue / flush / delta-poll loop,
+which `station.js`, `welding.js` and now `glazing.js` each have a version of.
+Pulling it out would touch the glass tablet, whose suite is frozen at 270
+checks, and it is the kind of change that wants its own brief rather than a
+ride on a feature's.
+
+### The phase bar hears the floor (section E)
+
+`effectivePhase` in `checkpoints.js` gained a **third voice**. It was the higher
+of the sheet's own evidence (`jobPhase`) and the hand-set phase (`phaseHook`,
+the `Dashboard phases` list); it is now the highest of those two and the floor's
+(`floorHook`, registered by `app.js` as `floorPhaseRec`):
+
+- any welding recorded on the job → at least **In fabrication** (3);
+- any glazing recorded → at least **In glazing** (4);
+- glazing outranks welding — *"if something is marked in glazing it means it has
+  gone through fabrication"*;
+- the floor can only ever move a job **forward**, never past the sheet or a
+  person;
+- a counter tapped back to nought withdraws that voice and the phase falls back
+  to the next highest.
+
+`floorPhaseOf(rec)` is pure and takes `{welded, glazed}`. `phaseSource(j)`
+answers `"sheet" | "hand" | "welding" | "glazing"` — naming the sheet and the
+person first on a tie, because the floor only ever raises — and is what lets the
+drawer's strip say *"Moved here by the floor — from the glazing station"* the
+way it already distinguishes hand-set from sheet.
+
+**Nothing is stored for it.** No `Dashboard phases` row, no list write, no
+workbook write: it is computed on every render out of lists already in memory,
+through the two cached per-version maps (`weldRecordsNow().byJob`,
+`glzRecordsNow().byJob`), so it costs two object lookups per job row rather than
+two walks of a list. A whole section of `test_glazing.js` asserts **zero
+requests of any kind** across every phase check.
+
+**Why it cannot flicker.** A station that has read nothing says nothing, so the
+phase starts at whatever the sheet says and is *raised* when the lists arrive.
+The repaint goes down the existing quiet path rather than a new timer:
+`chipsNow()` now carries each drawn row's floor phase, and `redrawWelding` /
+`redrawGlazing` call `floorPhaseRepaint()` when they are off their own board.
+`stationAfterFeed()` asks both lists for their once-per-session read, so a
+dashboard nobody has opened a floor board on still shows the right word.
+
+### Every caller of `effectivePhase`, and what each got
+
+| caller | decision |
+|---|---|
+| `checkpoints.js` `phaseName(j)` | unchanged — it is `PHASES[effectivePhase(j)]` and inherits the floor |
+| `app.js` `statusWord(j)` (the list badge and the drawer head) | unchanged — inherits the floor, which is the owner's whole request |
+| `app.js` `phasePipeHtml(j)` (the drawer's strip) | inherits the floor, **plus** the new "Moved here by the floor" line from `phaseSource(j)` |
+| `app.js` `setPhaseByHand(j, n)` (the `before` of the log line) | unchanged — "from" should read what the screen was showing, which now includes the floor |
+| `jobPhase(j)` in `setPhaseByHand` / `phasePipeHtml` | deliberately **not** changed: it is "what the sheet alone says", the floor for a hand-set phase. The floor must not be able to disable a step in the picker |
+| the export | **there is no phase in any export.** `EXPORT_FIELD_KEYS` has no phase, status or stage column (its `Section` is the sheet's section), so nothing an export carries can disagree with the screen. Asserted in the suite rather than assumed |
+| the alerts digest (`automation/`) | reads no phase at all — checked by grep |
+
+### Tests
+
+`test_glazing.js`, 50 checks, in the offline pattern: the slice and the
+Production-only quantities, rule 3 in three phone shapes and an eircode,
+`feedPlan` with the glazing definition (adds, patches, deactivation, never a
+floor column, never a delete), the board and the three colours, the tap clamp,
+the five-field body and what the filter refuses, an offline queue replay across
+a simulated reload, the re-base, the log line, the people gate, the office's
+edit on the real `app.js` (one PATCH, one `Dashboard Log` line, no `Station
+log`, double-click → one write, a stale board never overwriting the floor, a
+refused write leaving the number alone), the feeder on the real `app.js`, a
+missing list as a quiet state that stops no other station, the whole phase
+section with zero requests, the station report with no glazing branch in
+`export.js`, and the workbook gate over the three new files.
+
+### Not built here
+
+- **Section F of the spec — glazing complete → Ready to deliver.** Moving a job
+  to the Ready to deliver section is a mark-ready fill plus a whole-row move on
+  the `Production` sheet, the heaviest write the dashboard has, and the owner
+  has not yet chosen between doing it automatically and doing it on one click in
+  the office. The seam is left and nothing more: `GLZC.glzColour`/`finished` say
+  which jobs are complete and the office board already sorts them last.
+- A day sheet or a weekly target for glazing (one `daySheets` line, when asked).
+- Any change to glass or welding behaviour. Their suites kept every count.

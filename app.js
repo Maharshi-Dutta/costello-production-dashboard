@@ -23,7 +23,8 @@ const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep
    station is adding a line here and a renderer for its key - the dropdown, the
    empty states and the reset in renderChips all follow from this array.
    SHEETNAMES stays exactly as it was, for the export filter and the row chips. */
-const STATIONS = [["glass", "Glass station"], ["welding", "Welding station"]];
+const STATIONS = [["glass", "Glass station"], ["welding", "Welding station"],
+                  ["glazing", "Glazing station"]];
 /* Everything the Show dropdown can put in the job list's place. The floor
    stations, and then the John print sheet - which is not a station at all: it
    is the office's own second sheet, "Production (2)", shown on its own terms
@@ -2019,10 +2020,11 @@ let CHIPS_GLASS = false;               // did the last chipsNow() find any glass
     A record with no glasses on it is in here too, as nothing: it draws no chip
     today, but a total arriving is a change the list has to show. */
 function chipsNow() {
-  let glass = "", notes = "";
+  let glass = "", notes = "", phase = "";
   /* the unread notes are rebuilt here and read a row at a time below, so
      drawing seven hundred rows walks the notes list once, not once a row */
   const unread = notesUnreadFresh();
+  const floorOn = typeof floorPhase === "function";
   for (let i = 0; i < ROWS_DRAWN.length; i++) {
     const j = ROWS_DRAWN[i], g = stationForJob(j.id);
     if (g) glass += j.id + ":" + ST.STAGE_KEYS.map(k => g[ST.STAGE_ROW[k]]).join(",") +
@@ -2032,11 +2034,23 @@ function chipsNow() {
        down the same quiet path a counter moving does */
     const u = unread[j.id];
     if (u) notes += j.id + ":n" + u.length + "|";
+    /* ... and so is the STATUS WORD, since 2026-09-21: the welding and glazing
+       lists are a third voice in effectivePhase, and they are read after the
+       rows are first drawn. Without this a job that went In glazing while
+       somebody was looking at the list would keep saying "Cutting" until
+       something else happened to repaint it. Only the phase the FLOOR is
+       claiming is in here - the sheet's own and the hand-set one already
+       repaint by their own paths, and putting them in would make this string a
+       second, slower copy of the job list. */
+    if (floorOn) {
+      const p = floorPhase(j);
+      if (p != null) phase += j.id + ":p" + p + "|";
+    }
   }
   /* what the rows are worth to the POLL is still the glass alone: an unread
      note is no reason to ask the floor's lists for a delta six times a minute */
   CHIPS_GLASS = glass !== "";
-  return glass + notes;
+  return glass + notes + phase;
 }
 /** A repaint the list was too busy for is owed, not lost: the poll's own clock
     takes it as soon as whoever was typing or dragging has finished, so the rows
@@ -2049,7 +2063,9 @@ function stationCatchUp() {
      straight out on the welding board without clearing ROWS_STALE - so a
      repaint deferred while somebody was typing in the board's own search box
      was owed for ever and never taken. */
-  if (state.board === "welding") redrawWelding(); else redrawStation();
+  if (state.board === "welding") redrawWelding();
+  else if (state.board === "glazing") redrawGlazing();
+  else redrawStation();
 }
 
 /** A repaint nobody asked for: no entry animation, so the rows change their
@@ -2279,9 +2295,12 @@ function redrawStation() {
      carries the floor's chip too, and a counter moved on the tablet has to
      reach it. Held off while the list is in use - and then owed, so the next
      tick takes the repaint that was skipped rather than losing it. */
-  /* the welding board redraws on its own clock (redrawWelding) from its own
-     lists, so a glass poll must not rebuild it under somebody's filter */
-  if (state.board === "welding") { if (state.sel && $("#dhost")) renderDrawer(); return; }
+  /* the welding and glazing boards redraw on their own clocks (redrawWelding,
+     redrawGlazing) from their own lists, so a glass poll must not rebuild
+     either of them under somebody's filter */
+  if (state.board === "welding" || state.board === "glazing") {
+    if (state.sel && $("#dhost")) renderDrawer(); return;
+  }
   const onBoard = typeof STATIONS !== "undefined" && STATIONS.some(b => b[0] === state.board);
   if (rowsInUse()) ROWS_STALE = true;
   else if (onBoard) { ROWS_STALE = false; quietRows(); }
@@ -2321,6 +2340,7 @@ function stationTick() {
        its own site, and neither may gate, delay or fail the other. */
     try { await stationPoll(); } catch (e) { /* it has its own catch; belt and braces */ }
     try { await weldPoll(); } catch (e) { /* ... and so does this one */ }
+    try { await glzPoll(); } catch (e) { /* ... and the third */ }
     try { stationCatchUp(); } catch (e) {}
     stationTick();
   }, STATION_TICK_MS);
@@ -2363,6 +2383,9 @@ function setStationFoot() {
      lists, two sites, and the office should know which of them is stuck */
   if (typeof WELD_FEED_ERR !== "undefined" && WELD_FEED_ERR) {
     show("welding feed failed"); el.title = WELD_FEED_ERR; return;
+  }
+  if (typeof GLZ_FEED_ERR !== "undefined" && GLZ_FEED_ERR) {
+    show("glazing feed failed"); el.title = GLZ_FEED_ERR; return;
   }
   if (!STATION_FEED.at) { show(""); el.title = ""; return; }
   show("station feed: " + agoWords(STATION_FEED.at));
@@ -4003,6 +4026,14 @@ function stationAfterFeed() {
   if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); }
   else renderRows();
   stationReadIfNeeded(() => { if (!state.board) renderRows(); });
+  /* ... and the same for the other two stations, which the plain job list now
+     has a reason to know about: since 2026-09-21 a row's status word can be the
+     floor's (effectivePhase's third voice), so a dashboard nobody has opened a
+     floor board on still has to read their lists once. Each is the shared
+     once-per-session read, with its own retry clock, and a failure of one can
+     never touch the others. */
+  weldReadIfNeeded(() => { if (!state.board) renderRows(); });
+  glzReadIfNeeded(() => { if (!state.board) renderRows(); });
   /* the floor's notes are read once per page here, not when a drawer happens to
      open: the Changes line is the whole notification, and a note nobody has
      opened a drawer to look for is exactly the one that needs announcing. The
@@ -4189,6 +4220,11 @@ async function load(reason, force) {
          cannot stop the welding list being fed - and feedWelding has its own
          try inside, so it cannot stop the colour writer below either. */
       .then(() => feedWelding(), () => feedWelding())
+      /* and the glazing feed, in a link of its own for the same reason
+         (2026-09-21). Both handlers call it, so neither of the two feeders
+         before it can stop the third - and feedGlazing has its own try inside,
+         so it cannot stop the colour writer below either. */
+      .then(() => feedGlazing(), () => feedGlazing())
       .then(stationAfterFeed, () => {})
       .then(() => glassColourRun(), () => {})
       .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
@@ -5534,6 +5570,7 @@ function stationDefs() {
   const out = [];
   if (typeof ST !== "undefined" && ST.GLASS) out.push({ key: "glass", def: ST.GLASS });
   if (typeof WELDC !== "undefined" && WELDC.WELD) out.push({ key: "welding", def: WELDC.WELD });
+  if (typeof GLZC !== "undefined" && GLZC.GLAZE) out.push({ key: "glazing", def: GLZC.GLAZE });
   return out;
 }
 /** Every station-stage a report can be run for: `glass|cut`, `welding|weld`. */
@@ -5558,6 +5595,13 @@ function stationReportData(pick) {
   if (pick.key === "welding") {
     return { board: weldRecordsNow().cards, log: weldLogRowsNow(),
              notes: ST.commentRows(WELD_NOTES || [], { station: WELDC.WELD_NAME }),
+             days: [], target: null };
+  }
+  /* glazing has no day sheet and no target: the definition says so (no
+     `daySheets` entry), and stationReport leaves those columns out on its own */
+  if (pick.key === "glazing") {
+    return { board: glzRecordsNow().cards, log: glzLogRowsNow(),
+             notes: ST.commentRows(GLZ_NOTES || [], { station: GLZC.GLZ_NAME }),
              days: [], target: null };
   }
   return { board: ST.jobBoard(STATION_ITEMS || []),
@@ -6606,6 +6650,7 @@ function renderChips() {
        for a floor station: the John print sheet came out of the workbook
        download the page already made and has nothing at all to read. */
     if (state.board === "welding") weldReadIfNeeded(() => renderAll());
+    else if (state.board === "glazing") glzReadIfNeeded(() => renderAll());
     else if (state.board && state.board !== "john") stationReadIfNeeded(() => renderAll());
   };
   c.appendChild(ssel);
@@ -7843,6 +7888,15 @@ function renderRows() {
         " on the Welding station board" : "Welding station";
       return;
     }
+    if (state.board === "glazing") {
+      glzReadIfNeeded(() => { if (state.board === "glazing") renderRows(); });
+      host.innerHTML = '<div class="stboard weldboard">' + glzBoardHtml() + '</div>';
+      wireGlzBoard(host);
+      const zn = (GLZ_OK === true && glzOn()) ? glzCardsShown().length : 0;
+      $("#count").textContent = zn ? "Showing " + zn + " job" + (zn > 1 ? "s" : "") +
+        " on the Glazing station board" : "Glazing station";
+      return;
+    }
     /* the card's "last: ..." line comes from the log list, which the feeder
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
@@ -8356,6 +8410,9 @@ function cpSectionHtml(j, ed) {
        card (owner's rule, 2026-09-09). It writes nothing and it is not a
        checkpoint - nothing here can paint a cell. */
     weldDrawerLine(j) +
+    /* ... and how far the glazing floor has got, under it. Read-only in exactly
+       the same way: no checkpoint, no cell, no write of any kind. */
+    glzDrawerLine(j) +
     /* Doors: the same shape, with the quantity warning on whichever of the two
        the job actually has (amendments 6 and 10) */
     g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly, warn)).join("") +
@@ -8481,13 +8538,26 @@ function phasePipeHtml(j, ed) {
       (below || wait || checking || (consent && !isAdmin()) ? " disabled" : "") + ' title="' + esc(title) + '"' +
       (i === cur ? ' aria-current="step"' : "") + '>' + inner + '</button>';
   };
+  /* WHERE THE PHASE CAME FROM, when it came from the floor (2026-09-21). The
+     strip has always distinguished a hand-set phase from the sheet's own
+     evidence; the floor is the third voice, and a job that says "In glazing"
+     because somebody tapped a tablet - with nothing on the sheet saying so yet
+     - has to be able to say which. phaseSource() names the sheet and the person
+     first on a tie, because the floor only ever raises. */
+  const src = typeof phaseSource === "function" ? phaseSource(j) : "sheet";
+  const FLOOR_WORDS = { glazing: "from the glazing station", welding: "from the welding station" };
   let note = "";
+  if (FLOOR_WORDS[src]) {
+    note = '<div class="phset">Moved here by the floor — <strong>' + esc(FLOOR_WORDS[src]) +
+      '</strong>. Nothing is stored: it is read from the floor’s own list every time, and the ' +
+      'sheet says <strong>' + esc(PHASES[sheet]) + '</strong>.</div>';
+  }
   if (info) {
-    note = '<div class="phset">Set by <strong>' + esc(info.who || "someone") + '</strong>' +
+    note += '<div class="phset">Set by <strong>' + esc(info.who || "someone") + '</strong>' +
       (info.at ? ", " + esc(stamp(info.at)) : "") +
       (info.phase !== sheet ? ' \u00b7 sheet says: <strong>' + esc(PHASES[sheet]) + '</strong>' : "") + '</div>';
   } else if (hand != null) {
-    note = '<div class="phset">Just set here \u2014 saving to the phases list\u2026</div>';
+    note += '<div class="phset">Just set here \u2014 saving to the phases list\u2026</div>';
   }
   if (missing) note += '<div class="phset warn">' + esc(PHASE_LIST_MISSING) + '</div>';
   else if (consent) note += '<div class="phset warn">' + esc(PHASE_NEED_CONSENT) +
@@ -8656,6 +8726,22 @@ function renderDrawer() {
   /* the Alerts section is not part of Edit mode: it never touches the
      Production sheet, and only the administrator sees its controls at all */
   wireAlerts(host, j.id);
+  /* the one thing the glazing line in the drawer can do: switch the list to the
+     glazing board. No write, no checkpoint, nothing near the workbook.
+
+     OUTSIDE `if (ed)`, deliberately: the line is drawn whether or not the
+     drawer is in Edit mode, so a button wired only in Edit mode is a button
+     that does nothing most of the time. (`#weldopen` above is wired inside it
+     and has exactly that fault; it is not touched here because welding's
+     behaviour is out of this feature's scope - reported instead.) */
+  const zo = $("#glzopen");
+  if (zo) zo.onclick = () => {
+    state.board = "glazing"; state.picked = {};
+    const sel = $("#showsel");
+    if (sel) sel.value = "glazing";
+    closeDrawer();
+    renderAll();
+  };
 
   if (ed) {
     /* the phase steps: one click sets the phase by hand, clicking the one it is
