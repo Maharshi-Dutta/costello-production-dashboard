@@ -437,6 +437,36 @@
   @media (max-width:700px){
     .lgrow { grid-template-columns:70px 1fr auto; row-gap:3px }
   }
+  /* the day sheets window (2026-09-21): one line per sheet, grouped by ISO
+     week with the week's subtotal under it. The count columns are laid out by
+     `--dsn`, which the row sets from the station definition's own list, so a
+     station with three counts or five needs no rule of its own here. */
+  .dsrow, .dssub { display:grid; align-items:center; gap:10px; padding:8px 14px;
+                   border-bottom:1px solid var(--line-soft); font-size:12.5px;
+                   grid-template-columns:110px minmax(80px,auto) repeat(var(--dsn,4),56px) 58px 1fr auto }
+  .dssub { background:var(--surface-2); font-weight:600; border-bottom:1px solid var(--line) }
+  .dsday { font-weight:600; color:var(--ink-2); white-space:nowrap }
+  .dswho { color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .dsnum { text-align:right; color:var(--ink-2) }
+  .dstot { text-align:right; font-weight:700; color:var(--ink) }
+  .dsnotetext { color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .dsacts { display:flex; align-items:center; gap:8px; justify-content:flex-end; white-space:nowrap }
+  .dswhen { color:var(--ink-4); font-size:11.5px }
+  .dsrow.editing { background:var(--surface-2) }
+  .dsedit { min-height:34px; font-size:12.5px; padding:0 8px }
+  .dsweek { display:flex; align-items:baseline; gap:10px; padding:11px 14px 7px;
+            background:var(--surface-2); border-bottom:1px solid var(--line) }
+  .dsweek .cond { font-size:17px; font-weight:700 }
+  .dswk2 { font-size:12px; color:var(--ink-4) }
+  /* the station board's own one-liner: this week against the target */
+  .stweek { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:11px;
+            padding:9px 12px; border:1px solid var(--line); border-radius:7px;
+            background:var(--surface-2); font-size:13px; color:var(--ink-2) }
+  .stweek strong { font-size:17px; color:var(--ink) }
+  @media (max-width:860px){
+    .dsrow, .dssub { grid-template-columns:100px repeat(var(--dsn,4),46px) 52px auto; row-gap:4px }
+    .dsrow .dsnotetext, .dsrow .dswho, .dssub .dswho { grid-column:1/-1 }
+  }
   /* alerts: who gets emailed about a job. Same thumb-sized controls as the
      checkpoints - the admin adds people from a phone as often as a desk. */
   .alchips { display:flex; flex-wrap:wrap; gap:7px }

@@ -227,6 +227,47 @@ on the glass tablets), `docs/ARCHITECTURE.md` (`cw_stationstage`),
 `web/CLAUDE.md` (rule 2 exception; the colour rule wording), `docs/specs/README.md`.
 HISTORY.md is the manager's at ship.
 
+## Amendments after review (2026-09-21)
+
+Independent review of the first build (commit `48e921e`) plus the manager's
+offline rehearsal on a saved copy of the real `Glass station` list (138 active
+rows, 116 of them never tapped by the floor). All to be fixed before ship.
+
+- **R1 — the feeder must never lower a seeded counter (decision 8).** The old
+  build seeded an untouched row whose office record was yellow to
+  `Cut = Hotmelt = total`; the new `officeSeed` answers `{cut: total,
+  hotmelt: 0}` for the same record and `feedPlan`'s untouched branch writes any
+  difference, in both directions — so the first load after ship would PATCH
+  `Hotmelt` from the total back to 0 (7 rows on the saved copy, e.g. 43 → 0)
+  and hand the hotmelting tablet finished work as work to do. Fix: on an
+  untouched row a seed field is only ever **raised**, unless the whole seed is
+  noughts (a real office un-tick, which still clears). Test the downward
+  direction explicitly.
+- **R2 — Tuff is outside the office lock.** The lock now lands the moment
+  hotmelting finishes, not after glazing, so it used to freeze the Tuff stepper
+  and `dropBlocked()` deleted queued tuff taps while the cutter was still
+  working. `OfficeDone` locks the glass stages only: Tuff stays tappable on the
+  Cutting page and on the office board, and queued tuff taps are never dropped
+  by the lock.
+- **R3 — two fast clicks on an office stepper.** `glassWriting[k]` is set after
+  `await CW.hasListConsent()`, so two clicks can both pass the guard and both
+  PATCH from the same base. Set the flag (and redraw) before the first await
+  and clear it on every early return. `weldOfficeEdit` has the same ordering:
+  fix it the same way, with `test_welding.js` counts unchanged.
+- **R4 — a typo in `?stage=`** must fall back to the device's remembered stage,
+  not to the chooser: only a valid URL value wins.
+- **R5 — a Tuff counter nobody has tapped is no opinion.** Under the old rule
+  glazing painted TUFF gold even with `Tuff = 0`; under the new one such a cell
+  would be planned blank and an existing gold wiped. When `TuffAt` is empty the
+  plan names **nothing** for TUFF (neither paint nor clear). Tapping Tuff down
+  to nought on purpose still clears it.
+- **Not code, told to the owner:** the two existing gates in `glassColourPlan`
+  still apply to "every job at once" — a row the floor has never tapped, and a
+  job whose office record is newer than the floor's stamp, keep their colour
+  until somebody acts; and one office stepper click makes a row "touched" for
+  good, handing that job's four glass cells to the counters (brief §D, by
+  design).
+
 ## Report back
 
 Pasted output of every suite; functions added/changed with line numbers;

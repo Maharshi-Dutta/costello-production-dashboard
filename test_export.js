@@ -90,6 +90,14 @@ const run = f => vm.runInThisContext(fs.readFileSync(__dirname + "/" + f, "utf8"
 run("parser.js");
 run("checkpoints.js");
 global.CP = window.CP;
+/* station-core.js joined this file on 2026-09-21: the station report template
+   is part of the export path now, and the standing "no phone number and no
+   eircode leaves this app" test has to be able to build one. It is the page's
+   own order (index.html loads it before export.js). */
+run("station-core.js");
+global.ST = window.ST;
+run("welding-core.js");
+global.WELDC = window.WELDC;
 run("export.js");
 run("app.js");
 
@@ -1219,6 +1227,62 @@ function pdfRunsPerPage(buf) {
   assert.strictEqual(JSON.stringify(cleanRows).indexOf(JPHONE), -1,
     "and Production (2)'s numbers do not reach a Default row either");
   pass("the Default template still carries no phone number and no eircode of any kind");
+
+  /* ---- and the THIRD template, the station report (2026-09-21) ----
+     Free text typed on a floor tablet is the one way a phone number or an
+     eircode could reach an export that has no column for either, so the
+     fixtures below type both into a day sheet's note and into a floor note -
+     in the three written shapes people actually use - and the standing scans
+     are run over the rows and over the real workbook built from them. */
+  /* an invented address code in the SHAPE a real one has - the fixture EIR
+     above is deliberately not that shape, because the Default export protects
+     the eircode by never reading the column at all, and a report protects a
+     typed one by its shape */
+  const SHAPED_EIR = "D02 X285";
+  const stPeriod = { from: "2026-03-01", to: "2026-03-07", label: "This week" };
+  const stData = {
+    board: ST.jobBoard([{ id: "1", fields: { Title: "R1001", Job: "R1001", Customer: "Customer One",
+      Total: 6, TuffTotal: 0, Seq: 1, Active: "Yes", OfficeDone: "No", Cut: 6, Hotmelt: 0, Tuff: 0,
+      CutBy: "Person A", CutAt: "2026-03-02T10:00:00.000Z",
+      DoneBy: "Person A", DoneAt: "2026-03-02T10:00:00.000Z" } }]),
+    log: ST.logRows([{ id: "2", fields: { Title: "R1001", Station: "Glass", Stage: "cut",
+      From: 0, To: 6, Who: "Person A", At: "2026-03-02T10:00:00.000Z" } }]),
+    notes: ST.commentRows([{ id: "3", fields: { Title: "R1001|1", Job: "R1001", Station: "Glass",
+      Who: "Person A", Text: "ring the site on " + PHONE + ", eircode " + SHAPED_EIR,
+      At: "2026-03-02T13:00:00.000Z" } }]),
+    days: ST.dayRows([{ id: "4", fields: { Title: "Glass|cut|2026-03-02|Person A", Station: "Glass",
+      Stage: "cut", Day: "2026-03-02", Who: "Person A", Clear: 12, KGlass: 4, Satin: 0, Obscure: 0,
+      Note: "waiting on a callback, " + PHONE.replace(/ /g, "-") + " / " + PHONE.replace(/ /g, "") +
+            " / " + SHAPED_EIR, WeekTarget: 250, SavedAt: "2026-03-02T17:02:00.000Z" } }],
+      ST.daySheetOf(ST.GLASS, "cut").counts, {}),
+    target: 250, who: "exporter@example.test", when: new Date("2026-03-08T09:00:00.000Z")
+  };
+  const stSheets = stationReport(ST.GLASS, "cut", stData, stPeriod);
+  assert.ok(stSheets.length >= 4, "the report really was built, or this proves nothing");
+  assertNoValues(strings(stSheets), "a station report sheet");
+  assertNoHeaderWords(stSheets.reduce((a, s) => a.concat(s.columns || []), []), "the station report");
+  const stWb = await roundTrip(buildStationWorkbook(stSheets, { when: stData.when }));
+  assertNoValues(sheetStrings(stWb), "the station report workbook");
+  /* the naming half is asked of the COLUMNS, never of the cells: a note
+     somebody typed may say the word "eircode", and free text is not censored -
+     only the two columns are kept out, and their values with them */
+  [strings(stSheets), sheetStrings(stWb)].forEach(list => list.forEach(s => {
+    assert.strictEqual(String(s).indexOf(SHAPED_EIR), -1, 'the report leaked an address code: "' + s + '"');
+    assert.strictEqual(String(s).indexOf(PHONE), -1, 'the report leaked a phone number: "' + s + '"');
+    assert.strictEqual(String(s).replace(/\s/g, "").indexOf(PHONE.replace(/ /g, "")), -1,
+      'the report leaked a phone number written without spaces: "' + s + '"');
+  }));
+  /* ... while what the person actually said survives the strip */
+  assert.ok(strings(stSheets).some(s => s.indexOf("waiting on a callback") >= 0),
+    "the words around the number are still there");
+  assert.ok(strings(stSheets).some(s => s.indexOf("ring the site on") >= 0));
+  /* and the log line, because every export is logged (rule 5) */
+  assert.strictEqual(exportLogFrom("xlsx", 1, "station", "Glass · Cutting · 2026-03-01 to 2026-03-07"),
+    "Excel · 1 job · Station report · Glass · Cutting · 2026-03-01 to 2026-03-07");
+  assert.strictEqual(exportLogFrom("xlsx", 3, "default"), "Excel · 3 jobs",
+    "and the other two templates say what they always said");
+  assert.strictEqual(exportLogFrom("xlsx", 3, "john"), "Excel · 3 jobs · John print sheet · with phone numbers");
+  pass("the station report carries no phone number and no eircode, in any written shape, and is logged");
 
   /* the Flag column and chip in the Default export */
   const flagCell = exportCell(cleanRows[0], { key: "flag", kind: "flag" });

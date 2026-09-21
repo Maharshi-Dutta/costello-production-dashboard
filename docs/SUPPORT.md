@@ -301,6 +301,44 @@ nothing any more. A glazing station of its own is a separate piece of work.
 see `docs/STATIONS.md` for how each is told which it is, and the entry above
 about a person not being offered on a picker.
 
+## The end-of-day sheet: who can change one, and what "waiting to send" means
+
+New 2026-09-21. The **End of day** button is on the Cutting tablet only. It
+asks for the day's four counts and a line about anything that got in the way.
+
+**The cutter cannot change a sheet once it is saved. The office can.** That is
+the owner's decision, and the tablet says so where the sheet was: *"saved 17:02
+— ask the office to correct a mistake"*. In the office, Show ▸ Glass station,
+the **Day sheets** chip, **Edit** on the row: the four counts and the note, and
+nothing else. The correction is stamped with who made it, shown on the row as
+"edited by the office", and written to `Dashboard Log`. Nothing is ever deleted.
+
+**"waiting to send"** under a saved sheet means the tablet has the sheet and
+SharePoint has not got it yet — the wifi dropped, or the site was slow. It is
+kept on the device and goes on its own within a few seconds of the connection
+coming back; nothing is lost and nobody needs to retype it. If it still says
+that after a few minutes, check the tablet is on the workshop wifi, then reload
+the page — the sheet is in storage and is sent again after the reload.
+
+**"saved" appearing for a sheet somebody else already saved** is the right
+answer, not an error: one sheet per person per day is enforced by SharePoint as
+well as by the page, and a second attempt (two tablets, or a retry that already
+landed) is read back as the sheet that is there.
+
+**"Whole numbers only, please"** — a count cannot be a minus, a decimal or a
+word. Nothing is rounded or guessed; Save simply waits for a whole number.
+
+**"no target set"** means nobody has set a weekly target for cutting yet. The
+office sets it at the top of the Day sheets window; the tablet picks it up
+within ten minutes, and the target saved with each sheet is the one that week
+is measured against for ever after.
+
+**"The 'Station day sheets' list is not in the floor's site yet"** on either
+screen means exactly that: the two lists are made by hand in SharePoint (see
+`docs/STATIONS.md`). Nothing is written anywhere until they exist, the board
+and the job list are unaffected, and both screens pick the lists up on their
+own within five minutes of them being made — no reload needed.
+
 ## The office cleared a job's glass but the tablet still shows the old counts
 
 Clearing a job's glass in the office also puts the floor's counters back to

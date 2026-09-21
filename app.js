@@ -1608,6 +1608,94 @@ function stationNotesReadIfNeeded(then) {
   stationNotesReading.then(() => { if (then) then(); });
 }
 
+/* ---- the floor's day sheets and the weekly target, read here ----------------
+   `Station day sheets` and `Station targets`, shipped 2026-09-21
+   (docs/specs/2026-09-21-day-sheets-and-station-reports.md). The tablet writes
+   a sheet; this reads them, corrects one when the office asks, and is the ONLY
+   writer of the target.
+
+   The same shape as the notes channel above, for the same reason: neither list
+   exists until the owner makes it, both are read quietly, and neither may ever
+   take the board away. "There is no such list" means ASK AGAIN LATER - the
+   morning they are created, every open dashboard picks them up on its own.  */
+const DAY_RETRY_MS = 60000;           // a passing failure: the workshop wifi
+const DAY_MISS_RETRY_MS = 300000;     // no such list, or no permission yet
+const DAY_POLL_MS = 20000;            // ... and how often the open window re-reads
+let DAY_ITEMS = null, TARGET_ITEMS = null;
+let DAY_OK = null, DAY_WHY = "";      // null not looked · false missing/refused · true read it
+let TARGET_OK = null, TARGET_WHY = "";
+let DAY_SOFT = 0, DAY_SOFT_MS = 0, DAY_AT = 0;
+let dayReading = null;
+function dayAgain(ms) { DAY_SOFT = Date.now(); DAY_SOFT_MS = ms; }
+const dayDue = () => !DAY_SOFT || Date.now() - DAY_SOFT >= DAY_SOFT_MS;
+
+/* WHICH STATION-STAGE HAS A DAY SHEET comes off the definition and nothing
+   else: today that is Glass · Cutting, and a second one appears here by being
+   defined rather than by anything in this file changing. */
+const dayStage = () => (typeof ST === "undefined" || !ST.daySheetStages ? ""
+                        : (ST.daySheetStages(ST.GLASS) || [])[0] || "");
+const daySheetNow = () => (dayStage() ? ST.daySheetOf(ST.GLASS, dayStage()) : null);
+const dayCountCols = () => (daySheetNow() || { counts: [] }).counts;
+
+function dayTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  const consent = /permission needed/.test(m);
+  const missing = !!(CW.isMissing && CW.isMissing(e));
+  if (DAY_OK !== true) {
+    DAY_OK = false;
+    DAY_WHY = consent ? STATION_NEED_CONSENT : missing ? ST.DAY_MISSING_OFFICE : ST.DAY_UNREACHABLE;
+  }
+  dayAgain(consent || missing ? DAY_MISS_RETRY_MS : DAY_RETRY_MS);
+  console.warn("[station] could not read the day sheets:", m);
+}
+async function readDaySheets() {
+  if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  if (typeof ST === "undefined" || !ST.dayRows || !dayStage()) return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      DAY_OK = false; DAY_WHY = STATION_NEED_CONSENT; dayAgain(DAY_MISS_RETRY_MS); return null;
+    }
+    const siteId = await CW.stationSite(glassSite());
+    if (!siteId) { DAY_OK = false; DAY_WHY = STATION_SITE_MISSING; dayAgain(DAY_MISS_RETRY_MS); return null; }
+    const items = await CW.listItems(ST.DAY_LIST, { siteId: siteId, fields: ST.dayFieldsFor(ST.GLASS, dayStage()) });
+    if (items == null) {
+      DAY_OK = false; DAY_WHY = ST.DAY_MISSING_OFFICE; dayAgain(DAY_MISS_RETRY_MS); return null;
+    }
+    DAY_ITEMS = items; DAY_OK = true; DAY_WHY = ""; DAY_SOFT = 0; DAY_SOFT_MS = 0; DAY_AT = Date.now();
+    /* the target is its own list and can be missing on its own: no target set
+       is a thing the window says in words, not a reason to hide the sheets */
+    const t = await CW.listItems(ST.TARGET_LIST, { siteId: siteId, fields: ST.TARGET_FIELDS });
+    if (t == null) { TARGET_OK = false; TARGET_WHY = ST.TARGET_MISSING_OFFICE; }
+    else { TARGET_ITEMS = t; TARGET_OK = true; TARGET_WHY = ""; }
+    return items;
+  } catch (e) {
+    dayTrouble(e);
+    return null;
+  }
+}
+/** One read shared by every caller, on the same guard the notes channel uses. */
+function dayReadIfNeeded(then) {
+  const retry = !!(DAY_SOFT && Date.now() - DAY_SOFT >= DAY_SOFT_MS);
+  if (DAY_OK !== null && !retry) return;
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW ||
+      typeof CW.listItems !== "function" || !dayStage()) return;
+  if (retry) { DAY_SOFT = 0; DAY_SOFT_MS = 0; }
+  if (!dayReading)
+    dayReading = readDaySheets().then(r => { dayReading = null; return r; },
+                                      () => { dayReading = null; });
+  dayReading.then(() => { if (then) then(); });
+}
+/* parsed once per version of the list, exactly as the log's rows are */
+let DAYROWS = null, DAYROWS_OF = false;
+function dayRowsNow() {
+  if (DAYROWS_OF === DAY_ITEMS) return DAYROWS;
+  DAYROWS_OF = DAY_ITEMS;
+  DAYROWS = ST.dayRows(DAY_ITEMS || [], dayCountCols(),
+                       { station: ST.STATION_NAME, stage: dayStage() });
+  return DAYROWS;
+}
+const dayTargetNow = () => (TARGET_ITEMS ? ST.targetOf(TARGET_ITEMS, ST.STATION_NAME, dayStage()) : null);
+
 /* ---- which notes the office has already been told about ---------------------
    This has to survive a reload, and review finding 1 is why. `CHANGES` is
    restored from localStorage, so the LINES survive; if the set of ids did not,
@@ -1977,7 +2065,7 @@ function stationWatching() {
      own second sheet: nothing on it can change because the floor tapped
      something, so it is no reason to poll the floor six times a minute */
   if (state.board && state.board !== "john") return true;
-  if ($("#lhost")) return true;
+  if ($("#lhost") || $("#dayhost")) return true;
   const j = state.sel ? byId(state.sel) : null;
   if (j && typeof ST !== "undefined" && ST.glassTotal(j) > 0) return true;
   /* the ordinary job list counts too, now that its rows carry the floor's
@@ -2114,6 +2202,18 @@ async function stationPoll() {
          between. */
       stationNotesReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
     }
+    /* the day sheets, on the same clock and with the same manners: re-read
+       while their window is open (a sheet is saved once a day, so twenty
+       seconds is plenty), and otherwise simply asked for again when their own
+       retry clock comes round. Its own try, like the notes: a list that will
+       not answer must not be able to stall the glass colours. */
+    try {
+      if ($("#dayhost") && DAY_OK === true && Date.now() - DAY_AT >= DAY_POLL_MS) {
+        if (await readDaySheets()) paintDaySheets();
+      } else if (DAY_OK !== true && dayDue()) {
+        dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); });
+      }
+    } catch (e) { dayTrouble(e); }
     STATION_ERR = "";
     if (moved) {
       redrawStation();
@@ -4734,10 +4834,73 @@ function xpNewState() {
               fixed print layout, which has no field picker and no card/table
               choice because its whole point is to come out the same every time */
            template: "default",
+           /* the station report's own three choices, unused by the other two
+              templates: which station-stage, which period, and the custom
+              dates the period falls back on (2026-09-21) */
+           station: "", period: "week", pfrom: "", pto: "",
            /* which groups are expanded: kept here rather than left to <details>,
               because a chip click redraws the window and would otherwise fold
               the group the person was working in */
            open: { filters: true, fields: true, sort: false, presets: false } };
+}
+
+/* ---- the station report ------------------------------------------------------
+   One export template for every station, present and future (2026-09-21). The
+   list of what can be reported on is built FROM THE DEFINITIONS - one entry per
+   station per reportable stage - so a third station appears in this window by
+   being defined and by nothing in here changing. `stationReport` in export.js
+   assembles the sheets and has no station in it at all.                      */
+function stationDefs() {
+  const out = [];
+  if (typeof ST !== "undefined" && ST.GLASS) out.push({ key: "glass", def: ST.GLASS });
+  if (typeof WELDC !== "undefined" && WELDC.WELD) out.push({ key: "welding", def: WELDC.WELD });
+  return out;
+}
+/** Every station-stage a report can be run for: `glass|cut`, `welding|weld`. */
+function stationReportOptions() {
+  const out = [];
+  stationDefs().forEach(s => {
+    (s.def.reportStages || s.def.stages || []).forEach(stage => {
+      const word = typeof s.def.stageLabel === "function" ? s.def.stageLabel(stage) : stage;
+      out.push({ value: s.key + "|" + stage, key: s.key, stage: stage, def: s.def,
+                 label: s.def.name + " · " + word });
+    });
+  });
+  return out;
+}
+const stationReportPick = v => stationReportOptions().find(o => o.value === v) ||
+                               stationReportOptions()[0] || null;
+/** What this dashboard holds about one station, in the shape stationReport
+    takes. Nothing is fetched here: a report is made of what is already on
+    screen, exactly as the Default export is. */
+function stationReportData(pick) {
+  if (!pick) return {};
+  if (pick.key === "welding") {
+    return { board: weldRecordsNow().cards, log: weldLogRowsNow(),
+             notes: ST.commentRows(WELD_NOTES || [], { station: WELDC.WELD_NAME }),
+             days: [], target: null };
+  }
+  return { board: ST.jobBoard(STATION_ITEMS || []),
+           log: STATION_LOG_OK === true ? logRowsNow() : [],
+           notes: ST.commentRows(STATION_NOTES || [], { station: ST.STATION_NAME }),
+           days: DAY_OK === true && pick.stage === dayStage() ? dayRowsNow() : [],
+           target: (function () { const t = dayTargetNow(); return t ? t.target : null; })() };
+}
+/** The Report chip on a station board: open the export window on this
+    template, with that station already picked. */
+function openStationReport(boardKey) {
+  if (!XSTATE) XSTATE = xpNewState();
+  XSTATE.template = "station";
+  XSTATE.format = "xlsx";
+  /* that board's first reportable stage, or whatever the window would have
+     picked anyway if the board is one with none */
+  const mine = stationReportOptions().filter(o => o.key === boardKey)[0] || stationReportPick("");
+  XSTATE.station = mine ? mine.value : "";
+  renderExportWindow();
+}
+/** The period the window is asking for, as export.js understands one. */
+function xpPeriodNow() {
+  return stationPeriod(XSTATE.period, new Date(), XSTATE.pfrom, XSTATE.pto);
 }
 /** The company name for the PDF header: the Config sheet if it says, otherwise
     the page's own title. Never a name written into the code. */
@@ -4869,36 +5032,66 @@ function renderExportWindow() {
 
   const counties = xpCounties(), prods = xpProductNames(), glass = xpGlassNames();
   const john = XSTATE.template === "john";
+  const station = XSTATE.template === "station";
+  const stOpts = station ? stationReportOptions() : [];
+  if (station && !stOpts.some(o => o.value === XSTATE.station))
+    XSTATE.station = stOpts.length ? stOpts[0].value : "";
 
   host.innerHTML = '<div class="scrim" id="xscrim"></div><div class="logwin xwin">' +
     '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Export</div>' +
       '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + (john
         ? "“Production (2)” as it prints for John, with the phone numbers. Eircodes are never included."
+        : station
+        ? "A full report of one floor station over a period: the week, the days, the jobs, the log and the floor's notes. No phone numbers and no eircodes are ever included."
         : "Download the jobs you choose. No phone numbers and no eircodes are ever included.") +
       '</div></div>' +
       '<button class="ghost" id="xclose">Close</button></div>' +
     '<div class="logbody xbody" id="xbody">' +
 
       '<div class="xsec">' +
-        xpRow("Template", "template", XSTATE.template, [["default", "Default"], ["john", "John print sheet"]]) +
+        xpRow("Template", "template", XSTATE.template,
+              [["default", "Default"], ["john", "John print sheet"], ["station", "Station report"]]) +
+        (station
+          ? '<div class="xrow"><span class="xlab">Station</span><span class="xopts">' +
+              '<select class="txt" id="xstation">' + stOpts.map(o =>
+                '<option value="' + esc(o.value) + '"' + (XSTATE.station === o.value ? " selected" : "") +
+                '>' + esc(o.label) + '</option>').join("") + '</select>' +
+            '</span></div>' +
+            xpRow("Period", "period", XSTATE.period, XP_PERIODS) +
+            (XSTATE.period === "custom"
+              ? '<div class="xrow"><span class="xlab">Dates</span><span class="xopts">' +
+                  '<input class="txt xdate" type="date" id="xpfrom" value="' + esc(XSTATE.pfrom || "") + '" aria-label="from">' +
+                  '<span class="xto">to</span>' +
+                  '<input class="txt xdate" type="date" id="xpto" value="' + esc(XSTATE.pto || "") + '" aria-label="to">' +
+                '</span></div>'
+              : "") +
+            '<div class="xnote2">Five sheets, each left out when there is nothing for it: a week-by-week ' +
+              'Summary, the Days, the Jobs on the station’s board, the floor’s own Activity log and ' +
+              'its Notes. Free text is stripped of anything that could be a phone number or an eircode. ' +
+              'The field picker and the PDF layout do not apply.</div>'
+          : "") +
         (john ? '<div class="xnote2">Fixed layout, printed from the <b>Production (2)</b> sheet: job no, ' +
                 'ready to print, customer, phone no, area, windows, doors and the notes from Brendan’s ' +
                 'office — in that sheet’s own order, with its section dividers, its row colours and its ' +
                 'text colours. The field picker and the PDF layout do not apply. A chosen job that is not ' +
                 'on that sheet is printed in grey, marked “not on John’s sheet”.</div>' : "") +
-        xpRow("Format", "format", XSTATE.format, [["xlsx", "Excel workbook"], ["pdf", "PDF"]]) +
-        (XSTATE.format === "pdf" && !john
+        (station
+          ? '<div class="xrow"><span class="xlab">Format</span><span class="xopts">' +
+              '<span class="xnone">Excel workbook</span></span></div>'
+          : xpRow("Format", "format", XSTATE.format, [["xlsx", "Excel workbook"], ["pdf", "PDF"]])) +
+        (XSTATE.format === "pdf" && !john && !station
           ? xpRow("PDF layout", "layout", XSTATE.layout, [["cards", "Job cards"], ["table", "Table"]])
           : "") +
-        (john
+        (station ? ""
+          : john
           ? xpRow("Scope", "f.scope", f.scope === "ticked" ? "ticked" : "view",
                   [["view", state.board === "john" ? "All of John’s sheet" : "What I see now"],
                    ["ticked", "Ticked jobs (" + nPicked + ")"]])
           : xpRow("Scope", "f.scope", f.scope, [["view", "What I see now"], ["ticked", "Ticked jobs (" + nPicked + ")"], ["sections", "Sections…"]])) +
-        (!john && f.scope === "sections" ? '<div class="xrow"><span class="xlab"></span><span class="xpick">' + sectionPick + "</span></div>" : "") +
+        (!john && !station && f.scope === "sections" ? '<div class="xrow"><span class="xlab"></span><span class="xpick">' + sectionPick + "</span></div>" : "") +
       "</div>" +
 
-      (john ? "" :
+      (john || station ? "" :
       xpGroup("Filters", '<div class="xsec">' +
         xpRow("Ready to deliver", "f.ready", f.ready, XP_TRI) +
         xpRow("Urgent", "f.urgent", f.urgent, [["", "Any"], ["true", "Urgent only"]]) +
@@ -5018,6 +5211,23 @@ function xpUpdateCount() {
     if (jb) jb.disabled = XBUSY || !jn;
     return jn;
   }
+  /* the station report has no field picker and no layout to get wrong either:
+     the only question is whether the station has anything in the period */
+  if (XSTATE.template === "station") {
+    let sn = 0, why = "";
+    try {
+      const pick = stationReportPick(XSTATE.station);
+      const sheets = pick ? stationReport(pick.def, pick.stage, stationReportData(pick), xpPeriodNow()) : [];
+      sn = sheets.reduce((a, s) => a + (s.rows || []).length, 0);
+      if (!pick) why = "no station to report on";
+      else if (!sn) why = "nothing recorded in this period";
+    } catch (e) { why = (e && e.message) || String(e); }
+    const sc = $("#xcount");
+    if (sc) sc.textContent = sn + " line" + (sn === 1 ? "" : "s") + (why ? " — " + why : "");
+    const sb2 = $("#xdl");
+    if (sb2) sb2.disabled = XBUSY || !sn;
+    return sn;
+  }
   let n = 0, jobs = [];
   try { jobs = xpMatched(); n = jobs.length; } catch (e) { jobs = []; n = 0; }
   let can = { ok: false, why: "no jobs match" };
@@ -5048,6 +5258,14 @@ function xpWire(host) {
     xpUpdateCount();
   });
   host.querySelectorAll("[data-xopen]").forEach(d => d.ontoggle = () => { XSTATE.open[d.dataset.xopen] = !!d.open; });
+  /* the station report's own three: which station-stage, and the custom dates
+     when the period is a custom one */
+  const stsel = $("#xstation");
+  if (stsel) stsel.onchange = () => { XSTATE.station = stsel.value; xpUpdateCount(); };
+  const pf = $("#xpfrom");
+  if (pf) pf.onchange = () => { XSTATE.pfrom = pf.value || ""; xpUpdateCount(); };
+  const pt = $("#xpto");
+  if (pt) pt.onchange = () => { XSTATE.pto = pt.value || ""; xpUpdateCount(); };
   host.querySelectorAll("[data-xdp]").forEach(b => b.onclick = () => {
     const p = String(b.dataset.xdp).split("|");
     xpDatePreset(p[0], p[1]); renderExportWindow();
@@ -5098,6 +5316,7 @@ function xpWire(host) {
 async function xpDownload() {
   if (XBUSY) return null;
   if (XSTATE.template === "john") return null;     // that file is built by the notes window
+  if (XSTATE.template === "station") return await stationReportDownload();
   const ctx = xpCtxNow(), f = XSTATE.f;
   const jobs = exportJobs(ctx, f);
   const rows = exportRows(jobs, XSTATE.fields, ctx);
@@ -5127,6 +5346,50 @@ async function xpDownload() {
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);
     }
     noteChange("(export)", "Export", exportLogFrom(XSTATE.format, jobs.length), filtersSummary(f, BLOCKNAMES));
+    toast("Downloading " + name);
+  } catch (e) {
+    name = null;
+    toast("Export failed: " + ((e && e.message) || String(e)).slice(0, 160), true);
+  }
+  XBUSY = false;
+  if ($("#xdl")) $("#xdl").textContent = "Download";
+  xpUpdateCount();
+  return name;
+}
+
+/** Build the station report, hand it over, then write the one log line - the
+    same order and the same rule as every other export: nothing is claimed to
+    have been exported until the bytes have been handed over.
+
+    Rule 3 is kept inside stationReport (free text goes through ST.stripContact
+    on its way into the file) and by there being no column here for a phone
+    number, an eircode or an address in the first place. */
+async function stationReportDownload() {
+  const pick = stationReportPick(XSTATE.station);
+  if (!pick) return null;
+  const period = xpPeriodNow();
+  const data = stationReportData(pick);
+  const buildEl = $("#build");
+  data.who = xpWhoName();
+  data.when = new Date();
+  data.build = buildEl ? String(buildEl.textContent || "").replace("build ", "").trim() : "";
+  let sheets = [];
+  try { sheets = stationReport(pick.def, pick.stage, data, period); }
+  catch (e) { toast("Report failed: " + ((e && e.message) || String(e)).slice(0, 160), true); return null; }
+  XBUSY = true; xpUpdateCount();
+  const btn = $("#xdl");
+  if (btn) btn.textContent = "Building…";
+  let name = null;
+  try {
+    name = stationReportFilename(pick.def, pick.stage, period, "xlsx");
+    const wb = buildStationWorkbook(sheets, { when: data.when });
+    const buf = await wb.xlsx.writeBuffer();
+    downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);
+    const jobs = sheets.find(s => s.name === "Jobs");
+    const words = pick.label + " · " + (period.from || "start") + " to " + (period.to || "today");
+    noteChange("(export)", "Export",
+               exportLogFrom("xlsx", (jobs && jobs.rows.length) || 0, "station", words),
+               sheets.map(s => s.name + " " + (s.rows || []).length).join("; "));
     toast("Downloading " + name);
   } catch (e) {
     name = null;
@@ -5673,6 +5936,24 @@ function renderChips() {
   logb.id = "logbtn";
   logb.onclick = () => openStationLog("");
   c.appendChild(logb);
+
+  /* the cutter's end-of-day sheets, beside the log they belong with. It is
+     only offered where a station-stage actually has one - which comes off the
+     definitions, so a second one appears here by being defined (2026-09-21) */
+  if (typeof ST !== "undefined" && dayStage()) {
+    const db = mk("button", "chip", "Day sheets");
+    db.id = "daysheetbtn";
+    db.onclick = () => openDaySheets();
+    c.appendChild(db);
+  }
+  /* a full report of whichever station's board is on screen, with that station
+     already picked in the export window */
+  if (typeof STATIONS !== "undefined" && STATIONS.some(b => b[0] === state.board)) {
+    const rb = mk("button", "chip", "Report");
+    rb.id = "reportbtn";
+    rb.onclick = () => openStationReport(state.board);
+    c.appendChild(rb);
+  }
 
   const catsBtn = mk("button", "chip", "Categories…");
   catsBtn.onclick = () => renderCatMenu(catsBtn);
@@ -6323,7 +6604,7 @@ function stationBoardHtml() {
      own screen: the two boards are read side by side over the phone */
   const order = board.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
   notesUnreadFresh();                  // the cards carry the same icon the rows do
-  return trouble + order.map(g => {
+  return trouble + dayWeekLineHtml() + order.map(g => {
     const last = ST.logLast(log, g.job);
     /* the head opens the job's drawer - but only for a job still on the sheet.
        A board job that has left production has no drawer to open, so it is not
@@ -6353,6 +6634,8 @@ function stationBoardHtml() {
     which is why the head's listener steps aside for it. */
 function wireStationBoard(host) {
   if (!host || !host.querySelectorAll) return;
+  const wk = host.querySelector ? host.querySelector("#stweekbtn") : null;
+  if (wk) wk.onclick = () => openDaySheets();
   (host.querySelectorAll("[data-gact]") || []).forEach(el => {
     el.onclick = ev => {
       if (ev && ev.stopPropagation) ev.stopPropagation();
@@ -6502,6 +6785,274 @@ function paintStationLog() {
     if (host) host.remove();
     state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer();
   });
+}
+
+/* ---- the day sheets window --------------------------------------------------
+   The cutter's end-of-day sheets, by date, by weekday and by week, measured
+   against the weekly target the office sets from here (2026-09-21). Built like
+   the Floor log window - one shell, repainted rows, filters that a poll cannot
+   take out from under somebody's fingers.
+
+   TWO WRITES, and rule 2's new dated exception is exactly these two: the
+   office upserts `Station targets`, and may PATCH a day sheet's counts and its
+   note. Both leave one `Dashboard Log` line. Neither deletes anything, neither
+   writes `Station log`, and nothing here goes near the workbook.            */
+const DAY_PAGE = 100;
+let DAYF = null;                  // the window's filters, while it is open
+let DAYEDIT = "";                 // the row being corrected, if any
+let dayWriting = false;           // a write is in flight: the buttons wait
+
+/** Monday of last week to today - "this week and last", the window's default. */
+function dayDefaultFilters() {
+  const today = ST.dayKey(new Date());
+  const mon = ST.isoWeek(today).monday;
+  const from = ST.dayKey(new Date(Date.parse(mon + "T12:00:00Z") - 7 * 86400000));
+  return { from: from, to: today, weekday: "", week: "", who: "", show: DAY_PAGE };
+}
+const dayStageWords = () => (ST.GLASS.stageLabel ? ST.GLASS.stageLabel(dayStage()) : dayStage());
+
+function openDaySheets() {
+  DAYF = dayDefaultFilters();
+  DAYEDIT = "";
+  renderDaySheets();
+  stationTick();                  // somebody is looking at the floor now: poll fast
+}
+
+function renderDaySheets() {
+  if (typeof ST === "undefined" || !dayStage()) return;
+  let host = $("#dayhost");
+  if (!host) { host = document.createElement("div"); host.id = "dayhost"; document.body.appendChild(host); }
+  if (!DAYF) DAYF = dayDefaultFilters();
+  dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); });
+
+  const rows = DAY_OK === true ? dayRowsNow() : [];
+  const names = {}, weeks = {};
+  rows.forEach(r => { if (r.who) names[r.who] = 1; if (r.week) weeks[r.week] = r.monday; });
+  const opt = (v, label, now) => '<option value="' + esc(v) + '"' + (now === v ? " selected" : "") +
+    '>' + esc(label) + '</option>';
+  const t = dayTargetNow();
+  const unit = (daySheetNow() || {}).unit || "sheets";
+
+  host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="logwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">' +
+      esc(ST.STATION_NAME + " " + dayStageWords().toLowerCase() + " day sheets") + '</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px"><span id="dscount"></span> · ' +
+      'filled in on the tablet at the end of each day. The office is the only one who can correct ' +
+      'a saved sheet — the Excel file is not involved.</div></div>' +
+      '<button class="ghost" id="dsclose">Close</button></div>' +
+    '<div class="lgbar">' +
+      '<span class="kick">Weekly ' + esc(dayStageWords().toLowerCase()) + ' target</span>' +
+      '<input class="txt" id="dstarget" type="number" min="0" step="1" style="width:110px" value="' +
+        esc(t ? String(t.target) : "") + '"' + (TARGET_OK === false ? " disabled" : "") + '>' +
+      '<button class="chip" id="dstsave"' + (TARGET_OK === false ? " disabled" : "") + '>Save target</button>' +
+      '<span style="font-size:12px;color:var(--ink-4)">' + esc(TARGET_OK === false
+        ? (TARGET_WHY || ST.TARGET_MISSING_OFFICE)
+        : t ? "set by " + t.by + " on " + String(t.at).slice(0, 10) : "no target set yet") + '</span>' +
+    '</div>' +
+    '<div class="lgbar">' +
+      '<input class="txt" id="dsfrom" type="date" value="' + esc(DAYF.from || "") + '" aria-label="from">' +
+      '<span style="font-size:12px;color:var(--ink-4)">to</span>' +
+      '<input class="txt" id="dsto" type="date" value="' + esc(DAYF.to || "") + '" aria-label="to">' +
+      '<select class="txt" id="dsdow">' + opt("", "Every weekday", DAYF.weekday) +
+        ST.DAY_NAMES.map((d, i) => opt(String(i), d, DAYF.weekday)).join("") + '</select>' +
+      '<select class="txt" id="dsweek">' + opt("", "Every week", DAYF.week) +
+        Object.keys(weeks).sort().reverse().map(w =>
+          opt(w, w + " (from " + weeks[w] + ")", DAYF.week)).join("") + '</select>' +
+      '<select class="txt" id="dswho">' + opt("", "Everyone", DAYF.who) +
+        Object.keys(names).sort().map(nm => opt(nm, nm, DAYF.who)).join("") + '</select>' +
+      '<button class="chip" id="dsclear">Clear filters</button>' +
+    '</div>' +
+    '<div class="logbody" id="dsbody"></div>' +
+    '<div class="foot"><span>One sheet per person per day — ' + esc(unit) +
+      ' cut, and anything that got in the way</span>' +
+    '<span>Corrections are logged in Dashboard Log</span></div></div>';
+
+  $("#dscrim").onclick = closeWin(host);
+  $("#dsclose").onclick = closeWin(host);
+  const set = (id, key) => { const el = $(id); if (el) el.onchange = () => { DAYF[key] = el.value; DAYF.show = DAY_PAGE; paintDaySheets(); }; };
+  set("#dsfrom", "from"); set("#dsto", "to"); set("#dsdow", "weekday");
+  set("#dsweek", "week"); set("#dswho", "who");
+  const cl = $("#dsclear");
+  if (cl) cl.onclick = () => { DAYF = dayDefaultFilters(); renderDaySheets(); };
+  const ts = $("#dstsave");
+  if (ts) ts.onclick = () => {
+    const box = $("#dstarget");
+    saveDayTarget(box ? box.value : "").catch(e => console.warn("[station] " + ((e && e.message) || e)));
+  };
+  paintDaySheets();
+  renderFab();                 // a window is open: the wheel steps aside
+}
+
+/** The rows and the week subtotals, and nothing else on the window. */
+function paintDaySheets() {
+  if (!$("#dayhost")) return;
+  const counts = dayCountCols();
+  const all = DAY_OK === true ? dayRowsNow() : [];
+  const rows = ST.dayRows(DAY_ITEMS || [], counts,
+    { station: ST.STATION_NAME, stage: dayStage(), from: DAYF.from, to: DAYF.to,
+      weekday: DAYF.weekday, week: DAYF.week, who: DAYF.who });
+  const live = dayTargetNow();
+  const weeks = ST.dayWeeks(rows, counts, live ? live.target : null);
+  const head = $("#dscount");
+  if (head) head.textContent = rows.length + " sheet" + (rows.length === 1 ? "" : "s") +
+    (all.length !== rows.length ? " of " + all.length : "");
+
+  const cell = (t, cls) => '<span class="' + (cls || "") + '">' + esc(t) + '</span>';
+  const rowHtml = r => {
+    if (DAYEDIT === r.id) {
+      return '<div class="dsrow editing">' +
+        cell(r.day + " · " + r.weekday.slice(0, 3), "dsday") + cell(r.who, "dswho") +
+        counts.map(c => '<input class="txt dsedit" data-dsc="' + esc(c[0]) + '" type="number" min="0" step="1" ' +
+          'value="' + esc(String(r.counts[c[0]] || 0)) + '" aria-label="' + esc(c[1]) + '">').join("") +
+        '<span class="dstot tab">' + r.total + '</span>' +
+        '<input class="txt dsedit dsnote" data-dsnote="1" value="' + esc(r.note) + '" ' +
+          'maxlength="' + ST.DAY_NOTE_MAX + '" aria-label="note">' +
+        '<span class="dsacts"><button class="chip" data-dssave="' + esc(r.id) + '"' +
+          (dayWriting ? " disabled" : "") + '>Save</button>' +
+          '<button class="chip" data-dscancel="1">Cancel</button></span></div>';
+    }
+    return '<div class="dsrow">' +
+      cell(r.day + " · " + r.weekday.slice(0, 3), "dsday") + cell(r.who, "dswho") +
+      counts.map(c => '<span class="dsnum tab">' + (r.counts[c[0]] || 0) + '</span>').join("") +
+      '<span class="dstot tab">' + r.total + '</span>' +
+      '<span class="dsnotetext">' + esc(r.note) + '</span>' +
+      '<span class="dsacts"><span class="dswhen">' + esc(String(r.savedAt).slice(11, 16)) +
+        (r.editedBy ? ' · edited by the office (' + esc(r.editedBy) + ')' : "") + '</span>' +
+        '<button class="chip" data-dsedit="' + esc(r.id) + '">Edit</button></span></div>';
+  };
+
+  let shown = 0;
+  const body = DAY_OK === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
+    : DAY_OK !== true ? '<div class="empty" style="line-height:1.6">' +
+        esc(DAY_WHY || ST.DAY_MISSING_OFFICE) + '</div>'
+    : !rows.length ? '<div class="empty">No day sheet matches that.</div>'
+    /* how many count columns this station's definition has, handed to the CSS
+       once: the grid is the same shape for a station with three or with five */
+    : '<div class="dslist" style="--dsn:' + counts.length + '">' + weeks.map(g => {
+        const mine = g.rows.slice(0, Math.max(0, DAYF.show - shown));
+        shown += mine.length;
+        if (!mine.length) return "";
+        return '<div class="dsweek"><span class="cond">' + esc(g.week) + '</span>' +
+            '<span class="dswk2">week of ' + esc(g.monday) + '</span></div>' +
+          mine.map(rowHtml).join("") +
+          '<div class="dssub">' +
+            '<span class="dsday">Week total</span><span class="dswho"></span>' +
+            counts.map(c => '<span class="dsnum tab">' + g.counts[c[0]] + '</span>').join("") +
+            '<span class="dstot tab">' + g.total + '</span>' +
+            '<span class="dsnotetext">' + (g.target == null ? "no target set"
+              : "target " + g.target + " · " +
+                (g.diff >= 0 ? "+" + g.diff : String(g.diff))) + '</span>' +
+            '<span class="dsacts"></span></div>';
+      }).join("") + (shown < rows.length
+        ? '<button class="ghost lgmore" id="dsmore">Show more (' + (rows.length - shown) + ' left)</button>'
+        : "") + '</div>';
+
+  const box = $("#dsbody");
+  if (!box) return;
+  box.innerHTML = body;
+  const more = $("#dsmore");
+  if (more) more.onclick = () => { DAYF.show += DAY_PAGE; paintDaySheets(); };
+  (box.querySelectorAll("[data-dsedit]") || []).forEach(b =>
+    b.onclick = () => { DAYEDIT = b.dataset.dsedit; paintDaySheets(); });
+  (box.querySelectorAll("[data-dscancel]") || []).forEach(b =>
+    b.onclick = () => { DAYEDIT = ""; paintDaySheets(); });
+  (box.querySelectorAll("[data-dssave]") || []).forEach(b => b.onclick = () => {
+    if (b.disabled) return;
+    const row = b.parentElement && b.parentElement.parentElement;
+    const got = { counts: {}, note: "" };
+    (row && row.querySelectorAll ? row.querySelectorAll("[data-dsc]") : []).forEach(i => {
+      got.counts[i.dataset.dsc] = i.value;
+    });
+    const nb = row && row.querySelector ? row.querySelector("[data-dsnote]") : null;
+    got.note = nb ? nb.value : "";
+    saveDayEdit(b.dataset.dssave, got).catch(e => console.warn("[station] " + ((e && e.message) || e)));
+  });
+}
+
+/** The office's weekly target: one upsert of `Station targets`, one log line.
+    The office is the only writer of this list, and the tablet reads it. */
+async function saveDayTarget(raw) {
+  if (typeof ST === "undefined" || !CW || !CW.listUpsert || !dayStage()) return false;
+  const n = ST.dayCount(raw);
+  if (n == null) { toast("A target is a whole number of sheets.", true); return false; }
+  if (dayWriting) return false;
+  const had = dayTargetNow();
+  if (had && had.target === n) return false;         // nothing to say
+  dayWriting = true;
+  try {
+    const siteId = await CW.stationSite(glassSite());
+    if (!siteId) throw new Error(STATION_SITE_MISSING);
+    const title = ST.targetTitle(ST.STATION_NAME, dayStage());
+    await CW.listUpsert(ST.TARGET_LIST, title,
+                        ST.targetFields(n, feedWho(), new Date().toISOString()),
+                        { siteId: siteId, fields: ST.TARGET_FIELDS });
+    dayWriting = false;
+    await readDaySheets();
+    renderDaySheets();
+    noteChange("(" + ST.STATION_NAME + " " + dayStage() + ")",
+               dayStageWords() + " weekly target", had ? String(had.target) : "", String(n));
+    toast("Weekly target saved");
+    return true;
+  } catch (e) {
+    dayWriting = false;
+    toast("That target could not be saved. " + friendly(e), true);
+    renderDaySheets();
+    return false;
+  }
+}
+
+/** The office's correction of one saved sheet: a PATCH of the counts, the note
+    and the two Edited columns - and of nothing else, because that is all
+    ST.dayOfficeFields can build. One `Dashboard Log` line, old → new totals.
+    There is no delete on this path and none anywhere in this feature. */
+async function saveDayEdit(id, got) {
+  if (typeof ST === "undefined" || !CW || !CW.listPatch || !dayStage()) return false;
+  if (dayWriting) return false;
+  const row = dayRowsNow().find(r => r.id === String(id));
+  if (!row) return false;
+  const counts = dayCountCols();
+  const body = ST.dayOfficeFields(counts, { counts: got.counts, note: got.note,
+                                            who: feedWho(), at: new Date().toISOString() });
+  if (!body) { toast("Whole numbers only — no minus signs and no decimals.", true); return false; }
+  dayWriting = true;
+  paintDaySheets();
+  try {
+    const siteId = await CW.stationSite(glassSite());
+    if (!siteId) throw new Error(STATION_SITE_MISSING);
+    await CW.listPatch(ST.DAY_LIST, row.id, body,
+                       { siteId: siteId, fields: ST.dayFieldsFor(ST.GLASS, dayStage()) });
+    dayWriting = false;
+    DAYEDIT = "";
+    await readDaySheets();
+    paintDaySheets();
+    const after = counts.reduce((n, c) => n + (Number(body[c[0]]) || 0), 0);
+    noteChange("(" + ST.STATION_NAME + " " + dayStage() + ")", "Day sheet corrected",
+               row.day + " " + row.who + ": " + row.total, String(after));
+    toast("Day sheet corrected");
+    return true;
+  } catch (e) {
+    dayWriting = false;
+    toast("That correction could not be saved. " + friendly(e), true);
+    paintDaySheets();
+    return false;
+  }
+}
+
+/** "This week: N of T sheets" - one line under the head of the station board,
+    for the stage that has a day sheet. It is the whole floor's week, not one
+    person's: the office reads the station, not the cutter. */
+function dayWeekLineHtml() {
+  if (typeof ST === "undefined" || !dayStage()) return "";
+  dayReadIfNeeded(() => { if (state.board === "glass") redrawStation(); });
+  if (DAY_OK !== true) return "";
+  const wk = ST.isoWeek(ST.dayKey(new Date()));
+  const done = ST.dayWeekTotal(dayRowsNow(), "", wk.key);
+  const t = dayTargetNow();
+  const unit = (daySheetNow() || {}).unit || "sheets";
+  return '<div class="stweek">' + esc(dayStageWords()) + ' this week: <strong class="tab">' + done +
+    '</strong>' + (t ? ' of <strong class="tab">' + t.target + '</strong>' : "") + ' ' + esc(unit) +
+    (t ? "" : " · no target set") +
+    ' <button class="chip" id="stweekbtn">Day sheets</button></div>';
 }
 
 function renderRows() {
@@ -7689,6 +8240,7 @@ async function start() {
     if (e.key === "Escape" && $("#nhost")) { closeNotesWindow(); return; }
     if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#lhost")) { $("#lhost").remove(); renderFab(); return; }
+    if (e.key === "Escape" && $("#dayhost")) { $("#dayhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
   });

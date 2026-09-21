@@ -59,7 +59,7 @@
            background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
            padding:8px 16px; min-height:40px; display:flex; align-items:center }
   #whois:empty { display:none }
-  #switchbtn, #stagebtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+  #switchbtn, #stagebtn, #daybtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600 }
   /* which of the two glass tablets this is. Tapped rarely and by the office,
      so it sits quietly beside the name rather than competing with it. */
@@ -183,6 +183,46 @@
   .cmsend:disabled { opacity:.4; cursor:default }
   .cmhint { font-size:12.5px; color:var(--ink-3); line-height:1.5; margin-bottom:10px }
 
+  /* ---- the end-of-day sheet (2026-09-21) --------------------------------
+     The cutter's paper sheet. One full-width column, portrait, never a
+     sideways scroll: a label above its box rather than beside it, so a long
+     question ("Other obscure sheets cut") never squeezes the number. 16px in
+     every box, for the same reason the search box is - anything smaller and
+     iOS zooms the page in on focus and a wall-mounted tablet cannot zoom out. */
+  .dayform, .dayread { display:grid; gap:12px; margin-top:6px }
+  .dayrow { display:grid; gap:5px }
+  .dayl { font-size:14px; color:var(--ink-2) }
+  .dayv { font-size:20px; font-weight:700 }
+  .daybox { width:100%; min-height:56px; border:1px solid var(--line); border-radius:7px;
+            background:var(--surface-2); color:var(--ink); font-size:20px; font-weight:600;
+            font-family:inherit; padding:0 13px }
+  .daytext { width:100%; min-height:80px; border:1px solid var(--line); border-radius:7px;
+             background:var(--surface-2); color:var(--ink); font-size:16px; font-family:inherit;
+             padding:10px 11px; resize:vertical }
+  .daytot { font-size:17px; color:var(--ink-2); margin-top:4px }
+  .daytot strong, .dayweek strong { color:var(--ink); font-size:20px }
+  .dayweek { font-size:15px; color:var(--ink-3) }
+  .daybar { height:10px; border-radius:6px; background:var(--surface-2);
+            border:1px solid var(--line-soft); overflow:hidden }
+  .daybar span { display:block; height:100%; background:var(--done) }
+  .daybad { font-size:13.5px; font-weight:600; color:var(--urgent) }
+  .daysave { min-height:60px; border:1px solid var(--line); border-radius:8px;
+             background:var(--surface-2); color:var(--ink); font-size:18px; font-weight:600 }
+  .daysave:active { background:var(--line-soft) }
+  .daysave:disabled { opacity:.4; cursor:default }
+  .daysaid { font-size:13.5px; color:var(--ink-3); margin-top:2px }
+  .daysaid.owed { color:var(--fab); font-weight:600 }
+  .daynote { font-size:14px; line-height:1.45; white-space:pre-wrap; color:var(--ink-2);
+             background:var(--surface-2); border:1px solid var(--line-soft); border-radius:6px;
+             padding:9px 11px }
+  .dayhist { margin-top:22px; display:grid; gap:7px }
+  .dayhist .kick { font-size:11px; letter-spacing:.15em; text-transform:uppercase;
+                   font-weight:600; color:var(--ink-4) }
+  .dayline { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; font-size:13px;
+             color:var(--ink-3); border-bottom:1px solid var(--line-soft); padding-bottom:6px }
+  .daylday { font-weight:600; color:var(--ink-2) }
+  .dayltot { margin-left:auto; font-size:16px; font-weight:700; color:var(--ink) }
+
   /* ---- who are you? ---- */
   .picker { max-width:560px; margin:0 auto; padding:18px 4px 40px }
   .pickh { font-family:"Barlow Condensed",sans-serif; font-size:34px; font-weight:700;
@@ -233,6 +273,7 @@
   <button id="stagebtn" hidden></button>
   <span id="whois"></span>
   <button id="switchbtn" hidden>Switch person</button>
+  <button id="daybtn" hidden>End of day</button>
   <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
   <span id="gtotal" hidden></span>
   <span id="upd"></span>

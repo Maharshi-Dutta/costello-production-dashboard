@@ -336,6 +336,64 @@ enforce-unique-values on Title — this list is a log, like `Station log`, not a
 upsert target like `Glass station`. It starts empty. Until it exists, both
 screens say so plainly and nothing is written anywhere.
 
+### `Station day sheets`
+
+Added 2026-09-21 (spec:
+[`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](specs/2026-09-21-day-sheets-and-station-reports.md)).
+One row per **person per station-stage per day**: the cutter's paper
+"Glass cutting work sheet", on the tablet. Written by a floor tablet, one POST
+at the end of the day; the office reads it, may correct it, and never deletes.
+
+Like the three lists above it is **every** station's — which stage has a sheet,
+and what is counted on it, is the station **definition**'s business
+(`ST.GLASS.daySheets`), not this list's. Today only `Glass` · `cut` has one.
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| Title | text, **unique** | tablet | `<Station>\|<Stage>\|<YYYY-MM-DD>\|<Who>` — the key. A second save for the same key is refused by SharePoint as well as by the page |
+| Station | text | tablet | `Glass` |
+| Stage | text | tablet | `cut` |
+| Day | text | tablet | `YYYY-MM-DD`, the tablet's **local** date at save |
+| Who | text | tablet | the person signed in at the picker |
+| Clear, KGlass, Satin, Obscure | number | tablet; office on a correction | sheets cut, whole numbers ≥ 0; blank on paper is 0 |
+| Note | multiple lines of text | tablet; office on a correction | the free-text line, 500 characters at most |
+| WeekTarget | number | tablet | the weekly target in force when the row was saved, so an old week stays true after the target changes. Not written at all when no target is set |
+| SavedAt | text | tablet | ISO timestamp |
+| EditedBy, EditedAt | text | office | set only when the office corrects the row |
+
+**Append-only from the tablet**: one POST, no PATCH, no DELETE, ever. **The
+office may PATCH `Clear`, `KGlass`, `Satin`, `Obscure`, `Note`, `EditedBy` and
+`EditedAt` and nothing else** — the proof is the shape of
+`ST.dayOfficeFields(counts, e)`, which takes counts, a note, a name and a time,
+so there is no argument that could carry a Day, a Who or a Title in. Every
+correction leaves one `Dashboard Log` line and **no `Station log` line**.
+
+**Creating it** (the owner, once): a plain list named exactly `Station day
+sheets`, in the same site the other floor lists are in, with `Station`,
+`Stage`, `Day`, `Who`, `SavedAt`, `EditedBy`, `EditedAt` as **Single line of
+text**, `Note` as **Multiple lines of text** (plain text), and `Clear`,
+`KGlass`, `Satin`, `Obscure`, `WeekTarget` as **Number** (0 decimal places).
+Then turn **enforce unique values on `Title`** — that is what makes a second
+save of the same person-day impossible from two tablets at once. It starts
+empty. Until it exists both screens say so plainly and nothing is written.
+
+### `Station targets`
+
+Added 2026-09-21, beside the one above. One row per station-stage: the weekly
+target the office sets. **The office is its only writer**; every tablet reads it
+and can never write it.
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| Title | text, unique | office | `<Station>\|<Stage>`, e.g. `Glass\|cut` |
+| WeeklyTarget | number | office | total sheets per week — one number, not one per glass type and not one per day (owner's decision 1) |
+| SetBy, SetAt | text | office | who set it, when |
+
+**Creating it**: a plain list named exactly `Station targets`, same site, with
+`WeeklyTarget` as **Number** (0 decimals) and `SetBy`, `SetAt` as **Single line
+of text**; enforce unique values on `Title`. It starts empty, and "no target
+set" is a state both screens say in those words rather than showing "of 0".
+
 ## What the office sees
 
 From the master dashboard's "Sheet" dropdown (next to the search box),
@@ -361,6 +419,26 @@ counters. A job the office has ticked off shows its steppers disabled — *"glas
 complete — clear it in the job card"*. Clicking a card's head opens that job's
 drawer, unless the job has left the sheet, in which case there is no drawer to
 open and the head is not clickable.
+
+**The day sheets** (2026-09-21) have a chip of their own beside **Floor log**,
+and the Glass station board carries a line under its head: "Cutting this week:
+N of 250 sheets". The window shows one row per saved sheet — day, weekday,
+person, the four counts, the total, the note, when it was saved, and "edited by
+the office" where it was — grouped by ISO week (Monday to Sunday, `2026-W39`)
+newest week first, each week with a subtotal row carrying its **own** target and
+the difference. The target at the top of the window is the office's to set; it
+writes `Station targets` and logs "Cutting weekly target", from → to. **Edit**
+on a row opens the counts and the note, and Save logs "Day sheet corrected".
+There is no delete anywhere on either path.
+
+**Report** (2026-09-21) is the chip beside them on any station's board: it opens
+the Export window on the **Station report** template with that station already
+picked. One template for every station, present and future — pick a
+station-stage and a period (this week, last week, this month, custom dates) and
+the file comes out with a Summary (a line per ISO week), Days, Jobs, Activity
+and Notes, each sheet left out when there is nothing for it. Excel only for now.
+Free text is stripped of anything that could be a phone number or an eircode on
+its way into the file, and every report writes the usual `Dashboard Log` line.
 
 Opening a job's **drawer** (from the ordinary job list) shows a "Glass
 station" section under "Glass units" with the same three lines, and under them
@@ -571,6 +649,10 @@ own rules, never inside `station-core.js`:
 | `feederOf(row)` | one slice row's job facts, in list shape |
 | `seedOf(row)` | one slice row's seed, in list shape |
 | `hashOf(row)` | everything about a row worth re-feeding for |
+| `stageLabel(stage)` | the word a stage is called by, for headings and reports |
+| `daySheets` | *optional* (2026-09-21). `{ <stage>: { counts: [[column, question], …], unit } }` — the end-of-day sheet this stage asks for. **A stage with no entry gets no button, reads neither day-sheet list and sends no request for either.** That one line of definition is the whole of switching it on |
+| `reportStages` | which stages a **station report** may be run for (glass: `cut`, `hotmelt` — not `tuff`, which is a counter rather than a station somebody reports on) |
+| `reportJobs(data, stage)` | the report's **Jobs** sheet, as `{ columns, rows, jobs }` — the adapter. Glass answers one row per job; welding answers one row per job **and product group**. `jobs` is the same rows read as `{job, done, total}`, which is all the Summary needs. It is the only reason `stationReport` needs no branch per station |
 
 `ST.GLASS` (in `station-core.js`) and `WELDC.WELD` (in `welding-core.js`) are
 the two that exist. `ST.feedPlan`, `ST.sliceHash` and `ST.floorOnly` take one;

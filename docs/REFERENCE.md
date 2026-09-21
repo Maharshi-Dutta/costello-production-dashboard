@@ -1699,3 +1699,145 @@ clamp, its five-field PATCH, its `Dashboard Log` line, its silence in
 - A glazing station. The owner will brief it separately.
 - The move of the glass lists to `Floor stations`: `ST.GLASS.site` is still
   `"own"` and that one word is still the whole of the move (§21).
+
+## 23. The end-of-day sheet, a weekly target, and a report for every station
+
+Built 2026-09-21. Spec:
+[`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](specs/2026-09-21-day-sheets-and-station-reports.md).
+Builds on §22.
+
+**What it is.** The cutter fills in a paper work sheet every day — name, day,
+four numbers, and a line when something got in the way ("air for cutting not
+working 9:20–11:21"). That sheet is now on the Cutting tablet, the entries are
+in SharePoint, the office reads them by date, weekday and week against a
+**weekly target it sets**, and any station's whole record can be exported.
+
+### Two new lists, and where they live
+
+`Station day sheets` (one row per person per station-stage per day) and
+`Station targets` (one row per station-stage). Both are resolved through the
+station definition's `site`, exactly like the station's other lists — so when
+the glass lists move to `Floor stations` these move with them and no code
+changes. Columns and the owner's creation recipe: `docs/STATIONS.md`.
+
+**No list is created by code.** Until they exist both screens say which list is
+missing, plainly, and write nothing; each asks again on its own clock (one
+minute after a dropped connection, five after "there is no such list"), so the
+morning the owner makes them every open screen picks them up without a reload.
+
+### Switched on by the definition, not by the page
+
+`ST.GLASS.daySheets` is `{ cut: { counts: [["Clear", "Clear glass sheets cut"],
+…], unit: "sheets" } }`. `ST.daySheetOf(def, stage)` answers with that or with
+nothing, and **nothing** — the header button, the reads, the office window, the
+report's day-sheet columns — happens for a stage that answers nothing. There is
+no `if (stage === "cut")` anywhere in `station.js`. Hotmelting or welding get a
+sheet by gaining one line of definition.
+
+### The tablet (Cutting only, today)
+
+A header button **End of day** opens the sheet in the board's place: one
+full-width column, portrait, 16px boxes (`inputmode="numeric"`), nothing under
+44 px and no sideways scroll. The person's name, the weekday and the date are
+at the top and not editable; under the four boxes and the note, "Today: N
+sheets" and "This week: N of T" with a bar — N being this person's saved sheets
+this ISO week **plus what is typed now**, T the target, or "no target set" in
+those words rather than "of 0".
+
+- **A draft survives a poll and a reload** (`cw_daysheetdraft`) and is dropped
+  at the change of day: yesterday's typing is not today's sheet.
+- **Save asks once** ("It cannot be changed from the tablet afterwards"),
+  queues one row (`cw_stationdayq`) and sends it through the page's existing
+  queue — so offline it says "waiting to send" and goes when the wifi is back.
+  Re-opening later that day shows the saved sheet read-only, with
+  "saved 17:02 — ask the office to correct a mistake"; the next day it is a
+  blank form again.
+- **A count that is not a whole number is refused at the form**, not rounded:
+  `ST.dayFields` answers null for a minus, a decimal or a word, so there is
+  nothing to queue and nothing to send.
+- **A unique-value refusal means ALREADY SAVED, never an error.** A second
+  tablet on the same key, or this tablet replaying a row whose answer was lost,
+  makes `flushDay` read the list back; if the row is there the owed item is let
+  go and the saved sheet is what the person sees.
+- The person's last seven saved days are listed under the form, read-only.
+
+The tablet POSTs and reads. It never PATCHes or DELETEs either list, and it can
+never write `Station targets` at all.
+
+### The office
+
+A **Day sheets** chip beside Floor log, and a line under the Glass station
+board's head ("Cutting this week: N of T sheets"). The window is the Floor log
+window's shell: filters that a poll cannot take out from under somebody's
+fingers, "Show more" paging, rows grouped by ISO week newest first, each week
+with a subtotal carrying **its own stored `WeekTarget`** and the difference — so
+changing the target today cannot rewrite what last week was measured against.
+A week with no stored target falls back to the live one, which is what the
+current week needs before anybody has saved a sheet in it.
+
+**Two writes, and they are the whole of the new rule-2 exception:**
+
+| write | body | log |
+|---|---|---|
+| the weekly target | `CW.listUpsert` of `Station targets` with `ST.targetFields(n, who, at)` — a number, a name and a time | one `Dashboard Log` line, "Cutting weekly target", from → to |
+| a correction | `CW.listPatch` of one `Station day sheets` row with `ST.dayOfficeFields(counts, e)` — the counts, the note, `EditedBy`, `EditedAt`, and nothing else | one `Dashboard Log` line, "Day sheet corrected", the day and person, old → new total |
+
+Neither writes `Station log`. Neither deletes anything. Neither goes near the
+workbook.
+
+### The station report
+
+A third export template beside Default and the John print sheet, reached from
+the **Report** chip on a station board (with that station preselected) or from
+the Export window's Template row. Inputs: a station-stage and a period (this
+week, last week, this month, custom). Excel only; PDF is not built.
+
+`stationReport(def, stage, data, period)` in `export.js` is pure and **has no
+station-specific branch in it**. Everything a station says about itself comes
+off its definition: `def.name`, `def.stageLabel(stage)`, `ST.daySheetOf(def,
+stage)` for the counts, and `def.reportJobs(data, stage)` — the adapter, which
+is `ST.glassReportJobs` (one row per job) and `WELDC.weldReportJobs` (one row
+per job **and product group**, frames and sashes as the board shows them). The
+other four sheets are built from the three lists every station already shares.
+
+| sheet | what is on it | left out when |
+|---|---|---|
+| Summary | station, stage, period, who and when; then a line per ISO week: units recorded, jobs touched, jobs complete at this stage, and — for a stage with a day sheet — the counts, the total, the target and the difference | never (an empty period gets a Summary saying so) |
+| Days | a row per day: units recorded and by whom; for a day-sheet stage the four counts, the total, the note and whether the office corrected it | no log line and no sheet in the period |
+| Jobs | the station's own adapter's answer | the board is empty |
+| Activity | the `Station log` lines in the period, oldest first, with a note row saying the office's own edits are in `Dashboard Log` | no lines |
+| Notes | `Station comments` in the period: when, who, job, text | no notes |
+
+**Rule 3.** The two free-text columns — a day sheet's note and a floor note —
+go through `ST.stripContact` on their way into the file. That is the strip
+`welding-core.js` has used for the COMMENT column since 2026-09-16, **moved to
+`station-core.js` on 2026-09-21** so it has one home: `weldStripDigits` is now a
+call to it with the comment's own cap, welding's behaviour and its 61 checks
+are unchanged, and it fails closed (no strip to hand, no free text at all).
+Nothing else in the report is free text and no sheet has a column for a phone
+number, an eircode or an address. File name: `Station report - <Station>
+<Stage> - <from> to <to>.xlsx`, and every report writes the usual
+`Dashboard Log` line through `noteChange` (`exportLogFrom(..., "station", …)`
+names the template, the station, the stage and the period).
+
+### Tests
+
+`test_daysheets.js` (40 checks), plus `test_export.js` 53 → 54 — the standing
+"no phone number and no eircode in any export" scan now builds a station report
+from fixtures that type a phone number in three written shapes and an
+address code into a day note and a floor note, and runs over the rows and over
+the real workbook. The new suite covers the row shape and the refusals, one
+save per person per day, the unique-value refusal read as already-saved, the
+offline save, the week helper across a year boundary and at 23:30 local, "this
+week N of T" including the draft, both office writes, the week subtotal's stored
+target, the filters, a missing list on both screens, all five report sheets for
+glass cutting, hotmelting without the day-sheet columns, welding's per-group
+Jobs sheet, an empty period, rule 3 in four written shapes, and the workbook
+gate over the tablet's files and over every request in the run.
+
+### Not built here
+
+- Day sheets for hotmelting or welding (one line of `daySheets` each, when the
+  owner asks and says which counts they want).
+- PDF station reports. Charts. Emailing a report. Per-day or per-glass-type
+  targets.

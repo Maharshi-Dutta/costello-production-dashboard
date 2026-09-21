@@ -484,10 +484,14 @@ function exportFilename(format, f, when, names) {
     than the Default layout; the John print sheet says out loud that the file
     it made carries phone numbers, because that is the one export that does and
     the log is where anybody looking later would go to find out. */
-function exportLogFrom(format, n, template) {
+function exportLogFrom(format, n, template, what) {
   const base = (xpLow(format) === "pdf" ? "PDF" : "Excel") + " · " + n + " job" + (n === 1 ? "" : "s");
-  if (xpLow(template) !== "john") return base;
-  return base + " · John print sheet · with phone numbers";
+  if (xpLow(template) === "john") return base + " · John print sheet · with phone numbers";
+  /* the station report names itself, its station, its stage and its period:
+     `what` is built by the caller from the same three things the file is */
+  if (xpLow(template) === "station")
+    return base + " · Station report" + (xpStr(what).trim() ? " · " + xpStr(what).trim() : "");
+  return base;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1553,6 +1557,296 @@ function buildJohnDoc(rows, opts) {
 }
 
 /* ---------------------------------------------------------------------------
+   7c. the station report - one template for every station
+
+   Shipped 2026-09-21 (docs/specs/2026-09-21-day-sheets-and-station-reports.md).
+   The owner asked for "a full report of this station" - what was recorded in
+   the period, day by day and week by week, which jobs it was on, who did it,
+   and what was said about it - and asked for it to be built ONCE, as a
+   template, so hotmelting, welding and the stations that do not exist yet get
+   the same report without a second implementation.
+
+   SO THERE IS NO STATION-SPECIFIC BRANCH IN HERE, and that is the whole design
+   rather than a tidiness: `stationReport` reads the station DEFINITION for
+   everything a station has to say about itself -
+
+     def.name                what it is called
+     def.stageLabel(stage)   what this stage is called
+     def.reportJobs(data, stage)
+                             the Jobs sheet, as { columns, rows, jobs } - the
+                             adapter. Glass's is ST.glassReportJobs (one row per
+                             job); welding's is WELDC.weldReportJobs (one row
+                             per job AND product group, frames and sashes). Each
+                             lives beside its own station's rules
+     ST.daySheetOf(def, stage)
+                             which counts this stage's end-of-day sheet has, or
+                             nothing at all
+
+   - and everything else on the report comes off the three lists every station
+   already shares: `Station log`, `Station comments` and `Station day sheets`.
+
+   RULE 3: the two free-text columns - a day sheet's note and a floor note - go
+   through ST.stripContact on their way into the file, because they are typed by
+   a person and a person can type a phone number into anything. No column here
+   is a phone number or an eircode, and there is no field, option or period that
+   could add one. Every station report writes the usual Dashboard Log line.
+
+   Plain data in, plain data out: sheets are `{ name, head, columns, rows }` and
+   nothing in this function knows what a workbook is, which is what lets
+   test_daysheets.js read the whole report without ExcelJS.                  */
+
+/** station-core.js, or a clear failure. The report cannot work out an ISO week
+    or strip a phone number without it, and guessing at either is not an option
+    rule 3 leaves open. */
+function xpStationCore() {
+  const S = (typeof ST !== "undefined" && ST) || (typeof window !== "undefined" && window.ST) || null;
+  if (!S || typeof S.isoWeek !== "function" || typeof S.stripContact !== "function")
+    throw new Error("the station report needs station-core.js");
+  return S;
+}
+/** A period with both ends filled in and a label to print. */
+function xpPeriod(p) {
+  const S = xpStationCore();
+  const from = S.dayKey(xpStr((p && p.from) || "")) || "";
+  const to = S.dayKey(xpStr((p && p.to) || "")) || "";
+  return { from: from, to: to, label: xpStr(p && p.label),
+           words: from && to ? xpNiceDate(from) + " to " + xpNiceDate(to)
+                : from ? "from " + xpNiceDate(from)
+                : to ? "up to " + xpNiceDate(to) : "every day on record" };
+}
+/** The named periods the window offers, as { from, to, label }. `now` is the
+    day they are measured from, so this is testable without a clock. */
+function stationPeriod(kind, now, from, to) {
+  const S = xpStationCore();
+  const today = S.dayKey(now || new Date());
+  const w = S.isoWeek(today);
+  const back = (day, n) => S.dayKey(new Date(Date.parse(day + "T12:00:00Z") - n * 86400000));
+  if (kind === "last") {
+    const mon = back(w.monday, 7);
+    return { from: mon, to: back(w.monday, 1), label: "Last week" };
+  }
+  if (kind === "month") return { from: today.slice(0, 8) + "01", to: today, label: "This month" };
+  if (kind === "custom") return { from: S.dayKey(xpStr(from)), to: S.dayKey(xpStr(to)), label: "Custom" };
+  return { from: w.monday, to: today, label: "This week" };
+}
+const XP_PERIODS = [["week", "This week"], ["last", "Last week"],
+                    ["month", "This month"], ["custom", "Custom dates"]];
+
+/** Is this ISO stamp inside the period? A row with no stamp at all is out: a
+    report of a fortnight must not quietly carry a line nothing can date. */
+const xpInPeriod = (at, p) => {
+  const d = xpDay(at);
+  if (!xpIsIso(d)) return false;
+  if (p.from && d < p.from) return false;
+  if (p.to && d > p.to) return false;
+  return true;
+};
+
+/** The whole report: an array of sheets, each `{ name, head, columns, rows }`,
+    each left out when the station has nothing for it. Pure.
+
+    `data` is what the office page already holds for this station:
+      board   the station's board rows, whatever its own adapter reads
+      log     ST.logRows of `Station log` for this station
+      notes   ST.commentRows of `Station comments` for this station
+      days    ST.dayRows of `Station day sheets` for this stage
+      target  the weekly target in force, or null
+      who / when / build   who pressed Download, and when                    */
+function stationReport(def, stage, data, period) {
+  const S = xpStationCore();
+  const d = def || {};
+  const D = data || {};
+  const p = xpPeriod(period);
+  const sheet = xpStr(stage).trim().toLowerCase();
+  const stageWord = typeof d.stageLabel === "function" ? xpStr(d.stageLabel(sheet)) : sheet;
+  const ds = typeof S.daySheetOf === "function" ? S.daySheetOf(d, sheet) : null;
+  const counts = ds ? ds.counts : [];
+  const unit = ds ? xpStr(ds.unit) || "sheets" : "";
+
+  /* what is in the period, and only what is in it */
+  const log = (D.log || []).filter(r => r && r.stage === sheet && xpInPeriod(r.at, p));
+  const notes = (D.notes || []).filter(r => r && xpInPeriod(r.at, p));
+  const days = (D.days || []).filter(r => r && r.stage === sheet &&
+                                          (!p.from || r.day >= p.from) && (!p.to || r.day <= p.to));
+  const jobsOut = typeof d.reportJobs === "function" ? d.reportJobs(D, sheet) : null;
+  const jobRows = (jobsOut && jobsOut.rows) || [];
+  const done = {};
+  ((jobsOut && jobsOut.jobs) || []).forEach(j => { done[j.job] = j; });
+
+  const head = [["Station", xpStr(d.name)], ["Stage", stageWord],
+                ["Period", p.words + (p.label ? "  (" + p.label + ")" : "")],
+                ["Generated", xpStamp(D.when)], ["By", xpShortWho(D.who) || "unknown"]];
+  if (D.build) head.push(["Dashboard build", xpStr(D.build)]);
+  /* worded without naming the two columns, exactly as the Default export's own
+     info sheet is, so the standing "no header says either word" test can be a
+     flat scan of every string the file carries */
+  head.push(["Contact details", "None are included in this file."]);
+
+  const out = [];
+
+  /* ---- 1. Summary: a line per ISO week in the period ---- */
+  const weeks = {}, order = [];
+  const weekOf = day => {
+    const k = S.isoWeek(day);
+    if (!k.key) return null;
+    let g = weeks[k.key];
+    if (!g) {
+      g = weeks[k.key] = { key: k.key, monday: k.monday, units: 0, jobs: {}, counts: {}, total: 0,
+                           target: null, targetAt: "" };
+      counts.forEach(c => { g.counts[c[0]] = 0; });
+      order.push(k.key);
+    }
+    return g;
+  };
+  log.forEach(r => {
+    const g = weekOf(xpDay(r.at));
+    if (!g) return;
+    if (r.to > r.from) g.units += r.to - r.from;
+    g.jobs[r.job] = 1;
+  });
+  days.forEach(r => {
+    const g = weekOf(r.day);
+    if (!g) return;
+    counts.forEach(c => { g.counts[c[0]] += r.counts[c[0]] || 0; });
+    g.total += r.total;
+    if (r.weekTarget != null && (!g.targetAt || r.savedAt >= g.targetAt)) {
+      g.target = r.weekTarget; g.targetAt = r.savedAt;
+    }
+  });
+  const liveTarget = D.target == null ? null : Math.max(0, Math.round(Number(D.target) || 0));
+  const sumCols = ["Week", "Week starting", "Units recorded", "Jobs touched",
+                   "Jobs complete at this stage"]
+    .concat(counts.map(c => c[1]))
+    .concat(ds ? [xpUpper(unit.slice(0, 1)) + unit.slice(1) + " total", "Target", "Difference"] : []);
+  order.sort();
+  const sumRows = order.map(k => {
+    const g = weeks[k];
+    if (g.target == null) g.target = liveTarget;
+    const jobs = Object.keys(g.jobs);
+    const line = [g.key, g.monday, g.units, jobs.length,
+                  jobs.filter(j => done[j] && done[j].total > 0 && done[j].done >= done[j].total).length]
+      .concat(counts.map(c => g.counts[c[0]]));
+    if (ds) line.push(g.total, g.target == null ? "" : g.target,
+                      g.target == null ? "" : g.total - g.target);
+    return line;
+  });
+  if (!sumRows.length)
+    head.push(["Nothing recorded", "This station recorded nothing in this period."]);
+  out.push({ name: "Summary", head: head, columns: sumCols, rows: sumRows });
+
+  /* ---- 2. Days ---- */
+  const byDay = {}, dayOrder = [];
+  const dayAt = day => {
+    let g = byDay[day];
+    if (!g) { g = byDay[day] = { day: day, units: 0, people: {}, sheets: [] }; dayOrder.push(day); }
+    return g;
+  };
+  log.forEach(r => {
+    const g = dayAt(xpDay(r.at));
+    const n = r.to > r.from ? r.to - r.from : 0;
+    g.units += n;
+    g.people[r.who || "—"] = (g.people[r.who || "—"] || 0) + n;
+  });
+  days.forEach(r => { dayAt(r.day).sheets.push(r); });
+  dayOrder.sort();
+  if (dayOrder.length) {
+    const cols = ["Day", "Weekday", "Units recorded", "Who recorded them"]
+      .concat(ds ? [].concat(["Who filled the sheet"], counts.map(c => c[1]),
+                             ["Total", "Note", "Corrected by the office"]) : []);
+    const rows = [];
+    dayOrder.forEach(day => {
+      const g = byDay[day], wd = S.isoWeek(day).weekday;
+      const people = Object.keys(g.people).sort()
+        .map(nm => nm + " " + g.people[nm]).join(" · ");
+      if (!ds) { rows.push([day, wd, g.units, people]); return; }
+      if (!g.sheets.length) { rows.push([day, wd, g.units, people, "", ...counts.map(() => ""), "", "", ""]); return; }
+      g.sheets.forEach(r => {
+        rows.push([day, wd, g.units, people, r.who]
+          .concat(counts.map(c => r.counts[c[0]] || 0))
+          .concat([r.total, S.stripContact(r.note, S.DAY_NOTE_MAX),
+                   r.editedBy ? r.editedBy + " · " + xpStr(r.editedAt).slice(0, 16) : ""]));
+      });
+    });
+    out.push({ name: "Days", head: [], columns: cols, rows: rows });
+  }
+
+  /* ---- 3. Jobs, straight from the station's own adapter ---- */
+  if (jobRows.length)
+    out.push({ name: "Jobs", head: [], columns: jobsOut.columns, rows: jobRows });
+
+  /* ---- 4. Activity: the floor's own log, oldest first ---- */
+  if (log.length) {
+    const rows = log.slice().sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map(r => [xpStr(r.at).slice(0, 16).replace("T", " "), r.who, r.job,
+                 r.type || "", r.from, r.to, r.to - r.from]);
+    out.push({ name: "Activity",
+               head: [["Note", "The floor's own log, written by the tablet. The office's own edits " +
+                       "to this station's counters are in Dashboard Log, not here."]],
+               columns: ["When", "Who", "Job", "Group", "From", "To", "Units"], rows: rows });
+  }
+
+  /* ---- 5. Notes, stripped ---- */
+  if (notes.length) {
+    const rows = notes.slice().sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map(r => [xpStr(r.at).slice(0, 16).replace("T", " "), r.who, r.job,
+                 S.stripContact(r.text, S.COMMENT_MAX)]);
+    out.push({ name: "Notes", head: [], columns: ["When", "Who", "Job", "Note"], rows: rows });
+  }
+  return out;
+}
+
+/** `Station report - Glass Cutting - 2026-09-14 to 2026-09-20.xlsx`. */
+function stationReportFilename(def, stage, period, format) {
+  const d = def || {};
+  const p = xpPeriod(period);
+  const word = typeof d.stageLabel === "function" ? xpStr(d.stageLabel(stage)) : xpStr(stage);
+  const span = (p.from || "start") + " to " + (p.to || "today");
+  return xpSafeName("Station report - " + xpStr(d.name) + " " + word) + " - " + span +
+         (xpLow(format) === "pdf" ? ".pdf" : ".xlsx");
+}
+
+/** The report's workbook: one worksheet per sheet, in the same conventions the
+    Default export uses - a bold head block where there is one, then a filtered
+    table with the dashboard's own column widths. Nothing here knows which
+    station it is about. */
+function buildStationWorkbook(sheets, opts) {
+  opts = opts || {};
+  const Lib = xpExcelLib();
+  const wb = new Lib.Workbook();
+  wb.creator = "Costello production dashboard";
+  wb.created = (opts.when && typeof opts.when !== "string") ? opts.when : new Date();
+  (sheets || []).forEach((s, si) => {
+    const ws = wb.addWorksheet(xpStr(s.name) || ("Sheet" + (si + 1)));
+    let at = 1;
+    (s.head || []).forEach(line => {
+      ws.getCell(at, 1).value = xpStr(line[0]);
+      ws.getCell(at, 1).font = { bold: true };
+      ws.getCell(at, 2).value = line[1] == null ? "" : line[1];
+      at++;
+    });
+    if (s.head && s.head.length) at++;
+    const cols = (s.columns || []).map(c => ({ name: xpStr(c), filterButton: true }));
+    if (cols.length) {
+      ws.addTable({
+        name: xpTableName(s.name || "Sheet", si + 1),
+        ref: "A" + at, headerRow: true,
+        style: { theme: "TableStyleMedium2", showRowStripes: true },
+        /* an Excel table has to have a body: a report of nothing still opens */
+        rows: (s.rows || []).length ? s.rows.map(r => cols.map((c, i) => (r[i] == null ? null : r[i])))
+                                    : [cols.map(() => null)]
+      , columns: cols });
+      s.columns.forEach((c, i) => {
+        const w = Math.min(60, Math.max(11, xpStr(c).length + 3,
+          (s.rows || []).reduce((m, r) => Math.max(m, xpStr(r[i]).length + 2), 0)));
+        ws.getColumn(i + 1).width = w;
+      });
+    }
+    ws.getColumn(1).width = Math.max(ws.getColumn(1).width || 0, 22);
+  });
+  return wb;
+}
+
+/* ---------------------------------------------------------------------------
    8. handing the file over (browser only)
    --------------------------------------------------------------------------- */
 
@@ -1603,6 +1897,7 @@ const XP_API = {
   XP_JOHN_COLS, XP_FLAG_WORD, XP_JOHN_MISSING, exportJohnRows, exportJohnFilename,
   exportJohnWidths, buildJohnWorkbook, buildJohnDoc, xpJohnDate, xpJohnNotes,
   xpJohnJoin, johnRowFor, johnFlag, xpFlagInk,
+  stationReport, stationReportFilename, buildStationWorkbook, stationPeriod, xpPeriod, XP_PERIODS,
   buildWorkbook, buildDocDefinition, downloadBlob, xpBarSegments, xpPdfReady, xpCardNodes,
   presetsLoad, presetSave, presetDelete, xpFieldSet, xpFilter, xpIsoDate, xpNiceDate, xpStamp,
   xpShortWho, xpIsIso, xpSectionNames,

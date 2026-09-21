@@ -137,8 +137,15 @@ the one that first wrote them down.
    floor's own work goes onto the record too, the floor finishing a job is
    what locks it, and only an office row stamped later unlocks it again.
 
-   There are **exactly four** exceptions, each granted by the owner in a dated
-   spec, each for a named case; a **fifth** is a new decision for the owner,
+   Since 2026-09-21 there are two more of the floor's lists, in the same site
+   and resolved the same way: **`Station day sheets`** (one row per person per
+   station-stage per day — the cutter's end-of-day sheet, append-only from the
+   tablet) and **`Station targets`** (one row per station-stage — the weekly
+   target, written by the office and read-only on every tablet)
+   ([`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md)).
+
+   There are **exactly five** exceptions, each granted by the owner in a dated
+   spec, each for a named case; a **sixth** is a new decision for the owner,
    not a judgement call for a session.
    - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
      nowhere else): the feeder writes `Cut`/`Hotmelt` on a row it is
@@ -193,6 +200,22 @@ the one that first wrote them down.
      counters. `Glazed`, `GlazedBy` and `GlazedAt` are written by nothing at all
      from that day — not by the feeder, not by a clear, not by the tablet — and
      are never rewritten, reset or deleted.
+   - **The weekly target, and a correction to a day sheet** (owner,
+     **2026-09-21**,
+     [`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md),
+     decisions 1 and 2): the office is the **only** writer of `Station targets`
+     — one upserted row per station-stage, built by `ST.targetFields(n, who,
+     at)` — and it may correct a saved `Station day sheets` row. A correction
+     PATCHes **exactly** that row's count columns, its `Note`, `EditedBy` and
+     `EditedAt`; the proof that it can write nothing else is the shape of
+     `ST.dayOfficeFields(counts, e)`, which takes counts, a note, a name and a
+     time, so there is no argument that could carry a `Day`, a `Who` or a
+     `Title` in. Each of the two leaves **one `Dashboard Log` line**
+     (`noteChange`: "Cutting weekly target" from → to, "Day sheet corrected"
+     with the day, the person and old → new totals) and **no `Station log`
+     line**. Neither side ever deletes a row of either list — the tablet
+     appends one row a day and nothing else, and the office never deletes at
+     all. Nothing on this path goes near the workbook.
    Only the tablet (`station.js`, `welding.js`) writes a By, an At, a last touch
    or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.
@@ -256,6 +279,7 @@ node test_comments.js
 node test_doors.js
 node test_john.js
 node test_welding.js
+node test_daysheets.js
 
 node verify.js   # dev-only cross-check, see below
 ```

@@ -123,57 +123,20 @@ const WELD_COMMENT_MAX = 140;
 /* ---- rule 3: nothing that could be a phone number or an eircode ------------
    The COMMENT column is free text typed by the office and it does carry phone
    numbers. The owner's answer of 2026-09-16 was "yes, show it, with runs of six
-   or more digits removed" (option B), recorded as a rule-3 decision. This is
-   that guard, and it is applied on the way INTO the list - so no phone number
-   is ever stored where the floor, or anything reading the floor's list, could
-   see one.
+   or more digits removed" (option B), recorded as a rule-3 decision. The guard
+   is applied on the way INTO the list - so no phone number is ever stored where
+   the floor, or anything reading the floor's list, could see one.
 
-   THREE patterns, and the first of them is the one that matters. export.js has
-   no eircode regex to borrow: it protects the eircode by never reading `j.eir`
-   at all, which is the stronger rule where it applies and no help at all here,
-   because a comment is a comment. So the shapes are written down once, here,
-   and every one of them is tested in test_welding.js:
+   THE FOUR SHAPES MOVED TO station-core.js ON 2026-09-21 (ST.stripContact), so
+   that the station report - which exports free text typed on a tablet - guards
+   it with the same function rather than a second copy of the same regexes. The
+   block comment there is the whole of what each shape catches and what it is
+   allowed to over-strip; every one of them is still tested here, through this
+   call, and nothing about what this function does has changed.
 
-     · a PHONE NUMBER AS PEOPLE TYPE ONE - six or more digits with spaces,
-       brackets, dots or dashes between them, and an optional leading "+":
-
-           086 123 4567          +353 86 123 4567      087-123-4567
-           086.123.4567          (086) 123 4567        08712 34567
-
-       The first build of this had only the contiguous rule below, and every
-       one of those six reached the list unchanged. A phone number in a
-       workshop comment is almost never typed as ten digits in a row.
-     · any run of six or more digits          0871234567  ->  …
-       (kept as its own pass: it is the plain case and it reads as the rule)
-     · anything shaped like an eircode        D02 X285    ->  …
-       (a letter, two digits or a digit and W, then four alphanumerics)
-
-   WHAT SURVIVES, and is tested so it stays surviving: a job number (`R5303` -
-   a letter and four digits, two short of the eircode shape and four short of
-   the phone one), the sheet's own short dates (`12.09`, `12/09/2026` - `/` is
-   not a separator here, so neither half is long enough), and small quantities
-   (`Wnd 6`, `4000 CASEMENT`, `7000`).
-
-   WHAT IS OVER-STRIPPED, said rather than discovered: a full ISO date typed
-   into a comment (`2026-09-16`) is eight digits with dashes between them and
-   goes. That is the right way round to be wrong - the owner's rule is that no
-   phone number leaves the app, ever, and a lost date in a floor comment costs
-   nobody anything. The same is true of a dash- or dot-joined run of sizes -
-   `cill 150-2100` -> `cill …`, `1200-900-1500` -> `…`, `pane 1.2.3.4.5.6` ->
-   `…` - because it has the same digit-and-separator shape as a phone number;
-   that is the same owner's decision, the same way round (rule 3 wins over a
-   readable size). An `x`-separated size (`2 x 1200 x 900`) has no such shape
-   and survives. */
-const WELD_PHONE_RE = /(?:\+?\d[\s().‐-―-]{0,2}){6,}\d?/g;
-/* a fourth shape, added 2026-09-16: digit groups joined by `/`, `,`, `:` or
-   `_` - a shape none of the three patterns above catches, because none of
-   those separators is in WELD_PHONE_RE's class and a run like `086/123/4567`
-   is short of WELD_DIGITS_RE's six-CONTIGUOUS-digits bar. It only fires when
-   the whole match holds nine or more digits, so a date (`12/09/2026`, eight
-   digits) or a small size (`spacer 4/20/4`, four digits) is not caught. */
-const WELD_SEP_RE = /\d+(?:[\/,:_]\d+)+/g;
-const WELD_DIGITS_RE = /\d{6,}/g;
-const WELD_EIR_RE = /\b[A-Za-z]\d(?:\d|[Ww])\s?[A-Za-z0-9]{4}\b/g;
+   ST is reached at CALL time, not at load time, so this file still loads and
+   parses on its own; station-core.js is before it on every page and in every
+   test that loads it at all (welding.html, index.html, test_welding.js). */
 
 /* ---- small helpers ---------------------------------------------------------
    Its own, deliberately: this file is loaded beside station-core.js and could
@@ -210,22 +173,19 @@ function weldAllowed(group) {
 /** The Title of one list row: `JOB|GROUP`, unique on the list. */
 const weldTitle = (job, group) => wKey(job) + "|" + wKey(group);
 
-/** Rule 3's strip: a phone number however it was typed, then any long run of
-    digits, then anything eircode-shaped - each replaced by an ellipsis - then
-    whitespace tidied and the result capped. Blank in, blank out.
+/** Rule 3's strip, with this station's own cap: ST.stripContact does the work.
 
     `max` defaults to the comment's cap. It is passed explicitly for the
     CUSTOMER column, which is also free text off the sheet and can also have a
     number in it ("Customer One 086 123 4567", a site contact typed into the
     name): the same guard, the same one function, a different cap. */
 function weldStripDigits(text, max) {
-  const cap = Math.max(1, wInt(max, WELD_COMMENT_MAX));
-  const t = wTxt(text)
-    .replace(WELD_PHONE_RE, "…")
-    .replace(WELD_SEP_RE, m => ((m.match(/\d/g) || []).length >= 9 ? "…" : m))
-    .replace(WELD_DIGITS_RE, "…")
-    .replace(WELD_EIR_RE, "…");
-  return t.replace(/\s+/g, " ").trim().slice(0, cap);
+  const S = (typeof ST !== "undefined" && ST) ||
+            (typeof window !== "undefined" && window.ST) || null;
+  /* fail CLOSED, and this is rule 3's own direction: with no strip to hand, no
+     free text goes on the list at all rather than an unguarded phone number */
+  if (!S || typeof S.stripContact !== "function") return "";
+  return S.stripContact(text, wInt(max, WELD_COMMENT_MAX));
 }
 
 /* ---- what the feeder should be sending --------------------------------------
@@ -705,6 +665,33 @@ function weldCardSig(c) {
                        WELD_PART_KEYS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
 }
 
+/** THE ADAPTER the station report asks this station for (2026-09-21). The
+    report itself (export.js, stationReport) has no welding in it and no glass
+    in it: the Jobs sheet is whatever the station's own definition says its
+    board rows are, and this is welding's answer - ONE ROW PER JOB AND PRODUCT
+    GROUP, frames and sashes as the board shows them. `jobs` is the same rows
+    read as per-job progress, which is all the Summary needs.
+
+    `stage` is unused here - this station has one - and is taken anyway so the
+    two adapters have the same shape. */
+function weldReportJobs(data, stage) {
+  const cards = (data && data.board) || [];
+  const rows = [], jobs = [];
+  cards.forEach(c => {
+    jobs.push({ job: c.job, done: c.done, total: c.total });
+    (c.groups || []).forEach(g => {
+      rows.push([c.job, c.customer, c.section, g.group,
+                 g.frames, g.framesTotal, g.sashes, g.sashesTotal,
+                 g.total, g.done, g.left, g.doneBy, g.doneAt,
+                 g.finished ? "Yes" : "No"]);
+    });
+  });
+  return { columns: ["Job", "Customer", "Section", "Group", "Frames done", "Frames",
+                     "Sashes done", "Sashes", "Total", "Done", "Left",
+                     "Last moved by", "When", "Complete"],
+           rows: rows, jobs: jobs };
+}
+
 /* ---- the station definition -------------------------------------------------
    The one object station-core.js is handed so that feedPlan, sliceHash and
    floorOnly can do for this station exactly what they do for glass, with no
@@ -716,6 +703,11 @@ const WELD = {
   list: WELD_LIST,
   site: WELD_SITE,
   stages: [WELD_STAGE],
+  stageLabel: () => "Welding",
+  /* no end-of-day sheet here yet: one line of `daySheets` when the owner asks
+     and says which counts they want (spec 2026-09-21, "Not built here") */
+  reportStages: [WELD_STAGE],
+  reportJobs: weldReportJobs,
   fields: WELD_FIELDS,
   feederFields: WELD_FEEDER_FIELDS,
   floorFields: WELD_FLOOR_FIELDS,
@@ -733,7 +725,7 @@ const WELDC = {
   WELD_TOTAL_FIELD, WELD_DONE_FIELD, WELD_BY_FIELD, WELD_AT_FIELD,
   WELD_FIELDS, WELD_FEEDER_FIELDS, WELD_FLOOR_FIELDS, WELD_COUNTER_FIELDS,
   WELD_SEED_FIELDS, WELD_FEEDER_WRITES, WELD_DENY, WELD_GROUP_PARTS, weldPartsFor,
-  WELD_CUSTOMER_MAX, WELD_COMMENT_MAX, WELD_PHONE_RE, WELD_DIGITS_RE, WELD_EIR_RE,
+  WELD_CUSTOMER_MAX, WELD_COMMENT_MAX,
   weldPartLabel, weldGroupKey, weldAllowed, weldTitle, weldStripDigits,
   weldSlice, weldRowOrder, weldFeederFields, weldSeedFields, weldHashRow,
   weldSectionOf, weldCommentOf, weldSentOf,
@@ -742,7 +734,7 @@ const WELDC = {
   weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldSentFilter,
   weldLeft, weldLeftByPart, weldLeftWords, weldQtyWords,
   weldFloorOnly, weldApplyTap, weldTapFields, weldOfficeFields,
-  weldLogEntry, weldLogWords, weldRebase, weldCardSig,
+  weldLogEntry, weldLogWords, weldRebase, weldCardSig, weldReportJobs,
   weldKey: wKey
 };
 if (typeof window !== "undefined") window.WELDC = WELDC;

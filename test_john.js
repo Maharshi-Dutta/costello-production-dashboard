@@ -97,7 +97,7 @@ function stubEl(tag, id) {
   return e;
 }
 const NULLABLE = ["#fabhost", "#fabbtn", "#dhost", "#xhost", "#ahost", "#chost", "#vhost",
-                  "#lhost", "#nhost", "#catmenu", "#movemenu", "#alertmenu"];
+                  "#lhost", "#dayhost", "#nhost", "#catmenu", "#movemenu", "#alertmenu"];
 const EL = {};
 const el = sel => {
   const id = String(sel).charAt(0) === "#" ? String(sel).slice(1) : null;

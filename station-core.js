@@ -171,6 +171,20 @@ const GLASS = {
      else in the app changes. */
   site: "own",
   stages: ALL_STAGE_KEYS,
+  stageLabel: stageLabel,
+  /* WHICH STAGES GET AN END-OF-DAY SHEET, and what is counted on it
+     (2026-09-21). Cutting only for now, by the owner's decision 3; hotmelting
+     or welding get one by gaining a line here and nothing else. The keys are
+     the list's own column names; the words are what the tablet asks for. */
+  daySheets: {
+    cut: { counts: [["Clear", "Clear glass sheets cut"], ["KGlass", "K-glass sheets cut"],
+                    ["Satin", "Satin sheets cut"], ["Obscure", "Other obscure sheets cut"]],
+           unit: "sheets" }
+  },
+  /* the stages a report may be run for: the two real ones. Tuff is a counter
+     the cutter also moves, not a station somebody reports on. */
+  reportStages: STAGE_KEYS,
+  reportJobs: (data, stage) => glassReportJobs(data, stage),
   fields: STATION_FIELDS,
   feederFields: FEEDER_FIELDS,
   floorFields: FLOOR_FIELDS,
@@ -1512,6 +1526,338 @@ function mergeDelta(items, changes) {
   return out.filter(Boolean);
 }
 
+/* ---- rule 3's strip, in one place ------------------------------------------
+   MOVED HERE FROM welding-core.js on 2026-09-21 (docs/specs/2026-09-21-day-
+   sheets-and-station-reports.md). It was the welding COMMENT column's guard and
+   nothing outside that file could reach it; a station report exports free text
+   somebody typed on a tablet - a day sheet's note, a floor note - and rule 3
+   says no phone number and no eircode leaves the app in an export, ever. So the
+   shapes are written down once, here, and weldStripDigits is now a call to this
+   with the comment's own cap. Welding's behaviour is unchanged by construction.
+
+   FOUR SHAPES, and the first of them is the one that matters:
+
+     · a PHONE NUMBER AS PEOPLE TYPE ONE - six or more digits with spaces,
+       brackets, dots or dashes between them, and an optional leading "+":
+       `086 123 4567`, `+353 86 123 4567`, `087-123-4567`, `(086) 123 4567`.
+       A phone number in a workshop note is almost never ten digits in a row;
+     · digit groups joined by `/`, `,`, `:` or `_`, when the whole match holds
+       nine or more digits - so a date (`12/09/2026`) and a small size
+       (`spacer 4/20/4`) are left alone;
+     · any run of six or more digits;
+     · anything eircode-shaped (a letter, two digits or a digit and W, then four
+       alphanumerics).
+
+   WHAT SURVIVES, and is tested so it stays surviving: a job number (`R5303`),
+   the sheet's own short dates (`12.09`, `12/09/2026`) and small quantities.
+   WHAT IS OVER-STRIPPED, said rather than discovered: a full ISO date typed
+   into free text, and a dash-joined run of sizes (`cill 150-2100`). That is the
+   right way round to be wrong - the owner's rule is that no phone number leaves
+   the app, and a lost size in a note costs nobody anything.                  */
+const STRIP_PHONE_RE = /(?:\+?\d[\s().‐-―-]{0,2}){6,}\d?/g;
+const STRIP_SEP_RE = /\d+(?:[\/,:_]\d+)+/g;
+const STRIP_DIGITS_RE = /\d{6,}/g;
+const STRIP_EIR_RE = /\b[A-Za-z]\d(?:\d|[Ww])\s?[A-Za-z0-9]{4}\b/g;
+const STRIP_MAX = 140;
+/** Free text with anything phone- or eircode-shaped replaced by an ellipsis,
+    whitespace tidied and the result capped. Blank in, blank out. Pure. */
+function stripContact(text, max) {
+  const cap = Math.max(1, Math.round(stNum(max, STRIP_MAX)));
+  const t = stTxt(text)
+    .replace(STRIP_PHONE_RE, "…")
+    .replace(STRIP_SEP_RE, m => ((m.match(/\d/g) || []).length >= 9 ? "…" : m))
+    .replace(STRIP_DIGITS_RE, "…")
+    .replace(STRIP_EIR_RE, "…");
+  return t.replace(/\s+/g, " ").trim().slice(0, cap);
+}
+
+/* ---- the end-of-day sheet ---------------------------------------------------
+   Shipped 2026-09-21 (docs/specs/2026-09-21-day-sheets-and-station-reports.md).
+   The cutter fills in a paper sheet every day: their name, the day, four counts
+   and a line about anything that got in the way. This is that sheet, on the
+   tablet, against a weekly target the office sets.
+
+   IT IS NOT THE CUTTING STATION'S, in exactly the way the note channel is not
+   the glass station's: which counts a sheet has - and whether a stage has one at
+   all - comes from the station DEFINITION (`def.daySheets[stage]`), so
+   hotmelting or welding get one by gaining a line of definition and nothing
+   else. A stage with no entry draws no button and reads neither list.
+
+   Two lists, in whichever site the station's lists live:
+     `Station day sheets`  one row per person per station-stage per day,
+                           APPEND-ONLY from the tablet (one POST, no PATCH, no
+                           DELETE). The office may correct the counts and the
+                           note, and never deletes;
+     `Station targets`     one row per station-stage, written by the office
+                           only, read-only on every tablet.
+   No list is created by code: a missing one is a quiet explained state.     */
+const DAY_LIST = "Station day sheets";
+const TARGET_LIST = "Station targets";
+/* every column but the counts, which are the definition's own */
+const DAY_BASE_FIELDS = ["Title", "Station", "Stage", "Day", "Who",
+                         "Note", "WeekTarget", "SavedAt", "EditedBy", "EditedAt"];
+const TARGET_FIELDS = ["Title", "WeeklyTarget", "SetBy", "SetAt"];
+/* a line about the day, not a document */
+const DAY_NOTE_MAX = 500;
+const DAY_MISSING_FLOOR = "The “Station day sheets” list is not in the floor’s site yet, so the " +
+  "day sheet cannot be saved here. Ask the office to add it — nothing in the Excel file is involved.";
+const DAY_MISSING_OFFICE = "The “Station day sheets” list is not in the floor’s site yet, so there " +
+  "are no day sheets to show. Ask the manager to add it — nothing in the Excel file is involved.";
+const TARGET_MISSING_OFFICE = "The “Station targets” list is not in the floor’s site yet, so a " +
+  "weekly target cannot be set. Ask the manager to add it — nothing in the Excel file is involved.";
+const DAY_UNREACHABLE = "The day sheets could not be read just now — retrying.";
+const DAY_SAVED_WORDS = "ask the office to correct a mistake";
+
+/** This stage's day sheet, or null - the whole of "which pages have one". */
+function daySheetOf(def, stage) {
+  const ds = (stDef(def).daySheets || {})[stTxt(stage).trim().toLowerCase()];
+  return (ds && ds.counts && ds.counts.length) ? ds : null;
+}
+/** The stages of a station that have one, in the definition's own order. */
+function daySheetStages(def) {
+  const d = stDef(def);
+  return (d.stages || []).filter(k => !!daySheetOf(d, k));
+}
+/** The columns of a read: the fixed ones plus this stage's own counts. */
+function dayFieldsFor(def, stage) {
+  const ds = daySheetOf(def, stage);
+  return DAY_BASE_FIELDS.concat(ds ? ds.counts.map(c => c[0]) : []);
+}
+/** A LOCAL calendar day as YYYY-MM-DD. Local, deliberately: a sheet saved at
+    23:30 belongs to the day the person worked, not to UTC's idea of it. A
+    string that is already a day is taken as one rather than re-parsed, which is
+    the same trap the other way round. */
+function dayKey(d) {
+  if (typeof d === "string") {
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(d.trim());
+    if (m) return m[1];
+  }
+  const x = d == null ? new Date() : (d instanceof Date ? d : new Date(d));
+  if (!x || isNaN(x.getTime())) return "";
+  const p = n => (n < 10 ? "0" : "") + n;
+  return x.getFullYear() + "-" + p(x.getMonth() + 1) + "-" + p(x.getDate());
+}
+const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+/** Which ISO week a day is in: Monday to Sunday, `2026-W39`, with the Monday
+    and the Sunday beside it. The arithmetic is done at noon UTC so no timezone
+    can move a day across a week boundary, and the year comes from the week's
+    THURSDAY - which is what makes 2026-12-31 and 2027-01-01 the same week. */
+function isoWeek(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey(day));
+  if (!m) return { key: "", monday: "", sunday: "", weekday: "", dow: -1 };
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12));
+  const dow = (d.getUTCDay() + 6) % 7;                    // Monday = 0
+  const mon = new Date(d.getTime() - dow * 86400000);
+  const thu = new Date(mon.getTime() + 3 * 86400000);
+  /* NOON at both ends: with midnight on one side and noon on the other, the
+     half day rounds a January Thursday into week 2 */
+  const jan1 = Date.UTC(thu.getUTCFullYear(), 0, 1, 12);
+  const wk = Math.floor(Math.round((thu.getTime() - jan1) / 86400000) / 7) + 1;
+  const iso = x => x.toISOString().slice(0, 10);
+  return { key: thu.getUTCFullYear() + "-W" + (wk < 10 ? "0" + wk : String(wk)),
+           monday: iso(mon), sunday: iso(new Date(mon.getTime() + 6 * 86400000)),
+           weekday: DAY_NAMES[dow], dow: dow };
+}
+/** The Title, which is the key: a second save for the same person, stage and
+    day is refused by SharePoint as well as by the page. */
+function dayTitle(station, stage, day, who) {
+  return [stTxt(station).trim(), stTxt(stage).trim().toLowerCase(),
+          dayKey(day), stTxt(who).trim()].join("|");
+}
+/** One count as it may be saved: a whole number, nought or more. A blank is
+    nought (the paper sheet leaves them blank); anything else - a decimal, a
+    minus, a word - is null, and the form refuses the save rather than rounding
+    somebody's afternoon into a number they did not write. */
+function dayCount(v) {
+  const s = stTxt(v).trim();
+  if (s === "") return 0;
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  return isFinite(n) ? n : null;
+}
+/** The one row a save POSTs, or null when a count is not a whole number. Every
+    column it can carry is here: there is no path that could add another. */
+function dayFields(def, stage, e) {
+  const ds = daySheetOf(def, stage);
+  if (!ds) return null;
+  const d = stDef(def);
+  e = e || {};
+  const day = dayKey(e.day || new Date());
+  const who = stTxt(e.who).trim();
+  if (!day || !who) return null;
+  const out = { Title: dayTitle(d.name, stage, day, who), Station: d.name,
+                Stage: stTxt(stage).trim().toLowerCase(), Day: day, Who: who };
+  const counts = e.counts || {};
+  let bad = false;
+  ds.counts.forEach(c => {
+    const n = dayCount(counts[c[0]]);
+    if (n == null) bad = true; else out[c[0]] = n;
+  });
+  if (bad) return null;
+  out.Note = stTxt(e.note).trim().slice(0, DAY_NOTE_MAX);
+  /* the target in force when this was saved, so an old week stays true after
+     the office changes it. No target set = the column is not written at all */
+  const t = stNum(e.weekTarget, null);
+  if (t != null && isFinite(t)) out.WeekTarget = Math.max(0, Math.round(t));
+  out.SavedAt = stTxt(e.at) || new Date().toISOString();
+  return out;
+}
+/** What the OFFICE may correct, and the proof it can correct nothing else: a
+    builder that takes counts, a note, a name and a time. null when a count is
+    not a whole number. */
+function dayOfficeFields(counts, e) {
+  e = e || {};
+  const out = {};
+  let bad = false;
+  (counts || []).forEach(c => {
+    const n = dayCount((e.counts || {})[c[0]]);
+    if (n == null) bad = true; else out[c[0]] = n;
+  });
+  if (bad) return null;
+  out.Note = stTxt(e.note).trim().slice(0, DAY_NOTE_MAX);
+  out.EditedBy = stTxt(e.who);
+  out.EditedAt = stTxt(e.at) || new Date().toISOString();
+  return out;
+}
+/** The list read into rows and filtered. `counts` is the definition's own list
+    of [key, label]; `f` may narrow by station, stage, who, from/to day, weekday
+    (0 = Monday) and ISO week. Newest day first. */
+function dayRows(items, counts, f) {
+  const cols = counts || [];
+  const want = f || {};
+  const station = stTxt(want.station).trim().toLowerCase();
+  const stage = stTxt(want.stage).trim().toLowerCase();
+  const who = stTxt(want.who).trim().toLowerCase();
+  const from = dayKey(want.from || ""), to = dayKey(want.to || "");
+  const week = stTxt(want.week).trim();
+  const dow = want.weekday == null || want.weekday === "" ? -1 : Number(want.weekday);
+  const out = [];
+  (items || []).forEach(it => {
+    if (!it) return;
+    const fl = it.fields || {};
+    const day = dayKey(stTxt(fl.Day));
+    if (!day) return;
+    const st = stTxt(fl.Station).trim(), sg = stTxt(fl.Stage).trim().toLowerCase();
+    if (station && st.toLowerCase() !== station) return;
+    if (stage && sg !== stage) return;
+    const nm = stTxt(fl.Who).trim();
+    if (who && nm.toLowerCase() !== who) return;
+    if (from && day < from) return;
+    if (to && day > to) return;
+    const w = isoWeek(day);
+    if (week && w.key !== week) return;
+    if (dow >= 0 && w.dow !== dow) return;
+    const c = {};
+    let total = 0;
+    cols.forEach(k => {
+      const n = Math.max(0, Math.round(stNum(fl[k[0]], 0)));
+      c[k[0]] = n; total += n;
+    });
+    const wt = stNum(fl.WeekTarget, null);
+    out.push({ id: stTxt(it.id), title: stTxt(fl.Title), station: st, stage: sg,
+               day: day, week: w.key, monday: w.monday, weekday: w.weekday, dow: w.dow,
+               who: nm, counts: c, total: total, note: stTxt(fl.Note),
+               weekTarget: wt == null || !isFinite(wt) ? null : Math.max(0, Math.round(wt)),
+               savedAt: stTxt(fl.SavedAt), editedBy: stTxt(fl.EditedBy), editedAt: stTxt(fl.EditedAt) });
+  });
+  out.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 :
+                      (a.who < b.who ? -1 : a.who > b.who ? 1 : 0)));
+  return out;
+}
+/** One person's sheets this ISO week, added up - the "This week: N of T" on the
+    tablet and the week subtotals in the office. */
+function dayWeekTotal(rows, who, week) {
+  const nm = stTxt(who).trim().toLowerCase(), wk = stTxt(week).trim();
+  return (rows || []).reduce((n, r) =>
+    n + ((!nm || r.who.toLowerCase() === nm) && (!wk || r.week === wk) ? r.total : 0), 0);
+}
+/** The rows grouped into ISO weeks, newest week first, each with its subtotal,
+    the target that was in force and the difference.
+
+    A week's target is the `WeekTarget` on its most recently saved sheet - so
+    changing the target today cannot rewrite what last week was measured
+    against. A week with no stored target falls back to the live one, which is
+    what the current week needs before anybody has saved a sheet in it. */
+function dayWeeks(rows, counts, liveTarget) {
+  const cols = counts || [];
+  const by = {}, order = [];
+  (rows || []).forEach(r => {
+    let g = by[r.week];
+    if (!g) {
+      g = by[r.week] = { week: r.week, monday: r.monday, rows: [], counts: {}, total: 0,
+                         target: null, diff: null, targetAt: "" };
+      cols.forEach(c => { g.counts[c[0]] = 0; });
+      order.push(r.week);
+    }
+    g.rows.push(r);
+    cols.forEach(c => { g.counts[c[0]] += r.counts[c[0]] || 0; });
+    g.total += r.total;
+    if (r.weekTarget != null && (!g.targetAt || atCmp(r.savedAt, g.targetAt) >= 0)) {
+      g.target = r.weekTarget; g.targetAt = r.savedAt;
+    }
+  });
+  const live = stNum(liveTarget, null);
+  order.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  return order.map(k => {
+    const g = by[k];
+    if (g.target == null && live != null && isFinite(live)) g.target = Math.max(0, Math.round(live));
+    g.diff = g.target == null ? null : g.total - g.target;
+    return g;
+  });
+}
+
+/* ---- the weekly target ---- */
+const targetTitle = (station, stage) =>
+  stTxt(station).trim() + "|" + stTxt(stage).trim().toLowerCase();
+/** The three columns an office save writes beside the Title. */
+function targetFields(n, who, at) {
+  return { WeeklyTarget: Math.max(0, Math.round(stNum(n, 0))),
+           SetBy: stTxt(who), SetAt: stTxt(at) || new Date().toISOString() };
+}
+/** The target in force for one station-stage, or null. */
+function targetOf(items, station, stage) {
+  const want = targetTitle(station, stage).toLowerCase();
+  let hit = null;
+  (items || []).forEach(it => {
+    if (!it) return;
+    const fl = it.fields || {};
+    if (stTxt(fl.Title).trim().toLowerCase() !== want) return;
+    if (!hit || stItemAge(it, hit) < 0) hit = it;      // the oldest, as everywhere else
+  });
+  if (!hit) return null;
+  const fl = hit.fields || {};
+  const n = stNum(fl.WeeklyTarget, null);
+  if (n == null || !isFinite(n)) return null;
+  return { id: stTxt(hit.id), target: Math.max(0, Math.round(n)),
+           by: stTxt(fl.SetBy), at: stTxt(fl.SetAt) };
+}
+
+/* ---- what the glass station says about itself in a report -------------------
+   The report is assembled by one pure function (export.js, stationReport) with
+   no station-specific branch in it: everything a station has to say about
+   itself comes off its own definition. This is the glass station's half of
+   that, and welding-core.js has the matching one. A third station writes one
+   more of these and appears in the report by being defined.                  */
+/** One row per job on the board, at this stage, in the report's own order. */
+function glassReportJobs(data, stage) {
+  const k = stTxt(stage).trim().toLowerCase();
+  const board = (data && data.board) || [];
+  const rows = [], jobs = [];
+  board.forEach(g => {
+    const total = Math.max(0, Math.round(stNum(g[STAGE_TOTAL_ROW[k]], 0)));
+    const done = stClamp(g[STAGE_ROW[k]], total);
+    jobs.push({ job: g.job, done: done, total: total });
+    rows.push([g.job, g.customer,
+               g.officeDone ? "the office says complete" : g.active ? "on the floor" : "off the board",
+               total, done, Math.max(0, total - done),
+               g.by && g.by[k] ? g.by[k] : g.doneBy, (g.at && g.at[k]) || g.doneAt,
+               total > 0 && done >= total ? "Yes" : "No"]);
+  });
+  return { columns: ["Job", "Customer", "Status", "Total", "Done at this stage", "Left",
+                     "Last moved by", "When", "Complete"],
+           rows: rows, jobs: jobs };
+}
+
 const ST = {
   GLASS, stDef,
   STATION_LIST, PEOPLE_LIST, LOG_LIST, STATION_SITE, STATION_NAME,
@@ -1527,6 +1873,12 @@ const ST = {
   COMMENT_MISSING_FLOOR, COMMENT_MISSING_OFFICE, COMMENT_UNREACHABLE, COMMENT_CHECKING,
   COMMENT_EMPTY_FLOOR, COMMENT_EMPTY_OFFICE, COMMENT_UNSENT, COMMENT_KEPT,
   commentTitle, commentFields, commentRows, commentAgo, commentChangeWords, stationComments, atCmp,
+  stripContact, STRIP_MAX,
+  DAY_LIST, TARGET_LIST, DAY_BASE_FIELDS, TARGET_FIELDS, DAY_NOTE_MAX,
+  DAY_MISSING_FLOOR, DAY_MISSING_OFFICE, TARGET_MISSING_OFFICE, DAY_UNREACHABLE, DAY_SAVED_WORDS,
+  daySheetOf, daySheetStages, dayFieldsFor, dayKey, isoWeek, DAY_NAMES,
+  dayTitle, dayCount, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
+  targetTitle, targetFields, targetOf, glassReportJobs,
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
