@@ -319,9 +319,15 @@
   .stbars { display:grid; gap:9px }
   .stbar { display:grid; gap:2px }
   .stbhead { display:flex; align-items:baseline; justify-content:space-between; gap:9px }
-  .stbl { font-size:12.5px; color:var(--ink-2) }
+  .stbl { font-size:12.5px; color:var(--ink-2); flex:1; min-width:0 }
   .stbar.full .cpnum { color:var(--done); font-weight:600 }
   .stwho { font-size:11px; color:var(--ink-4) }
+  /* the office's own steppers on a stage line (2026-09-21) - the welding
+     board's .wobtn, so the two boards are one thing to look at */
+  .stbtns { display:flex; gap:5px; flex:none }
+  /* the card head is the way into the job drawer */
+  .stopen { cursor:pointer }
+  .stlock { margin-top:9px; font-size:11.5px; color:var(--ink-3) }
   .stlast { margin-top:9px; font-size:11.5px; color:var(--ink-3); overflow:hidden;
             text-overflow:ellipsis; white-space:nowrap }
   /* the job's floor notes on the card, under the "last:" line (amendment E3) */

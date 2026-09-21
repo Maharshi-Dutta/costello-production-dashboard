@@ -377,48 +377,69 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   const rec = o => ST.jobRecord([row(o)], "R7001");
   const cols = o => ST.glassColours(rec(o));
 
+  /* THE RULE CHANGED ON 2026-09-21: glazing left the station, so the count of
+     COMPLETE GLASS STAGES decides the colour. Neither = blank, one = yellow,
+     both = gold. Every glazing-gate check below is that same check, re-asked. */
   assert.deepStrictEqual(cols({}), { dg: "", tg: "", tuff: "", "not tuff": "" },
     "a job the floor has done nothing to has no colour in any of the four");
+  assert.deepStrictEqual(cols({ Cut: 4 }),
+    { dg: "", tg: "", tuff: "", "not tuff": "" }, "half cut is not a complete stage: still nothing");
   assert.deepStrictEqual(cols({ Cut: 8 }),
-    { dg: "", tg: "", tuff: "", "not tuff": "" }, "cut but not hotmelted is still nothing");
-  assert.deepStrictEqual(cols({ Cut: 8, Hotmelt: 4 }),
-    { dg: "", tg: "", tuff: "", "not tuff": "" }, "and half hotmelted is nothing either");
-  assert.deepStrictEqual(cols({ Cut: 8, Hotmelt: 8 }),
     { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" },
-    "cutting AND hotmelting complete: DG, TG and NOT TUFF go yellow");
+    "cutting complete and nothing else: DG, TG and NOT TUFF go yellow");
+  assert.deepStrictEqual(cols({ Hotmelt: 8 }),
+    { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" },
+    "and hotmelting complete on its own is the same yellow: it is HOW MANY, not which");
+  assert.deepStrictEqual(cols({ Cut: 8, Hotmelt: 4 }),
+    { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" },
+    "one complete and one part way is still exactly one complete stage");
   assert.deepStrictEqual(cols({ Tuff: 11 }),
-    { dg: "", tg: "", tuff: "yellow", "not tuff": "" },
-    "and the tuff count on its own is the one thing that makes TUFF yellow");
+    { dg: "", tg: "", tuff: "gold", "not tuff": "" },
+    "and the tuff count on its own is the one thing that colours TUFF - gold, with no yellow of its own");
   assert.deepStrictEqual(cols({ Tuff: 10 }),
     { dg: "", tg: "", tuff: "", "not tuff": "" }, "ten of eleven tuff is not complete");
   assert.deepStrictEqual(cols({ Cut: 8, Hotmelt: 8, Tuff: 11 }),
-    { dg: "yellow", tg: "yellow", tuff: "yellow", "not tuff": "yellow" });
-  pass("yellow: cutting and hotmelting for DG, TG and NOT TUFF; the tuff count for TUFF");
+    { dg: "gold", tg: "gold", tuff: "gold", "not tuff": "gold" });
+  pass("yellow is exactly one of cutting / hotmelting complete; TUFF has its own count and no yellow");
 
-  /* GOLD REQUIRES GLAZING, for every column, with no exception */
+  /* GOLD IS BOTH GLASS STAGES, for every column, with no exception - and
+     glazing cannot reach it any more, from any value it holds */
   ST.COLOUR_TYPES.forEach(t => {
-    assert.notStrictEqual(cols({ Cut: 8, Hotmelt: 8, Tuff: 11, Glazed: 7 })[t], "gold",
-      t + " is not gold while one glass is still unglazed");
-    assert.strictEqual(cols({ Glazed: 8 })[t], "gold",
-      t + " is gold the moment glazing is complete");
+    assert.notStrictEqual(cols({ Cut: 8, Tuff: 11, Glazed: 8 })[t === "tuff" ? "dg" : t], "gold",
+      t + " is not gold while one of the two glass stages is unfinished");
+    assert.strictEqual(cols({ Cut: 8, Hotmelt: 8, Tuff: 11 })[t], "gold",
+      t + " is gold once both glass stages are complete (and the tuff count for TUFF)");
   });
   assert.deepStrictEqual(cols({ Glazed: 8 }),
-    { dg: "gold", tg: "gold", tuff: "gold", "not tuff": "gold" },
-    "glazing is the gate for everything, whatever the other counters say");
+    { dg: "", tg: "", tuff: "", "not tuff": "" },
+    "A ROW CARRYING A FULL OLD `Glazed` PLANS BLANK: glazing data has no influence at all");
+  assert.deepStrictEqual(cols({ Glazed: 8, Cut: 8 }),
+    { dg: "yellow", tg: "yellow", tuff: "", "not tuff": "yellow" },
+    "... and a full Glazed beside one complete stage is still just one complete stage");
   assert.deepStrictEqual(cols({ Total: 0, Glazed: 0, Cut: 0, Hotmelt: 0 }),
     { dg: "", tg: "", tuff: "", "not tuff": "" },
     "and a row with no glasses on it has finished nothing: 0 of 0 is not complete");
-  pass("gold requires glazing, for every column, and no other counter can reach it");
+  assert.deepStrictEqual(cols({ Total: 0, Cut: 8, Hotmelt: 8 }),
+    { dg: "", tg: "", tuff: "", "not tuff": "" },
+    "a row with total 0 plans nothing, whatever numbers are sitting in its counters");
+  pass("gold is both glass stages, and an old Glazed value can neither reach it nor block it");
 
   /* it walks back down as well as up */
-  assert.strictEqual(cols({ Cut: 8, Hotmelt: 8, Glazed: 8 }).dg, "gold");
-  assert.strictEqual(cols({ Cut: 8, Hotmelt: 8, Glazed: 0 }).dg, "yellow", "gold to yellow");
-  assert.strictEqual(cols({ Cut: 8, Hotmelt: 0, Glazed: 0 }).dg, "", "yellow to nothing at all");
-  assert.strictEqual(cols({ Cut: 0, Hotmelt: 0, Glazed: 0 }).dg, "");
-  assert.strictEqual(cols({ Tuff: 11, Glazed: 8 }).tuff, "gold");
-  assert.strictEqual(cols({ Tuff: 11, Glazed: 0 }).tuff, "yellow");
-  assert.strictEqual(cols({ Tuff: 0, Glazed: 0 }).tuff, "");
+  assert.strictEqual(cols({ Cut: 8, Hotmelt: 8 }).dg, "gold");
+  assert.strictEqual(cols({ Cut: 8, Hotmelt: 7 }).dg, "yellow", "gold to yellow");
+  assert.strictEqual(cols({ Cut: 0, Hotmelt: 7 }).dg, "", "yellow to nothing at all");
+  assert.strictEqual(cols({ Cut: 0, Hotmelt: 0 }).dg, "");
+  assert.strictEqual(cols({ Tuff: 11 }).tuff, "gold");
+  assert.strictEqual(cols({ Tuff: 10 }).tuff, "", "and tuff walks straight back to blank");
+  assert.strictEqual(cols({ Tuff: 0 }).tuff, "");
   pass("the rule is a reading of the counters, so it reverses on its own: gold, yellow, blank");
+
+  /* BC-BF are not in the rule's vocabulary at all, in either direction */
+  assert.deepStrictEqual(Object.keys(cols({ Cut: 8, Hotmelt: 8 })).sort(),
+    ["dg", "not tuff", "tg", "tuff"],
+    "the rule names four columns: ARCH, ASTRAGAL, FANCY and EXTRA are not among them");
+  assert.deepStrictEqual(ST.COLOUR_TYPES.slice().sort(), ["dg", "not tuff", "tg", "tuff"]);
+  pass("BC-BF are never planned: the four columns are the whole of what this rule can name");
 
   /* the floor's stamp, which is what the contest below is decided on */
   assert.strictEqual(ST.floorStamp(rec({})), "", "a row the floor never tapped has no stamp");
@@ -433,10 +454,15 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
     "a stamp that will not parse is passed over rather than winning the comparison");
   assert.strictEqual(stampMs(ST.floorStamp(rec({ DoneAt: isoAt(15, 0), CutAt: "zzz" }))),
     stampMs(isoAt(15, 0)), "so the job is still coloured, which is what the text maximum stopped");
-  assert.strictEqual(ST.floorStamp(rec({ DoneAt: "", CutAt: "not a date", GlazedAt: "  " })), "",
+  assert.strictEqual(ST.floorStamp(rec({ DoneAt: "", CutAt: "not a date", HotmeltAt: "  " })), "",
     "and a row on which NOTHING parses has no stamp at all, which fails closed as it should");
-  assert.strictEqual(ST.floorStamp(rec({ DoneAt: isoAt(9, 0), GlazedAt: isoAt(11, 0) })), isoAt(11, 0),
+  assert.strictEqual(ST.floorStamp(rec({ DoneAt: isoAt(9, 0), HotmeltAt: isoAt(11, 0) })), isoAt(11, 0),
     "the newest by time, whichever column it is in");
+  /* GlazedAt is not one of the columns any more, so a row whose only newer
+     stamp is a glazing one reads as its own last real touch (rule 8: the data
+     stays, and has no influence) */
+  assert.strictEqual(ST.floorStamp(rec({ DoneAt: isoAt(9, 0), GlazedAt: isoAt(11, 0) })), isoAt(9, 0),
+    "a leftover GlazedAt is not read at all, so it cannot become the floor's stamp");
   pass("the floor's stamp is the newest READABLE thing on their own row, or nothing at all");
 
   /* ================= 2. the three stamp formats, and the missing seconds ==== */
@@ -465,15 +491,18 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   pass("all three stamp formats read as the LATEST instant they can mean - which is what the missing seconds require");
 
   /* ================= 3. the writer: what reaches the sheet ================= */
-  let j = scene(mkJob(), row({ Cut: 8, Hotmelt: 8, DoneAt: isoAt(14, 0), DoneBy: "Person A" }));
+  /* one complete stage - cutting, with hotmelting still to do - which is what
+     yellow means since 2026-09-21. `Glazed` is left full on the row on purpose:
+     it must change nothing at all. */
+  let j = scene(mkJob(), row({ Cut: 8, Glazed: 8, DoneAt: isoAt(14, 0), DoneBy: "Person A" }));
   reset();
   assert.strictEqual(await glassColourRun(), 1, "one job to paint");
   await settle();
   assert.deepStrictEqual(fills().map(c => c.addr).sort(), ["AY7", "AZ7", "BB7"],
-    "DG, TG and NOT TUFF, and nothing else: TUFF is not yellow because tuff was not counted");
+    "DG, TG and NOT TUFF, and nothing else: TUFF is not coloured because tuff was not counted");
   fills().forEach(c => assert.strictEqual(c.color, YELLOW));
   assert.strictEqual(sheetNow().tuff, undefined, "TUFF was never written at all");
-  pass("the floor cut and hotmelted a job, and three glass cells went yellow in the sheet");
+  pass("the floor cut a job, and three glass cells went yellow in the sheet");
 
   ["arch", "astragal", "fancy", "extra"].forEach(t =>
     assert.strictEqual(sheetNow()[t], undefined, t + " was not touched"));
@@ -528,15 +557,20 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
             row({ Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, DoneAt: isoAt(14, 0) }));
   reset();
   assert.strictEqual(await glassColourRun(), 0, "the sheet is already gold and the floor says gold");
-  /* now the floor taps glazing back down: gold has to become yellow */
-  global.__items = [row({ Cut: 8, Hotmelt: 8, Glazed: 0, Tuff: 11, DoneAt: isoAt(15, 0) })];
+  /* now the floor taps HOTMELTING back down: two complete stages become one,
+     so the three glass cells walk from gold to yellow. TUFF has its own count
+     and its own colour and is left exactly as it was - which is the new rule
+     said the other way round. */
+  global.__items = [row({ Cut: 8, Hotmelt: 0, Glazed: 8, Tuff: 11, DoneAt: isoAt(15, 0) })];
   A("STATION_ITEMS = __items");
   reset();
   assert.strictEqual(await glassColourRun(), 1);
   await settle();
   assert.deepStrictEqual(fills().map(c => [c.addr, c.color]).sort(),
-    [["AY7", YELLOW], ["AZ7", YELLOW], ["BA7", YELLOW], ["BB7", YELLOW]],
-    "all four walk back from gold to yellow");
+    [["AY7", YELLOW], ["AZ7", YELLOW], ["BB7", YELLOW]],
+    "the three glass cells walk back from gold to yellow, and TUFF is not rewritten");
+  assert.strictEqual(cpRow("R7001", "glass:tuff").status, "done",
+    "and the record still says TUFF is done: its own count did not move, so nothing rewrote it");
   /* the record now says yellow. The download is still 36 s behind and still
      says gold - which is exactly the moment a flicker used to happen. */
   A("ALL = applyPending(ALL, true)");
@@ -607,8 +641,9 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
      by a feature that had learned nothing from doing it. A yellow item seeded
      the floor's row at nought (cpStored holds no count for one), the floor's
      reading was "blank", and the first tap on that job painted the office's
-     own mark out. So an office yellow is now read as what yellow MEANS under
-     this feature: cutting and hotmelting complete, glazing not.
+     own mark out. So an office yellow is read as what yellow MEANS under this
+     feature - and what it means changed on 2026-09-21: ONE of the two glass
+     stages complete. Cutting comes first, so cutting is the one.
 
      The test is the whole round trip - what the office ticked, through the
      seed, onto the floor's row, and back out as a colour. */
@@ -625,28 +660,29 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
              colour: ST.glassColours(ST.jobRecord([{ id: "700", fields: fields }], job.id)) };
   };
   const yellowOnly = seedTrip([{ type: "dg", total: 4, status: "process", done: 0 }], { dg: 4 });
-  assert.deepStrictEqual(yellowOnly.seed, { cut: 4, hotmelt: 4, glazed: 0 },
-    "an office yellow seeds cut and hotmelt to the total, and glazed to nought");
+  assert.deepStrictEqual(yellowOnly.seed, { cut: 4, hotmelt: 0 },
+    "an office yellow seeds CUT to the total and hotmelt to nought - one complete stage");
   assert.strictEqual(yellowOnly.colour.dg, "yellow",
     "and the cell round-trips to YELLOW - not blank, which is what it used to do");
   assert.notStrictEqual(yellowOnly.colour.dg, "gold",
-    "and not gold either: glazing has not happened and the seed does not pretend it has");
+    "and not gold either: the seed does not pretend a second stage has happened");
+  assert.ok(!("glazed" in yellowOnly.seed), "and the seed has no glazing in it at all");
   pass("an office yellow comes back as yellow: the mark the office made survives being fed to the floor");
 
   const goldOnly = seedTrip([{ type: "dg", total: 4, status: "done", done: 4 }], { dg: 4 });
-  assert.deepStrictEqual(goldOnly.seed, { cut: 4, hotmelt: 4, glazed: 4 },
-    "a gold item still seeds all three, exactly as before");
+  assert.deepStrictEqual(goldOnly.seed, { cut: 4, hotmelt: 4 },
+    "a gold item seeds both glass stages, and no third one");
   assert.strictEqual(goldOnly.colour.dg, "gold", "and still round-trips to gold");
   const bothYellow = seedTrip(
     [{ type: "dg", total: 4, status: "process" }, { type: "tg", total: 4, status: "process" }],
     { dg: 4, tg: 4 });
-  assert.deepStrictEqual(bothYellow.seed, { cut: 8, hotmelt: 8, glazed: 0 });
+  assert.deepStrictEqual(bothYellow.seed, { cut: 8, hotmelt: 0 });
   assert.strictEqual(bothYellow.colour.dg, "yellow");
   assert.strictEqual(bothYellow.colour.tg, "yellow", "two yellow items, both still yellow");
   const goldAndYellow = seedTrip(
     [{ type: "dg", total: 4, status: "done" }, { type: "tg", total: 4, status: "process" }],
     { dg: 4, tg: 4 });
-  assert.deepStrictEqual(goldAndYellow.seed, { cut: 8, hotmelt: 8, glazed: 0 });
+  assert.deepStrictEqual(goldAndYellow.seed, { cut: 8, hotmelt: 0 });
   assert.strictEqual(goldAndYellow.colour.dg, "yellow",
     "one gold and one yellow comes back yellow for both - the floor's row holds one number " +
     "for DG and TG together, so it can only say one thing, and the honest one is the lower");
@@ -658,7 +694,7 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   const mixed = seedTrip(
     [{ type: "dg", total: 4, status: "process", done: 0 }, { type: "tg", total: 4, status: "" }],
     { dg: 4, tg: 4 });
-  assert.deepStrictEqual(mixed.seed, { cut: 0, hotmelt: 0, glazed: 0 },
+  assert.deepStrictEqual(mixed.seed, { cut: 0, hotmelt: 0 },
     "a part-yellow job seeds at the office's own count, and a countless yellow is nought");
   assert.strictEqual(mixed.colour.dg, "",
     "so that job's yellow is still lost once the floor taps - the known limit, and the price " +
@@ -715,7 +751,10 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
        three other cells the same job would also be arguing over */
     const cp = { win: "", drs: "", glass: { dg: "done" }, prod: {} };
     global.__jc = mkJob({ glass: { dg: 4 }, cp: cp });
-    global.__items = [row(Object.assign({ Cut: 8, Hotmelt: 8, Glazed: 0, DoneAt: floorWhen }, opts || {}))];
+    /* cut and NOT hotmelted, which is yellow under the 2026-09-21 rule: the
+       office's row says gold, so the two really do disagree and the contest is
+       about which of them is written */
+    global.__items = [row(Object.assign({ Cut: 8, Hotmelt: 0, Glazed: 8, DoneAt: floorWhen }, opts || {}))];
     A("PENDING = {}; savePending(); ALL = [__jc]; STATION_ITEMS = __items;" +
       "CHANGES = []; state.sel = null;");
     officeOnly(officeWhen, source);
@@ -815,7 +854,7 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
      spoken - because there was nowhere better to look. There is now. */
   assert.strictEqual(typeof glassLogStamps, "undefined", "glassLogStamps is gone");
   global.__jl = mkJob({ glass: { dg: 4 }, cp: { win: "", drs: "", glass: { dg: "done" }, prod: {} } });
-  global.__items = [row({ Cut: 8, Hotmelt: 8, Glazed: 0, DoneAt: isoAt(15, 0) })];
+  global.__items = [row({ Cut: 8, Hotmelt: 0, Glazed: 0, DoneAt: isoAt(15, 0) })];
   officeOnly("");
   A("PENDING = {}; savePending(); ALL = [__jl]; STATION_ITEMS = __items;" +
     "CHANGES = [{ at: '10/09/2026 23:00', who: 'the colleague', job: 'R7001', what: 'Glass DG'," +
@@ -859,7 +898,9 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
 
   /* ================= 8. a refused write, and the brake on it ================= */
   global.__jf = mkJob();
-  global.__items = [row({ Cut: 8, Hotmelt: 8, DoneAt: isoAt(15, 0) })];
+  /* one complete stage: yellow, which is what every assertion in this section
+     is about recording and failing to paint */
+  global.__items = [row({ Cut: 8, DoneAt: isoAt(15, 0) })];
   const failScene = () => {
     A("PENDING = {}; savePending(); ALL = [__jf]; STATION_ITEMS = __items; CHANGES = [];");
   };
@@ -1151,20 +1192,22 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   await settle(120);
   assert.strictEqual(ASKED.length, 1, "the office is asked once, before anything is written");
   assert.strictEqual(ASKED[0],
-    "The floor has recorded 8 cut, 8 hotmelted, 8 glazed, 11 tuff on this job. Clearing the " +
+    "The floor has recorded 8 cut, 8 hotmelted, 11 tuff on this job. Clearing the " +
     "glass here will set all of those back to zero. Clear it anyway?",
-    "and told exactly what will be destroyed");
+    "and told exactly what will be destroyed - glazing is not this station's to name any more");
   assert.strictEqual(clearWrites().length, 1, "one write to the floor's list, and one only");
   assert.strictEqual(clearWrites()[0].id, "700", "onto that job's own row");
   assert.deepStrictEqual(clearWrites()[0].fields,
-    { Cut: 0, Hotmelt: 0, Glazed: 0, Tuff: 0, DoneBy: "the admin",
+    { Cut: 0, Hotmelt: 0, Tuff: 0, DoneBy: "the admin",
       DoneAt: clearWrites()[0].fields.DoneAt, OfficeDone: "No" },
-    "the four counters at nought, the last touch, and the unlock - asserted as an exact key set");
+    "the three counters at nought, the last touch, and the unlock - asserted as an exact key set");
+  assert.ok(!("Glazed" in clearWrites()[0].fields),
+    "and NOT Glazed: an office clear leaves the glazing data exactly where it is (rule 8)");
   assert.strictEqual(A("stationForJob('R7001').officeDone"), false,
     "and this dashboard's own copy of the row shows the job unlocked at once, without waiting for a feed");
   assert.ok(/^\d{4}-\d\d-\d\dT.*Z$/.test(clearWrites()[0].fields.DoneAt),
     "DoneAt is a real ISO stamp, so the floor's row does not read as old news");
-  pass("an office clear on a job the floor has tapped writes exactly the four noughts and the last touch");
+  pass("an office clear on a job the floor has tapped writes exactly the three noughts and the last touch");
 
   ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt", "TuffBy", "TuffAt"]
     .forEach(k => assert.ok(!(k in clearWrites()[0].fields),
@@ -1178,7 +1221,7 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
     "and not one request of any kind reached the Station log or the people list");
   assert.strictEqual(A("Object.keys(FLOORCLEAR_OK).length"), 0, "the office's permission is spent once");
   assert.strictEqual(A("Object.keys(FLOORCLEAR_OWED).length"), 0, "and nothing is left owed");
-  pass("no Station log line, no per-stage By or At, no job fact but the unlock: seven fields and stopped");
+  pass("no Station log line, no per-stage By or At, no job fact but the unlock: six fields and stopped");
 
   /* THE POINT OF THE WHOLE FEATURE: all three now say the same thing */
   assert.strictEqual(A("stationForJob('R7001').cut"), 0, "the floor's row reads nought");
@@ -1243,7 +1286,7 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
     "the row is still untouched, so the feeder can still seed it - which is what will clear it");
   assert.deepStrictEqual(ST.seedFields({ total: 8, seed: ST.officeSeed({ total: 8 },
     [{ type: "dg", total: 4, status: "", done: 0 }, { type: "tg", total: 4, status: "", done: 0 }]) }),
-    { Cut: 0, Hotmelt: 0, Glazed: 0 }, "and the seed it will write is nought, nought, nought");
+    { Cut: 0, Hotmelt: 0 }, "and the seed it will write is nought and nought - and no Glazed");
   assert.ok(fills().length > 0, "while the workbook half went out exactly as before");
   pass("a row the floor never tapped is left to the feeder: no question, no write, no stamp planted on it");
 
@@ -1255,7 +1298,8 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   setItemProgress(j, "glass:dg", 0);
   await settle(1400);
   assert.strictEqual(ASKED.length, 1, "the per-item Clear asks too");
-  assert.ok(ASKED[0].indexOf("8 cut, 8 hotmelted, 8 glazed") > 0, "naming the same work");
+  assert.ok(ASKED[0].indexOf("8 cut, 8 hotmelted") > 0, "naming the same work");
+  assert.ok(ASKED[0].indexOf("glazed") < 0, "and never naming glazing, which it does not clear");
   assert.strictEqual(clearWrites().length, 1);
   assert.deepStrictEqual(Object.keys(clearWrites()[0].fields).sort(),
     ST.OFFICE_CLEAR_FIELDS.slice().sort(), "with the same six fields and no others");
@@ -1637,7 +1681,8 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   const cleared = clearWrites();
   assert.strictEqual(cleared.length, 1, "and the floor's counters are cleared, in one write");
   assert.deepStrictEqual([cleared[0].fields.Cut, cleared[0].fields.Hotmelt,
-                          cleared[0].fields.Glazed, cleared[0].fields.Tuff], [0, 0, 0, 0]);
+                          cleared[0].fields.Tuff], [0, 0, 0]);
+  assert.ok(!("Glazed" in cleared[0].fields), "and the glazing column is not in the write at all");
   assert.strictEqual(cleared[0].fields.OfficeDone, "No", "with the unlock riding along");
   pass("2. the office clears it: the record, Excel, the floor's counters and the lock");
 
@@ -1784,6 +1829,17 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.ok(!Object.keys(BOOK).some(s => /^Production \(2\)|PA Lam|Glass x|Glazing|Dashboard Config/.test(s)),
     "and no other sheet was even created");
   pass("no sheet but Production and the dashboard's own were touched, and Dashboard Config never at all");
+
+  /* RULE 8, over the whole run: not one request body of any kind names a
+     glazing column. The data stays on the list untouched precisely because
+     nothing here can write it - the feeder's seed, the office's clear and the
+     colour writer all go out through whitelists that no longer hold it. */
+  ALLREQ.filter(r => r.body).forEach(r => {
+    ["Glazed", "GlazedBy", "GlazedAt"].forEach(k =>
+      assert.ok(!(r.body.fields && k in r.body.fields) && !(k in r.body),
+        r.method + " " + r.path + " must not carry " + k));
+  });
+  pass("rule 8: across every request of the whole run, no Glazed, GlazedBy or GlazedAt was written");
 
   const bodies = ALLREQ.filter(r => r.body).map(r => JSON.stringify(r.body)).join(" ");
   ["eircode", "Eircode", "phone", "Phone", "county", "County", "price", "Price"].forEach(w =>

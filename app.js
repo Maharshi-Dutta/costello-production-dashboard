@@ -1937,7 +1937,8 @@ function chipsNow() {
   const unread = notesUnreadFresh();
   for (let i = 0; i < ROWS_DRAWN.length; i++) {
     const j = ROWS_DRAWN[i], g = stationForJob(j.id);
-    if (g) glass += j.id + ":" + g.cut + "," + g.hotmelt + "," + g.glazed + "/" + g.total + "|";
+    if (g) glass += j.id + ":" + ST.STAGE_KEYS.map(k => g[ST.STAGE_ROW[k]]).join(",") +
+                    "/" + g.total + "|";
     /* the note icon is part of what a row is saying (amendment E2), so a note
        arriving - or somebody at this screen opening the job - repaints the rows
        down the same quiet path a counter moving does */
@@ -3774,8 +3775,10 @@ async function setGroupDone(j, group, on) {
 
    THE RULE, exactly (CLAUDE.md rule 3, second exception, owner 2026-09-10):
    when the office CLEARS a job's glass checkpoints it may write that job's
-   `Glass station` row's Cut, Hotmelt, Glazed and Tuff to nought, plus
-   DoneBy/DoneAt. That is all. The office still never writes `Station people`,
+   `Glass station` row's Cut, Hotmelt and Tuff to nought, plus DoneBy/DoneAt
+   (`Glazed` was one of them until 2026-09-21 and is left alone now, like every
+   other piece of glazing data). That is all. The office still never writes
+   `Station people`,
    never writes `Station log`, never writes a per-stage By/At, and never writes
    a floor column for any other reason.
 
@@ -3824,7 +3827,7 @@ function officeGlassEmpty(j, counts) {
   const mine = (counts || glassCounts(j)).filter(c => ST.TOTAL_TYPES.indexOf(ST.jobKey(c.type)) >= 0);
   if (!mine.length) return false;                 // no DG and no TG: nothing the floor was ever given
   const seed = ST.officeSeed({ total: ST.glassTotal(j) }, mine);
-  return !seed.cut && !seed.hotmelt && !seed.glazed;
+  return ST.STAGE_KEYS.every(k => !seed[k]);
 }
 /** This job's glass counts as they will read once one item is set to `want` -
     the office's record as it is ABOUT to be, so the clear can be recognised
@@ -5875,10 +5878,10 @@ const rowDraw = i => ROWS_QUIET ? "animation:none" : "animation-delay:" + Math.m
     this reads, it never asks for anything, and it never writes - the counters
     are the tablet's to move and the Excel file is not involved in any of it.
 
-    One number for all three stages, because a row has room for one number:
-    eight glasses to cut, hotmelt and glaze is twenty-four steps, and "8/24"
-    says how far through the job the floor has got. The breakdown, and the fact
-    that none of it is in the workbook, go in the title where there is room.
+    One number for both glass stages, because a row has room for one number:
+    eight glasses to cut and hotmelt is sixteen steps, and "8/16" says how far
+    through the job the floor has got. The breakdown, and the fact that none of
+    it is in the workbook, go in the title where there is room.
 
     Nothing at all for a job the floor has never been fed, or one with no glass
     on it: a row that has nothing to do with the floor must look exactly as it
@@ -5892,9 +5895,9 @@ function glassChip(j) {
   if (!ST.glassTotal(j)) return "";
   const g = stationForJob(j.id);
   if (!g || !g.total) return "";
-  /* the THREE glass stages, deliberately, not the four. Tuff counts a different
-     quantity, so adding it would make the denominator mean nothing: "8/24" is
-     eight glasses through three stages, which is what the chip has always said. */
+  /* the GLASS stages, deliberately, not tuff as well. Tuff counts a different
+     quantity, so adding it would make the denominator mean nothing: "8/16" is
+     eight glasses through two stages, which is what the chip has always said. */
   const done = ST.STAGE_KEYS.reduce((n, k) => n + g[ST.STAGE_ROW[k]], 0);
   const steps = g.total * ST.STAGE_KEYS.length;
   const each = ST.STAGES.map(s => s[1].toLowerCase() + " " + g[ST.STAGE_ROW[s[0]]]).join(", ");
@@ -6040,7 +6043,7 @@ function stWhen(iso) {
   return p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " + hm;
 }
 
-/** What the floor has recorded for one job, in the drawer: the three bars with
+/** What the floor has recorded for one job, in the drawer: a bar per stage with
     who last moved each of them and when, and under it the job's own log lines,
     newest first. Read-only, all of it: this dashboard never writes a counter
     and never writes a log line, and there is nothing here to click but the
@@ -6171,27 +6174,139 @@ function floorNotesCardHtml(job) {
   return '<div class="stnotes">' + rows.map(floorNoteLineHtml).join("") + '</div>';
 }
 
-/** The stages worth drawing for one record. Tuff is a fourth counter against a
+/** The stages worth drawing for one record. Tuff is a third counter against a
     quantity most jobs do not have, and a "Tuff 0 of 0" line on every card would
     be four hundred rows of nothing: it appears only on the jobs that have tuff
-    on them. The three glass stages are always shown. */
+    on them. The two glass stages are always shown. */
 const stStages = g => ST.ALL_STAGES.filter(s => s[0] !== ST.TUFF_STAGE || (g && g.tuffTotal > 0));
 
 /** One stage of one job: "Cutting 12 of 12" and, under it, who last moved it
     and when. No bar - the floor has none either, and a card that has gone gold
-    has already said the only thing a bar was saying. */
-function stStageHtml(label, b) {
+    has already said the only thing a bar was saying.
+
+    `ctl` is the office's own steppers, and it is why this takes a third
+    argument: the BOARD passes them (2026-09-21) and the DRAWER passes nothing,
+    so the two cannot drift into drawing the same line differently. */
+function stStageHtml(label, b, ctl) {
   const full = b.total > 0 && b.done >= b.total;
   return '<div class="stbar' + (full ? " full" : "") + '">' +
     '<div class="stbhead"><span class="stbl">' + esc(label) + '</span>' +
-    '<span class="cpnum tab">' + (b.total ? b.done + " of " + b.total : "\u2014") + '</span></div>' +
+    '<span class="cpnum tab">' + (b.total ? b.done + " of " + b.total : "\u2014") + '</span>' +
+    (ctl || "") + '</div>' +
     (b.by || b.at ? '<div class="stwho">' + esc(b.by || "\u2014") +
       (b.at ? ' \u00b7 ' + esc(stWhen(b.at)) : "") + '</div>' : "") +
     '</div>';
 }
 
-/** The Glass station board, read-only, in the job list's place. Everything on
-    it comes from the two SharePoint lists; nothing here can write anywhere. */
+/* ---- the office's own edit of a glass counter -------------------------------
+   The THIRD sanctioned office write of a floor counter (CLAUDE.md rule 2,
+   dated 2026-09-21, owner's decision 6). The owner asked to work from the Glass
+   station board rather than only read it: set and clear a counter there, and
+   open the job from there.
+
+   It is the welding board's office steppers, on this station's columns. What
+   one click writes, and all it CAN write: that stage's counter, that stage's By
+   and At, and the last-touch pair - ST.tapFields, run through ST.floorOnly,
+   which is the same pair the tablet's own queue runs on. A job fact cannot get
+   into it, because the builder takes a stage, a number, a name and a time.
+
+   What it does NOT write: a `Station log` line - that list is the floor's and
+   stays the floor's, and there is no call to ST.logFields on this path at all -
+   and not one cell of the workbook. The change goes into `Dashboard Log`
+   through noteChange, exactly as the glass CLEAR's does, and the sheet's
+   colours follow on the colour writer's next run (glassColourRun) from the new
+   counters, by the 2026-09-21 rule, not from this click.                     */
+const GLASS_EDIT_WORDS = { cut: "Glass cutting", hotmelt: "Glass hotmelting", tuff: "Glass tuff" };
+let glassWriting = {};                 // item id|stage -> an office write in flight
+
+async function glassOfficeEdit(job, stage, act) {
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listPatch) return false;
+  const rec = stationForJob(job);
+  if (!rec) return false;
+  const k = String(rec.id) + "|" + stage;
+  if (glassWriting[k]) return false;                      // one at a time per line
+  if (ST.applyTap(rec, stage, act) == null) return false; // not a stage of this station
+  /* the office's own lock. The board draws these disabled, and the rule is
+     enforced here as well: a job the record says is finished is cleared in the
+     job card, not nudged on the board. */
+  if (rec.officeDone) return false;
+  if (STATION_OK !== true) { toast(STATION_WHY || STATION_LIST_MISSING, true); return false; }
+  if (CW.hasListConsent && !(await CW.hasListConsent())) { toast(STATION_NEED_CONSENT, true); return false; }
+  const who = feedWho(), at = new Date().toISOString();
+  glassWriting[k] = 1;
+  redrawStation();
+  let from = rec[ST.STAGE_ROW[stage]], value = null, stale = false;
+  try {
+    const siteId = await CW.stationSite(glassSite());
+    if (!siteId) throw new Error(STATION_SITE_MISSING);
+    const opts = { siteId: siteId, fields: ST.STATION_FIELDS };
+    /* READ THE ROW BEFORE DERIVING THE NUMBER - the welding board's reason,
+       word for word: the board's copy is up to ten seconds old and the floor is
+       tapping the same counter, so a "+" against a stale 3 would destroy the
+       forty-six taps that landed in between, with the office's later stamp on
+       it. A read that will not answer throws into the catch and nothing is
+       sent. */
+    const now = await CW.listItem(ST.STATION_LIST, rec.id, opts);
+    if (!now || !now.fields) throw new Error(STATION_LIST_MISSING);
+    const fresh = ST.jobRecord([{ id: rec.id, fields: now.fields }], rec.job);
+    if (!fresh) throw new Error(STATION_LIST_MISSING);
+    stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
+    from = fresh[ST.STAGE_ROW[stage]];
+    value = ST.applyTap(fresh, stage, act);
+    if (value == null || value === from) {
+      /* the floor has already put it where this click was going */
+      delete glassWriting[k];
+      stationMerge(rec.id, now.fields);
+      redrawStation();
+      if (stale) toast(rec.job + ": updated from the floor first.");
+      return false;
+    }
+    const body = ST.floorOnly(ST.tapFields(stage, value, who, at));
+    await CW.listPatch(ST.STATION_LIST, rec.id, body, opts);
+    stationMerge(rec.id, Object.assign({}, now.fields, body));
+  } catch (e) {
+    /* the optimistic number never reached the list, so what goes back on screen
+       is what the list still says: nothing local was changed before the write */
+    delete glassWriting[k];
+    console.warn("[station] office glass edit refused:", (e && e.message) || e);
+    toast(rec.job + ": that change could not be saved \u2014 it still reads " + from + ". " + friendly(e), true);
+    redrawStation();
+    return false;
+  }
+  delete glassWriting[k];
+  redrawStation();
+  if (stale) toast(rec.job + ": updated from the floor first \u2014 " +
+                   ST.stageLabel(stage) + " is " + value + " now.");
+  /* one line per change, in the office's own log and nowhere else */
+  noteChange(rec.job, GLASS_EDIT_WORDS[stage] || ("Glass " + stage), String(from), String(value));
+  return true;
+}
+/** Put one row's new fields into this dashboard's copy of the list at once, so
+    the board reads them without waiting for the ten-second poll. A NEW array,
+    because stationRecords() caches on its identity. */
+function stationMerge(id, fields) {
+  STATION_ITEMS = (STATION_ITEMS || []).map(it => String(it.id) === String(id)
+    ? { id: it.id, fields: Object.assign({}, it.fields || {}, fields) } : it);
+}
+
+/** The office's steppers on one stage line of the board. `.wobtn` is the
+    welding board's own button class, shared on purpose: the two boards do the
+    same thing and should not look like two features. */
+function stOfficeStepsHtml(g, stage) {
+  const busy = !!glassWriting[String(g.id) + "|" + stage];
+  const off = busy || g.officeDone;
+  const b = (t, act) => '<button class="wobtn" data-gjob="' + esc(g.job) +
+    '" data-gstage="' + esc(stage) + '" data-gact="' + esc(act) + '"' +
+    (off ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
+  return '<span class="stbtns">' + b("&minus;", "-1") + b("+", "1") + b("All", "all") + '</span>';
+}
+
+/** The Glass station board, in the job list's place. Everything on it comes
+    from the two SharePoint lists; nothing here touches the workbook.
+
+    A WORKING SURFACE since 2026-09-21 (owner's decisions 6 and the card head):
+    each stage line carries the office's own steppers, and the card's head opens
+    the job's drawer. Nothing else about it moved.                            */
 function stationBoardHtml() {
   if (typeof ST === "undefined") return '<div class="empty">The station board did not load.</div>';
   if (STATION_OK === null) return '<div class="empty">' + esc(STATION_CHECKING) + '</div>';
@@ -6210,20 +6325,52 @@ function stationBoardHtml() {
   notesUnreadFresh();                  // the cards carry the same icon the rows do
   return trouble + order.map(g => {
     const last = ST.logLast(log, g.job);
+    /* the head opens the job's drawer - but only for a job still on the sheet.
+       A board job that has left production has no drawer to open, so it is not
+       a button and says nothing about it. */
+    const live = !!byId(g.job);
     return '<div class="stcard' + (g.finished ? " done" : "") + '">' +
-      '<div class="sthead">' +
+      '<div class="sthead' + (live ? " stopen" : "") + '"' +
+        (live ? ' data-gopen="' + esc(g.job) + '"' : "") + '>' +
         '<span class="cond tab stjob">' + esc(g.job) + '</span>' +
         '<span class="stcust">' + esc(g.customer || "\u2014") + '</span>' +
         '<span class="stcount tab">' + esc(ST.glassWords(g.total)) + '</span>' +
         notesIconHtml(g.job) +
         '<span class="stfed">' + esc(g.fedAt ? "fed " + agoWords(g.fedAt) : "not fed yet") + '</span>' +
       '</div>' +
-      '<div class="stbars">' + stStages(g).map(s => stStageHtml(s[1], g.bars[s[0]])).join("") + '</div>' +
+      '<div class="stbars">' + stStages(g).map(s =>
+        stStageHtml(s[1], g.bars[s[0]], stOfficeStepsHtml(g, s[0]))).join("") + '</div>' +
+      (g.officeDone ? '<div class="stlock">glass complete \u2014 clear it in the job card</div>' : "") +
       (last ? '<div class="stlast">last: ' + esc(last.who || "\u2014") + ' ' + esc(ST.stageLabel(last.stage)) +
         ' ' + last.from + '\u2192' + last.to + ', ' + esc(agoWords(last.at)) + '</div>' : "") +
       floorNotesCardHtml(g.job) +
     '</div>';
   }).join("");
+}
+
+/** Wire the Glass station board: the office's steppers, and the card head's
+    way into the job drawer. The note icon keeps its own click (wireNotesIcons),
+    which is why the head's listener steps aside for it. */
+function wireStationBoard(host) {
+  if (!host || !host.querySelectorAll) return;
+  (host.querySelectorAll("[data-gact]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (el.disabled) return;
+      const act = el.dataset.gact;
+      glassOfficeEdit(el.dataset.gjob, el.dataset.gstage,
+                      act === "all" || act === "none" ? act : Number(act))
+        .catch(e => console.warn("[station] " + ((e && e.message) || e)));
+    };
+  });
+  (host.querySelectorAll("[data-gopen]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.target && inNotesIcon(ev.target)) return;     // the icon has its own way in
+      const j = el.dataset.gopen;
+      if (!byId(j)) return;
+      state.sel = j; state.edit = false; openDrawer();
+    };
+  });
 }
 
 /* ---- the log window ---------------------------------------------------------
@@ -6254,8 +6401,17 @@ function renderStationLog() {
   stationPeopleIfNeeded(() => { if ($("#lhost")) renderStationLog(); });
 
   const names = {};
+  const rowsNow = STATION_LOG_OK === true ? logRowsNow() : [];
   ST.stationPeople(STATION_PEOPLE || [], ST.STATION_NAME).forEach(p => { names[p.name] = 1; });
-  (STATION_LOG_OK === true ? logRowsNow() : []).forEach(r => { if (r.who) names[r.who] = 1; });
+  rowsNow.forEach(r => { if (r.who) names[r.who] = 1; });
+  /* the stages this station has, plus any the LINES ON SCREEN carry that it no
+     longer does - `glazed`, written before 2026-09-21, is still in the log and
+     a filter that could not name it would be a filter that hides history. It is
+     an option in a dropdown and nothing more: no tap, no seed, no whitelist. */
+  const stages = ST.ALL_STAGES.slice();
+  rowsNow.forEach(r => {
+    if (r.stage && !stages.some(s => s[0] === r.stage)) stages.push([r.stage, ST.stageLabel(r.stage)]);
+  });
   const opt = (v, label, now) => '<option value="' + esc(v) + '"' + (now === v ? " selected" : "") +
     '>' + esc(label) + '</option>';
 
@@ -6269,7 +6425,7 @@ function renderStationLog() {
       '<select class="txt" id="lgwho">' + opt("", "Everyone", LOGF.who) +
         Object.keys(names).sort().map(nm => opt(nm, nm, LOGF.who)).join("") + '</select>' +
       '<select class="txt" id="lgstage">' + opt("", "Every stage", LOGF.stage) +
-        ST.ALL_STAGES.map(st => opt(st[0], st[1], LOGF.stage)).join("") + '</select>' +
+        stages.map(st => opt(st[0], st[1], LOGF.stage)).join("") + '</select>' +
       '<input class="txt" id="lgjob" placeholder="Job number" value="' + esc(LOGF.job) + '">' +
       '<input class="txt" id="lgday" type="date" value="' + esc(LOGF.day) + '">' +
       '<button class="chip" id="lgclear">Clear filters</button>' +
@@ -6387,6 +6543,7 @@ function renderRows() {
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
     host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
     wireNotesIcons(host);              // the card's note icon opens the job, as the row's does
+    wireStationBoard(host);            // ... and the office's steppers and the card head
     const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.jobBoard(STATION_ITEMS || []).length : 0;
     $("#count").textContent = n ? "Showing " + n + " job" + (n > 1 ? "s" : "") + " on the Glass station board"
                                 : "Glass station";

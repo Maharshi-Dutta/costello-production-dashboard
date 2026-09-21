@@ -59,8 +59,11 @@
            background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
            padding:8px 16px; min-height:40px; display:flex; align-items:center }
   #whois:empty { display:none }
-  #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+  #switchbtn, #stagebtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600 }
+  /* which of the two glass tablets this is. Tapped rarely and by the office,
+     so it sits quietly beside the name rather than competing with it. */
+  #stagebtn { font-weight:500; color:#a8a49a }
   /* the search box: a job number or a customer name, narrowing the cards as it
      is typed. In the header, so redrawing the board never takes the caret. */
   /* 16px exactly: anything smaller and iOS zooms the whole page in when the
@@ -117,7 +120,8 @@
      is greyed and only the office can take it off again */
   .officedone { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--ink-3) }
 
-  /* The three stages, with their buttons, on the card itself: nothing to open,
+  /* This tablet's stage (and tuff on the cutting one), with its buttons, on the
+     card itself: nothing to open,
      nothing to scroll inside, no bars. Everything tapped here is at least
      56 px, because it is tapped with a work glove on. A stage this person does
      not hold is greyed and disabled - still readable, never movable. */
@@ -215,7 +219,7 @@
   <div class="gatebox">
     <h1>Glass station</h1>
     <p>Sign in with the station account to see today's glass and record what has
-       been cut, hotmelted and glazed.</p>
+       been cut or hotmelted on this tablet.</p>
     <button class="signin" id="signinbtn">
       <svg width="18" height="18" viewBox="0 0 23 23"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/><path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/></svg>
       Sign in
@@ -225,7 +229,8 @@
 </div>
 
 <header class="top" hidden id="top">
-  <span class="brand">Glass station</span>
+  <span class="brand" id="brand">Glass station</span>
+  <button id="stagebtn" hidden></button>
   <span id="whois"></span>
   <button id="switchbtn" hidden>Switch person</button>
   <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>

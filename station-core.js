@@ -30,32 +30,46 @@ const STATION_SITE = "FloorStations";
    word here - that is the whole reason the Station column exists. */
 const STATION_NAME = "Glass";
 
-/* The three things the floor records about a glass unit, in the order they are
+/* The two things the floor records about a glass unit, in the order they are
    shown. The keys are the board's own; the four maps below say which list
    columns they mean. Every stage applies to every glass unit: there is no unit
-   that skips one. */
-const STAGES = [["cut", "Cutting"], ["hotmelt", "Hotmelting"], ["glazed", "Glazing"]];
+   that skips one.
+
+   GLAZING LEFT THIS STATION on 2026-09-21 (docs/specs/2026-09-21-glass-split-
+   no-glazing.md). The owner's correction: glazing is the last step of the whole
+   job, not a glass step, so it stops deciding whether glass is done and gets a
+   station of its own later. The `Glazed`, `GlazedBy` and `GlazedAt` columns
+   stay on the list with whatever is in them - nothing rewrites, resets or
+   deletes them - and nothing reads or writes them any more. */
+const STAGES = [["cut", "Cutting"], ["hotmelt", "Hotmelting"]];
 const STAGE_KEYS = STAGES.map(s => s[0]);
-/* Tuff is a fourth thing the same person counts, added 2026-09-10: a different
+/* Display only, for history. `Station log` lines written before 2026-09-21
+   carry Stage = "glazed", and a log that suddenly reads "glazed" in lower case
+   where every other line reads "Cutting" would look broken. This map is read by
+   stageLabel and by nothing else: a word in here is not a stage, cannot be
+   tapped, cannot be seeded and is not in any whitelist. */
+const LEGACY_STAGE_LABELS = { glazed: "Glazing" };
+/* Tuff is a third thing the same person counts, added 2026-09-10: a different
    department, the same hands, and its own quantity off the sheet's TUFF column
-   rather than the DG + TG one. It is NOT one of the three above, and the
+   rather than the DG + TG one. It is NOT one of the two above, and the
    difference matters in three places - it is not part of the job's glass total,
-   it does not decide whether a job is finished, and it is not one of the three
-   counters the feeder may seed. So the three keep their own list (STAGES /
-   STAGE_KEYS, which everything written before today reads) and the four have
-   their own beside it. */
+   it does not decide whether a job is finished, and it is not one of the
+   counters the feeder may seed. So the two keep their own list (STAGES /
+   STAGE_KEYS) and all three have their own beside it. */
 const TUFF_STAGE = "tuff";
 const ALL_STAGES = STAGES.concat([[TUFF_STAGE, "Tuff"]]);
 const ALL_STAGE_KEYS = ALL_STAGES.map(s => s[0]);
-const STAGE_FIELD = { cut: "Cut", hotmelt: "Hotmelt", glazed: "Glazed", tuff: "Tuff" };
-const STAGE_ROW = { cut: "cut", hotmelt: "hotmelt", glazed: "glazed", tuff: "tuff" };
-const STAGE_BY = { cut: "CutBy", hotmelt: "HotmeltBy", glazed: "GlazedBy", tuff: "TuffBy" };
-const STAGE_AT = { cut: "CutAt", hotmelt: "HotmeltAt", glazed: "GlazedAt", tuff: "TuffAt" };
-/* Which total a stage counts against, on a board record. Three of them count
+const STAGE_FIELD = { cut: "Cut", hotmelt: "Hotmelt", tuff: "Tuff" };
+const STAGE_ROW = { cut: "cut", hotmelt: "hotmelt", tuff: "tuff" };
+const STAGE_BY = { cut: "CutBy", hotmelt: "HotmeltBy", tuff: "TuffBy" };
+const STAGE_AT = { cut: "CutAt", hotmelt: "HotmeltAt", tuff: "TuffAt" };
+/* Which total a stage counts against, on a board record. Two of them count
    glasses; tuff counts tuff units, and clamping it to the glass total would
    read 8 of 8 on a job with eleven tuff and eight glasses. */
-const STAGE_TOTAL_ROW = { cut: "total", hotmelt: "total", glazed: "total", tuff: "tuffTotal" };
-const stageLabel = k => (ALL_STAGES.find(s => s[0] === k) || [k, k])[1];
+const STAGE_TOTAL_ROW = { cut: "total", hotmelt: "total", tuff: "tuffTotal" };
+/* a stage's word - falling back to the legacy map, so an old log line still
+   reads "Glazing" rather than "glazed" */
+const stageLabel = k => (ALL_STAGES.find(s => s[0] === k) || [k, LEGACY_STAGE_LABELS[k] || k])[1];
 
 /* Every column of the list, for the field selection of a read. The feeder
    writes Title and the six job facts plus FedAt/FedBy; the floor writes the
@@ -75,17 +89,22 @@ const FEEDER_FIELDS = ["Job", "Customer", "GlassType", "Total", "TuffTotal", "Se
    the same literal in it, so nothing can read a type back off the list even by
    accident. DG and TG are the two kinds that make up that number: TUFF / NOT
    TUFF describe those same units and are not added, and ARCH, ASTRAGAL, FANCY
-   and EXTRA are not glasses the floor cuts, hotmelts and glazes. */
+   and EXTRA are not glasses the floor cuts and hotmelts. */
 const GLASS_TYPE = "GLASS";
 const TOTAL_TYPES = ["DG", "TG"];
 /* The floor's whitelist: the three counters, a By/At pair for each of them,
    and the last-touch pair. A PATCH from the tablet is filtered to this list on
-   the way into the queue and again on the way out of it. */
-const FLOOR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff",
-                      "CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "GlazedBy", "GlazedAt",
+   the way into the queue and again on the way out of it.
+
+   Glazed/GlazedBy/GlazedAt left it on 2026-09-21, which is what makes the
+   removal safe rather than merely tidy: a `glazed` tap sitting in an old
+   tablet's cw_stationq cannot be written, because the filter it runs through on
+   the way out of the queue no longer has a column to put it in. */
+const FLOOR_FIELDS = ["Cut", "Hotmelt", "Tuff",
+                      "CutBy", "CutAt", "HotmeltBy", "HotmeltAt",
                       "TuffBy", "TuffAt", "DoneBy", "DoneAt"];
 const STATION_FIELDS = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], FLOOR_FIELDS);
-/* The three counters, and the ONE exception to "the feeder never writes the
+/* The two counters, and the ONE exception to "the feeder never writes the
    floor's columns": a row the feeder is creating, or a row the floor has never
    tapped (DoneAt empty), starts from what the office has already ticked off in
    the workbook - otherwise a job the office finished last week arrives on the
@@ -95,10 +114,12 @@ const STATION_FIELDS = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], FLOOR
    it, and the office did not.
 
    Tuff is deliberately NOT in this list. The seeding exception was given for
-   the three counters, in the v3 spec's "Seeding" section and nowhere else
+   the glass counters, in the v3 spec's "Seeding" section and nowhere else
    (CLAUDE.md rule 3); nobody has widened it, so the tuff counter starts at
-   nought on every row and only the floor ever moves it. */
-const SEED_FIELDS = ["Cut", "Hotmelt", "Glazed"];
+   nought on every row and only the floor ever moves it. `Glazed` was in here
+   until 2026-09-21 and is not any more: the feeder no longer seeds it and
+   leaves whatever is in it. */
+const SEED_FIELDS = ["Cut", "Hotmelt"];
 const FEEDER_WRITES = ["Title"].concat(FEEDER_FIELDS, ["FedAt", "FedBy"], SEED_FIELDS);
 
 /* ---- a STATION DEFINITION ---------------------------------------------------
@@ -162,7 +183,7 @@ const GLASS = {
     const seed = r.seed || {};
     return [r.title, r.job, r.customer, r.total, r.tuffTotal || 0, r.seq,
             !!r.active, !!r.officeDone,
-            seed.cut || 0, seed.hotmelt || 0, seed.glazed || 0];
+            seed.cut || 0, seed.hotmelt || 0];
   }
 };
 /** The definition to use when a caller named none: the glass station, which is
@@ -186,9 +207,10 @@ const stDef = d => d || GLASS;
    is in the shape of officeClearFields below: it takes a name and a time, so
    there is no argument it could carry a counter or a per-stage stamp IN. Every
    counter it writes is a literal nought, written here, once. */
-const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "DoneAt", "OfficeDone"];
-/** The whole body of an office clear: four noughts, the last-touch pair, and
-    the unlock.
+const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Tuff", "DoneBy", "DoneAt", "OfficeDone"];
+/** The whole body of an office clear: three noughts, the last-touch pair, and
+    the unlock. `Glazed` was one of the noughts until 2026-09-21; a clear now
+    leaves whatever is in it, like everything else on this build (rule 8).
 
     DoneBy/DoneAt are written, and not writing them would be the bug: the
     last-writer-wins rule reads floorStamp off those fields (spec §3), so
@@ -208,7 +230,7 @@ const OFFICE_CLEAR_FIELDS = ["Cut", "Hotmelt", "Glazed", "Tuff", "DoneBy", "Done
     It widens nothing. OfficeDone is a FEEDER field - the office's own column,
     which the office already writes and the tablet never can (floorOnly drops
     it). The counters are the only floor columns on this path, and they are
-    still the same four, still only ever nought. */
+    still the same ones, still only ever nought. */
 function officeClearFields(who, at) {
   const out = {};
   ALL_STAGE_KEYS.forEach(k => { out[STAGE_FIELD[k]] = 0; });
@@ -233,9 +255,9 @@ function floorWorkToClear(g) {
   return ALL_STAGE_KEYS.some(k => Math.round(stNum(g[STAGE_ROW[k]], 0)) > 0);
 }
 /* the word each counter is said with when the office is asked to destroy it */
-const CLEAR_WORD = { cut: "cut", hotmelt: "hotmelted", glazed: "glazed", tuff: "tuff" };
+const CLEAR_WORD = { cut: "cut", hotmelt: "hotmelted", tuff: "tuff" };
 /** What is on this row, in the words a person reads: "49 cut, 49 hotmelted,
-    12 glazed". "" when there is nothing on it. ONE source for those words, so
+    12 tuff". "" when there is nothing on it. ONE source for those words, so
     the question asked before a clear and the apology made when one could not
     be written cannot describe the same row differently. */
 function clearWords(g) {
@@ -349,7 +371,7 @@ function tuffTotal(j) {
    The office ticks glass off job by job in the workbook's own colours long
    before a tablet appears on the floor, and a job that was finished in the
    office last week must not arrive on the tablet reading nothing done. That
-   record is the glass checkpoints, and this turns it into the three counters
+   record is the glass checkpoints, and this turns it into the two counters
    the floor's row starts at.
 
    `counts` is plain data - one entry per glass item of the job, `{type, total,
@@ -359,18 +381,17 @@ function tuffTotal(j) {
    file has to know about a job object or a global.                          */
 function officeSeed(row, counts) {
   const total = Math.max(0, Math.round(stNum(row && row.total, 0)));
-  const none = { cut: 0, hotmelt: 0, glazed: 0 };
+  const none = { cut: 0, hotmelt: 0 };
   if (!(total > 0)) return none;
   const mine = (counts || []).filter(c => c && TOTAL_TYPES.indexOf(stKey(c.type)) >= 0);
   if (!mine.length) return none;
   const st = c => stTxt(c.status).trim().toLowerCase();
-  const all = n => ({ cut: n, hotmelt: n, glazed: n });
+  const all = n => ({ cut: n, hotmelt: n });
   /* gold on every one of them: the office says this job's glass is done, so
      the floor's row is done too */
   if (mine.every(c => st(c) === "done")) return all(total);
-  /* Yellow, on every one of them (owner, 2026-09-10). Since the glass-colours
-     feature shipped, yellow on a glass cell MEANS "cutting and hotmelting are
-     complete" - so an office yellow is read back as exactly that, and the row
+  /* Yellow, on every one of them (owner, 2026-09-10, re-read 2026-09-21). An
+     office yellow is read back as exactly what yellow now means, so the row
      round-trips to yellow again instead of being flattened to blank.
 
      It had to be fixed. Before this, a yellow item with no stored count seeded
@@ -380,22 +401,22 @@ function officeSeed(row, counts) {
      learned nothing from doing it. It was found on the one yellow glass cell
      in the owner's whole workbook.
 
-     Glazed stays at NOUGHT, and that is the point of the branch rather than an
-     omission: yellow says glazing is NOT done, and a glazed counter at the
-     total would make the cell read gold and assert finished work that has not
-     happened.
+     HOTMELT STAYS AT NOUGHT since 2026-09-21, and that is the point of the
+     branch rather than an omission. Yellow now means ONE of the two stages is
+     complete; cutting comes first, so cutting is the one. Seeding both would
+     make the cell read gold and assert finished work that has not happened.
 
      ALL of them, not some. The floor's row carries one combined DG + TG number
      and there is nowhere to put a per-type split (spec §8), so this branch can
      only be taken when the office is saying the whole of the job's glass is
-     cut and hotmelted. A job with DG yellow and TG blank falls through to the
-     count below: seeding cut and hotmelt to the total there would tell the
-     FLOOR that glass which still needs cutting is cut, and a wrong instruction
-     on the workshop screen is worse than a lost colour on a report. */
+     yellow. A job with DG yellow and TG blank falls through to the count
+     below: seeding cut to the total there would tell the FLOOR that glass
+     which still needs cutting is cut, and a wrong instruction on the workshop
+     screen is worse than a lost colour on a report. */
   if (mine.every(c => st(c) === "done" || st(c) === "process"))
-    return { cut: total, hotmelt: total, glazed: 0 };
+    return { cut: total, hotmelt: 0 };
   /* part way there: the office's own count, a gold item counting its whole
-     quantity. All three stages start there - the office does not record which
+     quantity. Both stages start there - the office does not record which
      stage its count belongs to, and starting them level is the reading that
      asks the floor for the least re-typing. */
   if (mine.some(c => st(c) === "done" || st(c) === "process")) {
@@ -407,7 +428,7 @@ function officeSeed(row, counts) {
     return all(stClamp(done, total));
   }
   /* the sheet's Cut green and nothing else: cut, and only cut */
-  if (mine.some(c => st(c) === "cut")) return { cut: total, hotmelt: 0, glazed: 0 };
+  if (mine.some(c => st(c) === "cut")) return { cut: total, hotmelt: 0 };
   return none;
 }
 
@@ -476,7 +497,7 @@ function feederFields(row) {
            Seq: row.seq, Active: row.active ? "Yes" : "No",
            OfficeDone: row.officeDone ? "Yes" : "No" };
 }
-/** The three counters of a slice row's seed, in list shape. */
+/** The two counters of a slice row's seed, in list shape. */
 function seedFields(row) {
   const s = (row && row.seed) || {};
   const out = {};
@@ -500,7 +521,7 @@ function sameField(have, want) {
 /* ---- the plan --------------------------------------------------------------
    HARD RULE, and the reason this is a separate pure function whose output the
    tests read: the plan never contains a delete, and the only floor columns it
-   can ever name are the three counters - on a row it is creating, or on a row
+   can ever name are the two counters - on a row it is creating, or on a row
    whose DoneAt is still empty. A By, an At or the last-touch pair is never in
    a plan at all, and a row the floor has tapped keeps every number on it. A
    job that leaves production is marked Active = No; its counters, and whoever
@@ -612,9 +633,12 @@ function sliceHash(slice, def) {
    Each stage also carries the who and the when of the last change to it, which
    is what the office reads out as "Cutting 8 of 8 - Person A - Tue 14:02".
 
-   A job is finished, and goes gold on both screens, when all three counters
-   have reached the total and there is a total to reach: a row with no glasses
-   on it is not something anybody finished.                                  */
+   A job is finished, and goes gold on the office's board, when both glass
+   counters have reached the total and there is a total to reach: a row with no
+   glasses on it is not something anybody finished. Each TABLET has its own
+   answer to "done here" since 2026-09-21 - the cutter's finished jobs leave
+   the cutter's way before hotmelting has started - and that is the page's own
+   reading of this record, not a second field on it.                         */
 const isActive = f => stTxt(f && f.Active).trim().toLowerCase() === "yes";
 
 /** The job a list row is about, whichever iteration wrote it: v3 writes the
@@ -671,7 +695,7 @@ function buildJobs(items, keep) {
       g.at[k] = stTxt(f[STAGE_AT[k]]);
       g.bars[k] = { done: g[STAGE_ROW[k]], total: t2, by: g.by[k], at: g.at[k] };
     });
-    /* the three glass stages decide this, not the four. Tuff is a different
+    /* the two glass stages decide this, not the three. Tuff is a different
        department's count against a different quantity, and a job whose tuff
        nobody has counted is still a job the glass area has finished. */
     g.finished = total > 0 && STAGE_KEYS.every(k => g[STAGE_ROW[k]] >= total);
@@ -705,13 +729,13 @@ const leftWords = n => Math.max(0, Math.round(stNum(n, 0))) + " left";
     who is holding the tablet, so nothing here can make that untrue.
 
     Each stage counts against its OWN quantity (STAGE_TOTAL_ROW): cutting,
-    hotmelting and glazing against the job's DG + TG, tuff against the sheet's
+    hotmelting against the job's DG + TG, tuff against the sheet's
     own TUFF number. Tuff is never folded into the glass number - a job can be
     8 glasses and 11 tuff at the same time, and 19 is a count of nothing.
 
     The clamp is what keeps it in 0...total, so a row saying -9, or 99, or
     nothing at all, cannot put a negative or a NaN on a workshop wall. A word
-    that is not one of the four stages is not a stage and gets 0 rather than a
+    that is not one of the three stages is not a stage and gets 0 rather than a
     throw: the Stages column is typed by hand.
 
     Note what this is NOT. It does not decide gold: a job goes gold, and folds
@@ -809,9 +833,9 @@ function jobRecords(items) {
 }
 
 /** The new value of one counter after a tap. delta is a number, "all" or
-    "none". The only rule is the clamp: the floor may record glazing before it
-    records hotmelt, and nothing here stops them - the counters are a record of
-    what happened, not a workflow to be enforced. */
+    "none". The only rule is the clamp: the floor may record hotmelting before
+    it records cutting, and nothing here stops them - the counters are a record
+    of what happened, not a workflow to be enforced. */
 function applyTap(row, stage, delta) {
   const field = STAGE_ROW[stage];
   if (!field) return null;
@@ -835,7 +859,7 @@ function applyTap(row, stage, delta) {
 function stationPeople(items, station, stageKeys) {
   const want = stTxt(station || STATION_NAME).trim().toLowerCase();
   /* which words in the Stages column are stages at all. Omitted = the glass
-     station's four, which is what this function has always read; the welding
+     station's three, which is what this function reads; the welding
      page passes its own single "weld". */
   const known = (stageKeys && stageKeys.length) ? stageKeys : ALL_STAGE_KEYS;
   const out = [];
@@ -1383,18 +1407,27 @@ function boardDiff(prev, next, sigOf) {
    ticked by hand in the office and are never written by this feature, in
    either direction, under any state of the floor's row (owner, 2026-09-10).
 
-     DG, TG, NOT TUFF   yellow once cutting AND hotmelting are complete
-     TUFF               yellow once the tuff count is complete
-     all four           gold once glazing is complete
+   THE RULE CHANGED ON 2026-09-21 (docs/specs/2026-09-21-glass-split-no-
+   glazing.md), because glazing left this station and could no longer be the
+   gate for gold. It is now a count of how many of the two glass stages are
+   complete:
 
-   Glazing is the gate for everything: nothing goes gold until the job is
-   glazed. And it walks back down as well as up - a job tapped back to nought
-   goes yellow and then blank again - because the owner asked for it to be
-   reversible: "do not make it one way because it would be hard to reverse it
-   when it done by mistake".
+     DG, TG, NOT TUFF   blank   neither cutting nor hotmelting complete
+                        yellow  exactly one of them complete
+                        gold    both complete
+     TUFF               gold once the tuff count is complete, blank otherwise
+
+   It walks back down as well as up - a job tapped back to nought goes yellow
+   and then blank again - because the owner asked for it to be reversible: "do
+   not make it one way because it would be hard to reverse it when it done by
+   mistake".
 
    "Complete" means the counter has reached that stage's own quantity and there
-   is a quantity to reach: a row with no glasses on it has finished nothing. */
+   is a quantity to reach: a row with no glasses on it has finished nothing.
+
+   Nothing here reads `Glazed` any more. A row still carrying a full `Glazed`
+   from before this build plans exactly what its Cut and Hotmelt say, which is
+   the whole of rule 8: the old data is left alone and has no influence.     */
 const COLOUR_TYPES = ["dg", "tg", "tuff", "not tuff"];
 /** Is one stage of a board record at its own total? */
 function stageComplete(g, k) {
@@ -1404,13 +1437,13 @@ function stageComplete(g, k) {
 /** What each of the four columns should be showing: "gold", "yellow" or ""
     (no colour at all). Pure: it reads a board record and nothing else. */
 function glassColours(g) {
-  const gold = stageComplete(g, "glazed");
-  const madeUp = stageComplete(g, "cut") && stageComplete(g, "hotmelt");
-  const tuffed = stageComplete(g, TUFF_STAGE);
+  /* how many of the two, not which: cutting before hotmelting and hotmelting
+     before cutting are the same half-done job to the sheet */
+  const done = STAGE_KEYS.reduce((n, k) => n + (stageComplete(g, k) ? 1 : 0), 0);
+  const glass = done >= STAGE_KEYS.length ? "gold" : done > 0 ? "yellow" : "";
+  const tuff = stageComplete(g, TUFF_STAGE) ? "gold" : "";
   const out = {};
-  COLOUR_TYPES.forEach(t => {
-    out[t] = gold ? "gold" : ((t === "tuff" ? tuffed : madeUp) ? "yellow" : "");
-  });
+  COLOUR_TYPES.forEach(t => { out[t] = t === "tuff" ? tuff : glass; });
   return out;
 }
 /** When the floor last moved anything on this job, as the ISO stamp it wrote -
@@ -1483,6 +1516,7 @@ const ST = {
   GLASS, stDef,
   STATION_LIST, PEOPLE_LIST, LOG_LIST, STATION_SITE, STATION_NAME,
   STAGES, STAGE_KEYS, STAGE_FIELD, STAGE_ROW, STAGE_BY, STAGE_AT, stageLabel,
+  LEGACY_STAGE_LABELS,
   ALL_STAGES, ALL_STAGE_KEYS, STAGE_TOTAL_ROW, TUFF_STAGE,
   COLOUR_TYPES, stageComplete, glassColours, floorStamp,
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,

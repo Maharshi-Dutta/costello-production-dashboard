@@ -10,7 +10,9 @@ Three pages ship from this repo:
 
 - `index.html` + `app.js` — the master dashboard, used by the office.
 - `glass.html` + `station.js` + `station-core.js` — the glass floor station,
-  used on a shared tablet, shipped 2026-09-08 — see
+  used on **two** shared tablets since 2026-09-21 (one page, told which stage
+  it is by `?stage=cut` / `?stage=hotmelt`, the device's own
+  `cw_stationstage`, or a chooser) — see
   [`docs/specs/2026-09-08-glass-station.md`](docs/specs/2026-09-08-glass-station.md) and its v2 and v3, and
   `docs/STATIONS.md` for the built data model and setup.
 - `welding.html` + `welding.js` + `welding-core.js` — the PVC welding floor
@@ -61,7 +63,13 @@ the one that first wrote them down.
      `Source = floor`, and the cell is painted from the record. Whoever
      spoke last is decided on that row's `When`, and nothing reads a cell's
      colour to decide anything. ARCH, ASTRAGAL, FANCY and EXTRA stay hand-ticked and are never
-     written by that feature;
+     written by that feature. **The rule those four cells are painted by
+     changed on 2026-09-21** (owner,
+     [`docs/specs/2026-09-21-glass-split-no-glazing.md`](docs/specs/2026-09-21-glass-split-no-glazing.md)): glazing left the glass
+     station, so DG, TG and NOT TUFF are blank for neither glass stage
+     complete, **yellow for exactly one**, **gold for both**, and TUFF is gold
+     on its own count with no yellow of its own. Which cells may be painted did
+     not change — only when;
    - **the five DOORS DONE cells of a job's row** — the office ticking one
      door off in the drawer (owner, **2026-09-11**,
      [`docs/specs/2026-09-11-doors-and-window-types.md`](docs/specs/2026-09-11-doors-and-window-types.md) §3, approved to build
@@ -116,7 +124,7 @@ the one that first wrote them down.
    (`app.js`) never writes `Station people`, `Station log` or
    `Station comments`, and never
    writes the floor's own columns of `Glass station`** (`Cut`, `Hotmelt`,
-   `Glazed`, `Tuff` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds
+   `Tuff` and their By/At pairs, `DoneBy`/`DoneAt`) — it only feeds
    that list's job-fact columns (which since 2026-09-10 include `TuffTotal`,
    the sheet's own TUFF quantity, and `OfficeDone`, which says the record
    shows this job's glass is done) and reads all three. The tablet, for its part, can never
@@ -129,11 +137,11 @@ the one that first wrote them down.
    floor's own work goes onto the record too, the floor finishing a job is
    what locks it, and only an office row stamped later unlocks it again.
 
-   There are **exactly three** exceptions, each granted by the owner in a dated
-   spec, each for a named case; a **fourth** is a new decision for the owner,
+   There are **exactly four** exceptions, each granted by the owner in a dated
+   spec, each for a named case; a **fifth** is a new decision for the owner,
    not a judgement call for a session.
    - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
-     nowhere else): the feeder writes `Cut`/`Hotmelt`/`Glazed` on a row it is
+     nowhere else): the feeder writes `Cut`/`Hotmelt` on a row it is
      *creating*, or on a row whose `DoneAt` is empty, seeding them from the
      office's own glass checkpoints so a job already ticked off in the office
      does not arrive on the floor reading nothing done. It never writes a By,
@@ -145,7 +153,7 @@ the one that first wrote them down.
      [`docs/specs/2026-09-10-office-clears-the-floor.md`](docs/specs/2026-09-10-office-clears-the-floor.md)): when the office
      **clears a job's glass checkpoints** — the moment its own record of that
      job's DG and TG goes from saying something to saying nothing — it writes
-     that job's row's `Cut`, `Hotmelt`, `Glazed` and `Tuff` to **zero**, plus
+     that job's row's `Cut`, `Hotmelt` and `Tuff` to **zero**, plus
      `DoneBy`/`DoneAt`, and **nothing else**. Only on a row the floor has
      really tapped (`DoneAt` set) and only with the office's answer to a
      confirmation naming what will be destroyed; a row the floor never tapped
@@ -169,6 +177,22 @@ the one that first wrote them down.
      log`" is unchanged, and the owner's answer about visibility is met by the
      **Floor log** panel on the welding board itself. Nothing on this path goes
      near the workbook: the welding station paints no cell, in either direction.
+   - **The office's glass edits** (owner, **2026-09-21**,
+     [`docs/specs/2026-09-21-glass-split-no-glazing.md`](docs/specs/2026-09-21-glass-split-no-glazing.md), decision 6): on the
+     office's own **Glass station** board, the office may set and clear a job's
+     `Cut`, `Hotmelt` and `Tuff` counters and their By/At stamps. One click
+     writes **exactly five fields** of one `Glass station` row: that stage's
+     counter, that stage's `By`/`At`, and `DoneBy`/`DoneAt`. The proof that it
+     cannot write anything else is the shape of `ST.tapFields(stage, value,
+     who, at)` — a stage, a number, a name and a time — filtered again through
+     `ST.floorOnly` on the way out, which is the same filter the tablet's own
+     queue runs on. Every such change leaves **one `Dashboard Log` line**
+     (`noteChange`, "Glass cutting" / "Glass hotmelting" / "Glass tuff") and
+     **no `Station log` line**. Nothing on this path goes near the workbook: the
+     sheet's colours follow on the colour writer's next pass, from the new
+     counters. `Glazed`, `GlazedBy` and `GlazedAt` are written by nothing at all
+     from that day — not by the feeder, not by a clear, not by the tablet — and
+     are never rewritten, reset or deleted.
    Only the tablet (`station.js`, `welding.js`) writes a By, an At, a last touch
    or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.

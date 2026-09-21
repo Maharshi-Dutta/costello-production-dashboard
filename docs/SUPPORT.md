@@ -155,8 +155,14 @@ missing:
   reloading anything — allow up to ten minutes, or reload the page.
 - If they are offered but their steppers are greyed for a stage they should
   hold, check `Stages` — it is read forgivingly (comma, semicolon or slash
-  separated, case-insensitive) but only `cut`, `hotmelt` and `glazed` are
+  separated, case-insensitive) but only `cut`, `hotmelt` and `tuff` are
   recognised; anything else is silently dropped.
+- **Since 2026-09-21 each glass tablet shows one stage**, so somebody who only
+  hotmelts is not offered the *cutting* tablet at all, and vice versa. Check
+  the header: it reads `GLASS · CUTTING` or `GLASS · HOTMELTING`. If it is the
+  wrong one, tap the `Cutting ▾` button beside it. Somebody whose `Stages`
+  column still holds only the old `glazed` now holds nothing and appears on
+  neither tablet — give them `cut` or `hotmelt`.
 
 ## PIN not accepted on the tablet
 
@@ -267,6 +273,33 @@ every word already typed is still in the box. **You will need to tap the box
 again to carry on typing.** The dashboard puts the cursor back where it was, but
 no web page can make a tablet re-open its keyboard on its own — only a finger
 can — so the tap is unavoidable until the board is redrawn differently.
+
+## What yellow and gold mean on the glass cells (changed 2026-09-21)
+
+**Tell the office and the floor.** Glazing is the last step of the whole job,
+not a glass step, so on 2026-09-21 it left the glass station. What the four
+glass cells (DG, TG, TUFF, NOT TUFF) mean on the `Production` sheet changed
+with it:
+
+- **blank** — neither cutting nor hotmelting is finished on that job;
+- **yellow** — **exactly one of the two is finished**;
+- **gold** — **both are finished**.
+
+TUFF still has its own count and is gold on its own, with no yellow of its own.
+Before that day, yellow meant "cut *and* hotmelted" and nothing went gold until
+glazing was done, so **every job that was yellow turns gold, and some jobs that
+were blank turn yellow**, the first time an office dashboard looks at them.
+That is the change, applied to every job at once, and the owner asked for it.
+
+**Glazing no longer appears on the glass tablets at all.** There is no glazing
+stepper, no glazing number and no glazing person. Nothing that was recorded has
+been deleted: the old counts are still on the list and the old log lines are
+still shown in the Floor log window, labelled "Glazing". They simply decide
+nothing any more. A glazing station of its own is a separate piece of work.
+
+**There are now two glass tablets, one for cutting and one for hotmelting** —
+see `docs/STATIONS.md` for how each is told which it is, and the entry above
+about a person not being offered on a picker.
 
 ## The office cleared a job's glass but the tablet still shows the old counts
 

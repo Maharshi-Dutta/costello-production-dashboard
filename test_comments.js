@@ -198,6 +198,10 @@ const stationFetch = async (url, init) => {
     return { ok: true, status: 200, json: async () => ({ build: "20260915-0900" }) };
   return global.fetch(url, init);
 };
+/* Which of the two glass tablets this fake device is (2026-09-21). The page
+   reads it at load; the notes channel is the same on both, so this suite is the
+   cutting one throughout. */
+mem.cw_stationstage = "cut";
 function newStation() {
   const sb = {
     console: console, setTimeout: setTimeout, clearTimeout: clearTimeout,

@@ -1,8 +1,17 @@
 /* The Glass station page - the floor's own screen.
 
+   ONE PAGE, TWO TABLETS since 2026-09-21 (docs/specs/2026-09-21-glass-split-
+   no-glazing.md). Cutting and hotmelting each have a tablet of their own and
+   this file serves both: the stage comes from `?stage=cut` / `?stage=hotmelt`,
+   else from the device's own `cw_stationstage`, else from a two-button chooser
+   shown before the person picker. Everything the page draws - the header, who
+   may sign in, which steppers a card has, what "N left" counts and which cards
+   sink to the bottom - is about THIS page's stage and nothing else. Glazing
+   left the station in the same ship and is not a stage here any more.
+
    What this page can do, in full: read three SharePoint lists ("Glass
-   station", "Station people", "Station log"), PATCH the Cut / Hotmelt /
-   Glazed counters of a Glass station row - with that stage's By and At and the
+   station", "Station people", "Station log"), PATCH the Cut / Hotmelt / Tuff
+   counters of a Glass station row - with that stage's By and At and the
    last-touch pair beside them - and POST one line to the Station log for each
    counter write that succeeded. That is all. There is no workbook here - no
    exceljs, no parser.js, no download, no Excel API path anywhere in this file
@@ -23,6 +32,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const PERSON_KEY = "cw_person";          // who is on the station right now, and when they last tapped
+const STAGE_KEY = "cw_stationstage";     // which stage THIS tablet is - the device's own, not the person's
 const QUEUE_KEY = "cw_stationq";         // counter writes this tablet owes
 const LOGQ_KEY = "cw_stationlogq";       // log lines this tablet owes
 const THEME_KEY = "cw_stationtheme";     // this device's own light/dark choice
@@ -70,6 +80,43 @@ function applyTheme(t) {
   if (b) b.textContent = t === "dark" ? "Light" : "Dark";
 }
 
+/* ---- which tablet this is ---------------------------------------------------
+   Three physical tablets, one page. The stage is a property of the DEVICE, like
+   the theme, so it lives in localStorage - but the URL wins, so a tablet can be
+   set up once by opening `glass.html?stage=hotmelt` and never asked again. A
+   device that has been told neither is asked, once, on screen.
+
+   A word that is not one of this station's own stages is not a stage: a typo in
+   the URL falls through to the chooser rather than drawing a page of nothing. */
+let PAGE_STAGE = "";
+function setStage(k) {
+  const want = String(k == null ? "" : k).trim().toLowerCase();
+  PAGE_STAGE = ST.STAGE_KEYS.indexOf(want) >= 0 ? want : "";
+  if (PAGE_STAGE) { try { localStorage.setItem(STAGE_KEY, PAGE_STAGE); } catch (e) {} }
+}
+function stageFromUrl() {
+  try {
+    const m = /[?&]stage=([^&#]*)/.exec(String((typeof location !== "undefined" && location.search) || ""));
+    return m ? decodeURIComponent(m[1]) : "";
+  } catch (e) { return ""; }
+}
+function stageFromDevice() {
+  try { return localStorage.getItem(STAGE_KEY) || ""; } catch (e) { return ""; }
+}
+setStage(stageFromUrl() || stageFromDevice());
+/** Does THIS page count tuff? The cutter taps it, and only the cutter. */
+const tuffHere = () => PAGE_STAGE === "cut";
+/** The stages of one person that this page draws: its own, and tuff on the
+    cutting page. A person's other stages belong to another tablet and are not
+    shown here even when their row holds them. */
+function myStages(p) {
+  return ST.heldStages((p && p.stages) || [])
+           .filter(k => k === PAGE_STAGE || (tuffHere() && k === ST.TUFF_STAGE));
+}
+/** Who may sign in on this tablet: the Glass people who hold something it
+    draws. Somebody who only hotmelts is not offered the cutting tablet. */
+const pagePeople = () => PEOPLE.filter(p => myStages(p).length > 0);
+
 /* ---- who is on the station --------------------------------------------------
    The name is not a login: it says which stages the steppers will move and it
    is what goes into the log. It is kept with the time of the last tap, because
@@ -83,8 +130,9 @@ function loadPerson() {
      otherwise keep the name unlocked for as long as it is ahead by */
   LAST_TAP = Math.min(Number(saved.at) || 0, Date.now());
   /* the stages come from the list, never from storage: an edit to
-     localStorage must not be able to hand somebody a stage they do not hold */
-  const hit = PEOPLE.find(p => p.name === saved.name);
+     localStorage must not be able to hand somebody a stage they do not hold -
+     and a name that holds nothing THIS page draws is not signed in here */
+  const hit = pagePeople().find(p => p.name === saved.name);
   PERSON = hit || null;
 }
 function savePerson() {
@@ -511,7 +559,7 @@ async function readPeople() {
     /* the stages a chosen person holds are re-read with them: a change in
        SharePoint reaches the tablet without anybody signing out */
     if (PERSON) {
-      const hit = PEOPLE.find(p => p.name === PERSON.name);
+      const hit = pagePeople().find(p => p.name === PERSON.name);
       PERSON = hit || null;
       if (!PERSON) savePerson();
     } else {
@@ -616,8 +664,11 @@ async function pollList() {
 function tap(id, stage, delta) {
   /* belt and braces: the stepper is drawn disabled for a stage this person
      does not hold, and tap() refuses it anyway - a disabled button is a
-     drawing, and this is the rule */
+     drawing, and this is the rule. Since 2026-09-21 a stage this PAGE does not
+     draw is refused for the same reason: the other tablet's stage is not this
+     one's to move, however the click got here. */
   if (!PERSON || !ST.canStage(PERSON, stage)) return;
+  if (stage !== PAGE_STAGE && !(tuffHere() && stage === ST.TUFF_STAGE)) return;
   const row = boardNow().find(g => g.id === id);
   if (!row) return;
   /* the office has marked this job's glass finished. Only the office can undo
@@ -638,14 +689,24 @@ function tap(id, stage, delta) {
 }
 
 /** The board, with anything this tablet still owes laid over the top of it -
-    so a tapped number never flickers back to the list's older one. */
+    so a tapped number never flickers back to the list's older one.
+
+    `finished` is re-read for THIS PAGE (2026-09-21): a card is done here when
+    this page's stage is complete, so the cutter's finished jobs sink out of the
+    cutter's way whether or not hotmelting has started. The record's own
+    `finished` - both stages - is the office's answer and is what the office's
+    board and the drawer keep reading. Everything below (the card's class, the
+    Finished group, boardDiff's "the order moved") follows this one field, so
+    this is the whole of the change. */
 function boardNow() {
   const over = ITEMS.map(it => {
     const q = queuedFor(String(it.id));
     if (!q) return it;
     return { id: it.id, fields: Object.assign({}, it.fields, q) };
   });
-  return ST.jobBoard(over);
+  const board = ST.jobBoard(over);
+  board.forEach(g => { g.finished = ST.stageComplete(g, PAGE_STAGE); });
+  return board;
 }
 
 /* ---- drawing ---- */
@@ -667,8 +728,8 @@ const agoWords = at => {
    being able to move somebody else's part of it. */
 function stepHtml(g, stage, label) {
   const v = g[ST.STAGE_ROW[stage]];
-  /* each stage against its own quantity: cutting, hotmelting and glazing count
-     the job's glasses, tuff counts the sheet's own TUFF number */
+  /* each stage against its own quantity: cutting and hotmelting count the
+     job's glasses, tuff counts the sheet's own TUFF number */
   const total = Math.max(0, Math.round(Number(g[ST.STAGE_TOTAL_ROW[stage]]) || 0));
   /* the office's lock is not about who is holding the tablet, so it greys every
      stepper on the card rather than the ones a person does not hold */
@@ -716,10 +777,13 @@ function stepHtml(g, stage, label) {
 function cardInner(g) {
   const owed = owedFor(g.id), bad = badFor(g.id);
   const lost = blockedFor(g.job);
-  /* Tuff only on the jobs that have any: a "Tuff 0" stepper on every card is a
-     fourth row of nothing on a screen somebody reads with a sheet of glass in
-     their other hand. */
-  const stages = ST.ALL_STAGES.filter(s => s[0] !== ST.TUFF_STAGE || g.tuffTotal > 0);
+  /* THIS PAGE'S STAGE, and tuff beside it on the cutting page - only on the
+     jobs that have tuff, and only for somebody who holds it. A second row of
+     nothing on a screen somebody reads with a sheet of glass in their other
+     hand is a row too many, and the other tablet's stage is not this tablet's
+     business at all. */
+  const stages = ST.ALL_STAGES.filter(s => s[0] === PAGE_STAGE ||
+    (s[0] === ST.TUFF_STAGE && tuffHere() && g.tuffTotal > 0 && ST.canStage(PERSON, ST.TUFF_STAGE)));
   return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
@@ -759,23 +823,61 @@ function pickerHtml() {
       '<button class="pcancel" data-pin="cancel">Back to the names</button>' +
       '</div>';
   }
-  if (!PEOPLE.length)
+  const mine = pagePeople();
+  if (!mine.length)
     return '<div class="picker"><div class="pickh">Who are you?</div>' +
-      '<div class="msg">Nobody is set up for the Glass station yet. Ask the office to add ' +
+      '<div class="msg">Nobody is set up for ' + esc(stageWords().toLowerCase()) +
+      ' at the Glass station yet. Ask the office to add ' +
       'you to the “Station people” list.</div></div>';
   return '<div class="picker">' +
     '<div class="pickh">Who are you?</div>' +
-    '<div class="pgrid">' + PEOPLE.map(p =>
+    '<div class="pgrid">' + mine.map(p =>
       '<button class="pbtn" data-person="' + esc(p.name) + '">' +
         '<span class="pname">' + esc(p.name) + '</span>' +
-        '<span class="pstages">' + esc(p.stages.length
-          ? p.stages.map(ST.stageLabel).join(" · ") : "no stages yet") + '</span>' +
+        '<span class="pstages">' + esc(myStages(p).map(ST.stageLabel).join(" · ")) + '</span>' +
       '</button>').join("") + '</div></div>';
+}
+
+/* ---- which tablet is this? --------------------------------------------------
+   Shown once, on a device that has been told neither by its URL nor by its own
+   storage. Two buttons, because there are two glass tablets; the answer is
+   remembered and the page carries on to the person picker. */
+const stageWords = () => ST.stageLabel(PAGE_STAGE);
+function chooserHtml() {
+  return '<div class="picker">' +
+    '<div class="pickh">Which tablet is this?</div>' +
+    '<div class="picksub">Remembered on this device. The office can change it any time.</div>' +
+    '<div class="pgrid">' + ST.STAGES.map(s =>
+      '<button class="pbtn" data-stagepick="' + esc(s[0]) + '">' +
+        '<span class="pname">' + esc(s[1]) + '</span></button>').join("") +
+    '</div></div>';
+}
+function wireChooser(host) {
+  host.querySelectorAll("[data-stagepick]").forEach(el => el.onclick = () => {
+    setStage(el.dataset.stagepick);
+    if (!PAGE_STAGE) return;
+    /* the people this page may show have just changed, so whoever was signed in
+       under the old answer is not signed in under this one */
+    switchPerson();
+    render();
+  });
+}
+/** The header's way back to the chooser: this tablet becomes the other stage.
+    It signs the person out, because the name on screen was chosen for the
+    stage that is leaving. */
+function askStage() {
+  const other = ST.STAGE_KEYS.find(k => k !== PAGE_STAGE) || "";
+  if (!other) return;
+  if (typeof confirm === "function" &&
+      !confirm("Make this the " + ST.stageLabel(other) + " tablet? It will sign you out.")) return;
+  setStage(other);
+  switchPerson();
+  render();
 }
 
 function wirePicker(host) {
   host.querySelectorAll("[data-person]").forEach(el => el.onclick = () => {
-    const p = PEOPLE.find(x => x.name === el.dataset.person);
+    const p = pagePeople().find(x => x.name === el.dataset.person);
     if (!p) return;
     if (ST.pinOk(p, "")) { pickPerson(p); return; }      // no PIN column: straight in
     PINFOR = p; PINTYPED = ""; PINBAD = false; render();
@@ -940,16 +1042,27 @@ function paintBoard(host, board) {
 function render() {
   const host = $("#board");
   if (!host) return;
+  /* which tablet this is, in the header, so nobody has to guess which of the
+     two is in front of them */
+  const br = $("#brand");
+  if (br) br.textContent = PAGE_STAGE ? "GLASS · " + stageWords().toUpperCase() : "GLASS STATION";
+  const sg = $("#stagebtn");
+  if (sg) {
+    sg.hidden = !PAGE_STAGE;
+    sg.style.display = PAGE_STAGE ? "" : "none";
+    sg.textContent = PAGE_STAGE ? stageWords() + " ▾" : "";
+  }
   const hdr = $("#whois");
   if (hdr) hdr.textContent = PERSON
-    ? PERSON.name + (PERSON.stages.length ? " · " + PERSON.stages.map(ST.stageLabel).join(", ") : " · no stages")
+    ? PERSON.name + (myStages(PERSON).length
+        ? " · " + myStages(PERSON).map(ST.stageLabel).join(", ") : " · no stages")
     : "";
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
   /* the search box belongs to the board: there is nothing to search on the
      picker, and a box over an error message only looks broken */
   const sb = $("#search");
-  const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
+  const boarding = !!PAGE_STAGE && !PROBLEM && PEOPLE_READ && !!PERSON && READY;
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
   /* the board as it stands, before the box has narrowed it: the number beside
      the box is read off this, and the cards below off the filtered copy */
@@ -966,7 +1079,10 @@ function render() {
      work. */
   const gt = $("#gtotal");
   if (gt) {
-    const lefts = boarding ? ST.boardLefts(live, PERSON.stages) : [];
+    /* this page's stage and no other, and tuff stays out of it as it always
+       has: the number beside the box is the work this tablet is for */
+    const lefts = boarding
+      ? ST.boardLefts(live, myStages(PERSON).filter(k => k !== ST.TUFF_STAGE)) : [];
     const on = boarding && lefts.length > 0;
     gt.hidden = !on;
     gt.style.display = on ? "" : "none";
@@ -983,10 +1099,13 @@ function render() {
   /* Who are you? comes before the board and after any real problem with it:
      there is no point asking a name on a screen that cannot reach the list,
      and no point drawing steppers before anybody has said whose they are. */
-  if (PROBLEM || !PEOPLE_READ || !PERSON || !READY) {
+  if (!PAGE_STAGE || PROBLEM || !PEOPLE_READ || !PERSON || !READY) {
     /* a message or the picker takes the board's place, so the card nodes are
        let go: the next good read paints them fresh */
     DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    /* which tablet this is comes before everything, including a SharePoint
+       problem: the answer is about the device and needs no list to give */
+    if (!PAGE_STAGE) { host.innerHTML = chooserHtml(); wireChooser(host); return; }
     if (!PROBLEM && PEOPLE_READ && !PERSON) { host.innerHTML = pickerHtml(); wirePicker(host); return; }
     host.innerHTML = '<div class="msg">' + esc(words()) + againHtml() + '</div>';
     wireAgain();
@@ -1167,6 +1286,8 @@ async function start() {
   $("#outbtn").onclick = () => { if (confirm("Sign out of the Glass station?")) CW.signOut(); };
   const sw = $("#switchbtn");
   if (sw) sw.onclick = () => switchPerson();
+  const sgb = $("#stagebtn");
+  if (sgb) sgb.onclick = () => askStage();
   /* the box is in the header, outside #board, so typing in it never rebuilds
      the node the caret is in - only the cards under it are redrawn */
   const sb = $("#search");

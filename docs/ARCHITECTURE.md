@@ -144,7 +144,7 @@ none of the three.
   (`ST.sliceHash`) matches the last run and that run was under ten minutes
   ago. A job that leaves production is patched `Active = No`, never
   deleted; the feeder never sends a By, an At or the last-touch pair, and it
-  sends `Cut`/`Hotmelt`/`Glazed` **only** on a row it is creating or a row
+  sends `Cut`/`Hotmelt` **only** on a row it is creating or a row
   whose `DoneAt` is still empty — the v3 seeding rule, which starts a row at
   what the office has already ticked off (`ST.officeSeed`) and stops dead at
   the floor's first tap. Every write carrying a counter re-reads that one row
@@ -161,12 +161,19 @@ none of the three.
   counter write never happened.
 - **Office → the floor's counters, on a clear only.** Since 2026-09-10 the one
   other time the office writes a floor column: when it **clears a job's glass
-  checkpoints**, `clearFloorGlass()` puts that row's `Cut`/`Hotmelt`/`Glazed`/
+  checkpoints**, `clearFloorGlass()` puts that row's `Cut`/`Hotmelt`/
   `Tuff` back to nought and stamps `DoneBy`/`DoneAt`, so the office, the
   workbook and the floor all say the same thing. Only on a row the floor has
   really tapped, only after the office has answered a question naming what will
   be destroyed, and only through `ST.officeClearFields(who, at)`, which cannot
   express any value but nought. See `docs/REFERENCE.md` §18.
+- **Office → the floor's counters, from the board.** Since 2026-09-21 the other
+  time: the Glass station board's own `−`/`+`/`All` on a stage line
+  (`glassOfficeEdit`). One PATCH of five fields, built only by
+  `ST.floorOnly(ST.tapFields(stage, value, who, at))` — the tablet's own pair —
+  with the row re-read immediately before the number is derived. One
+  `Dashboard Log` line per click through `noteChange`, and **no `Station log`
+  line**. Nothing on the path touches the workbook. See `docs/REFERENCE.md` §22.
 - **Tablet → `Station comments`.** Since 2026-09-15 a floor worker can also
   leave a **note** against a job, from a composer on that job's card. One
   `listAdd` per note, straight to the list, append-only — nothing edits or
@@ -332,6 +339,7 @@ office board (Show ▸ Welding station) ──the same five fields, + one ──
 | a queued/not-yet-sent station tap | `cw_stationq` (counters) and `cw_stationlogq` (the log lines they owe) — tablet only, shipped 2026-09-08 |
 | a queued tap the office's lock arrived under, so it was dropped rather than sent | `cw_stationblocked` — tablet only, drawn on the card in red until the office unlocks the job (2026-09-10) |
 | who is at the station tablet, and when they last tapped | `cw_person` — tablet only; the stages always come back from the list, never from storage |
+| **which of the two glass tablets this device is** | `cw_stationstage` — tablet only, `cut` or `hotmelt` (2026-09-21). A `?stage=` in the URL wins over it and is written to it; a device holding neither is asked once, on screen, before the person picker |
 | when the master last fed the `Glass station` list, and the hash of what it sent | `cw_stationfeed` — read by `feedStation()` to decide whether a run can be skipped |
 | welding station job facts and floor counters | `Welding station` SharePoint list, in the `Floor stations` site — one row per job **and product group** — 2026-09-16 |
 | a queued/not-yet-sent welding tap | `cw_weldq` (counters) and `cw_weldlogq` (the log lines they owe) — the welding tablet only, deliberately separate from the glass tablet's two so one page can never read the other's queue (2026-09-16) |

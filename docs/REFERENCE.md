@@ -265,9 +265,16 @@ Logo slot `assets/logo.png` (not yet supplied). Tests: `test_export.js`.
 
 **What.** A separate page for the glass area on a shared tablet, showing only
 job number, customer name and **one total number of glasses** (DG + TG), with
-three stages (**Cutting, Hotmelting, Glazing**) recorded per person. There are
+the stages recorded per person. There are
 no glass types on the floor at all. The office sees it all from the master
 dashboard. The floor cannot see the master.
+
+> **CHANGED 2026-09-21 by §22.** The stages were three (Cutting, Hotmelting,
+> **Glazing**) until then. Glazing is the last step of the whole job, not a
+> glass step, so it left this station: two stages now, one **tablet per
+> stage**, and the `Glazed`/`GlazedBy`/`GlazedAt` columns left untouched on the
+> list and read by nothing. Read §22 before anything below about three stages,
+> about glazing gating gold, or about one tablet showing them all.
 
 **Where.** `station-core.js` (pure logic, loads in browser and Node),
 `station.js` (tablet UI), `glass.html` (shell + styles), plus the station
@@ -368,8 +375,8 @@ Jobs reach the floor only while an office dashboard is open.
 
 **On the ordinary job list (2026-09-09).** Every job row carries a `Glass`
 column of its own (the ninth, 96px, between `Components F·S·T` and `On
-sheets`): one badge reading the floor's progress across all three stages —
-`Glass 12/24` for eight glasses cut 8, hotmelted 4, glazed 0 — gold on the same
+sheets`): one badge reading the floor's progress across both glass stages —
+`Glass 12/16` for eight glasses cut 8, hotmelted 4 — gold on the same
 "finished" rule the board and the tablet use, with the breakdown and "the Excel
 file is not involved" in its `title`. A job the floor has never been fed
 renders that cell empty. The rows repaint when the floor taps (`redrawStation`
@@ -603,13 +610,17 @@ gap in the brief and the twelve decisions taken while building it. **This is
 the first feature in which something done on the floor changes the master
 sheet**, so read the boundaries before touching any of it.
 
-**What.** When the floor finishes cutting and hotmelting a job, its DG, TG and
-NOT TUFF cells go **yellow** in the workbook; when glazing is done all four
-glass cells (TUFF included) go **gold**. It walks back down as well as up —
-gold to yellow to blank — mirroring whatever the floor now says. TUFF's yellow
-comes from its own new counter rather than from cutting and hotmelting.
-**ARCH, ASTRAGAL, FANCY and EXTRA are never written by this feature**, in
-either direction: the office ticks those by hand, as it always has.
+**What.** The floor's counters decide the colour of DG, TG, TUFF and NOT TUFF
+on the job's own row. It walks back down as well as up — gold to yellow to
+blank — mirroring whatever the floor now says. **ARCH, ASTRAGAL, FANCY and
+EXTRA are never written by this feature**, in either direction: the office
+ticks those by hand, as it always has.
+
+> **THE RULE CHANGED 2026-09-21 (§22).** Until then: yellow once cutting AND
+> hotmelting were complete, gold once **glazing** was. Now it is a count of how
+> many of the two glass stages are complete — blank for neither, **yellow for
+> exactly one**, **gold for both** — and TUFF is gold on its own count with no
+> yellow of its own. Everything below about glazing gating gold is history.
 
 **Who writes it.** The **office dashboard** (`app.js`), never the tablet. The
 tablet has no access to the workbook at all and that is the actual security
@@ -754,15 +765,17 @@ have tuff on them. **NOT TUFF gets no counter at all** — its colour is derived
 from the glass stages.
 
 **The office's own yellow (`ST.officeSeed`, owner 2026-09-10).** A yellow glass
-cell now *means* "cut and hotmelted", so the seed reads it that way: when
-**every** one of a job's DG and TG items is at least yellow, the floor's row
-starts with `Cut` and `Hotmelt` at the total and **`Glazed` at nought**, and
+cell *means* whatever yellow means, so the seed reads it that way. **Since
+2026-09-21 (§22) yellow means one of the two glass stages is complete**, and
+cutting comes first: when **every** one of a job's DG and TG items is at least
+yellow, the floor's row starts with `Cut` at the total and **`Hotmelt` at
+nought**, and
 the cell round-trips to yellow instead of being flattened to blank. It had to
 be fixed — a yellow item has no stored count, so the row used to seed at
 nought and the first tap on that job painted the office's own mark out. It was
-found on the single yellow glass cell in the owner's whole workbook. Glazed
-staying at nought is the point: yellow says glazing is *not* done, and seeding
-it would make the cell read gold. A gold item is untouched and still
+found on the single yellow glass cell in the owner's whole workbook. Hotmelt
+staying at nought is the point: seeding both would make the cell read gold. A
+gold item is untouched and still
 round-trips to gold. **Every, not some**: the floor's row holds one combined
 DG + TG number and there is nowhere to put a per-type split, so a job with DG
 yellow and TG blank keeps the office's own count instead — seeding it to the
@@ -770,7 +783,7 @@ total would tell the floor that glass which still needs cutting is cut, and a
 wrong instruction on the workshop screen is worse than a lost colour on a
 report. That job can still lose its yellow once the floor taps; it is a known
 limit, recorded in the spec's Amendment B5. None of this widens rule 3's
-seeding exception — it changes how the three counters are *derived*, not which
+seeding exception — it changes how the counters are *derived*, not which
 columns may be seeded, and `Tuff` is still never seeded.
 
 **The lock (`OfficeDone`).** When the office has ticked every DG and TG item
@@ -845,9 +858,10 @@ download lag and is not this.
 
 **What happens now.** When the office **clears a job's glass checkpoints** —
 the group **Clear**, or a per-item clear that leaves no other DG/TG ticked —
-the office writes that job's `Glass station` row's `Cut`, `Hotmelt`, `Glazed`
-and `Tuff` to **zero**, plus `DoneBy`/`DoneAt` and `OfficeDone = "No"`. Seven
-fields, and nothing else. The unlock rides along so the **card frees itself on
+the office writes that job's `Glass station` row's `Cut`, `Hotmelt`
+and `Tuff` to **zero**, plus `DoneBy`/`DoneAt` and `OfficeDone = "No"`. Six
+fields, and nothing else. (`Glazed` was a fourth nought until 2026-09-21; the
+clear leaves whatever is in it, like everything else about glazing — §22.) The unlock rides along so the **card frees itself on
 the tablet's next ten-second poll** (owner, 2026-09-10: it used to sit greyed,
 "the office has marked this job finished", for over a minute, because only the
 feeder released the lock and the feeder derives it from what the master
@@ -879,7 +893,7 @@ which wrote unconditionally.
 
 **The confirmation.** When the row has a floor stamp and any counter above
 nought, the office is asked first, naming what will go: *"The floor has
-recorded 49 cut, 49 hotmelted, 12 glazed on this job. Clearing the glass here
+recorded 49 cut, 49 hotmelted, 12 tuff on this job. Clearing the glass here
 will set all of those back to zero. Clear it anyway?"* (`ST.clearWarning`, a
 pure function). Answering **no writes nothing at all** — not the floor's
 counters and not the workbook half, because the question is asked before
@@ -888,7 +902,7 @@ counters and not the workbook half, because the question is asked before
 **A queued tap that meets the zeros is decided on the stamps.** A queue entry
 holds an **absolute** number — a `+1` made against 40 carries 41 — so letting a
 drop through unchanged would not "apply the tap on top of the zeros", it would
-put the whole count back and leave the row at 41 cut, 0 hotmelted, 0 glazed.
+put the whole count back and leave the row at 41 cut, 0 hotmelted, 0 tuff.
 `rebaseQueue` therefore compares the row's `DoneAt` with the tap's own `at`,
 which is exactly what writing `DoneAt` on a clear is for: **a row stamped after
 the tap was made is the later word and the tap is dropped**; a tap made after
@@ -1582,3 +1596,106 @@ from `"own"` to `"floor"` on the day its three lists are copied across.
 - No reply channel from the office to the welding tablet.
 - No move of the glass lists (owner, answer 9).
 - Cutting is not a stage here: "no cutting, it should just have welding".
+
+---
+
+## 22. Glass: one page per stage, no glazing, a new colour rule, an editable office board
+
+Built 2026-09-21. Spec: [`docs/specs/2026-09-21-glass-split-no-glazing.md`](specs/2026-09-21-glass-split-no-glazing.md).
+It changes §11, §17 and §18, and the notes at the top of each of those point
+here.
+
+**The owner's correction.** *"Glazing is the last step for the whole job, not a
+glass step."* It stops deciding whether glass is done and leaves this station
+altogether; a glazing station of its own is a later brief. Cutting and
+hotmelting each get a tablet.
+
+**A. Glazing leaves the station.** `STAGES` is `cut` and `hotmelt`;
+`STAGE_FIELD`/`STAGE_ROW`/`STAGE_BY`/`STAGE_AT`/`STAGE_TOTAL_ROW`/`CLEAR_WORD`
+lose their `glazed` entries, and `FLOOR_FIELDS`, `STATION_FIELDS`,
+`SEED_FIELDS` and `OFFICE_CLEAR_FIELDS` lose `Glazed`, `GlazedBy`, `GlazedAt`.
+Consequences, all intended: the tablet cannot write those columns (the
+whitelist has no slot for them), the feeder does not seed `Glazed`, an office
+clear does not zero it, and a read does not `$select` it.
+
+**Rule 8 of the brief: no existing data is rewritten, reset or deleted.** The
+three columns stay on the list with whatever is in them. A row carrying
+`Glazed = total` and `Cut = 0` plans **blank**: glazing has no influence in
+either direction. A `glazed` token left in somebody's `Stages` column is
+ignored rather than edited out (a person left holding *no* known stage shows on
+no page — `STATIONS.md` tells the owner to fix that row by hand). A `glazed`
+tap sitting in an old tablet's `cw_stationq` is dropped at load, quietly, with
+no request and no error state.
+
+**History stays readable.** `Station log` lines with `Stage = "glazed"` are
+still shown, labelled **"Glazing"** from `ST.LEGACY_STAGE_LABELS` — a
+display-only map read by `stageLabel` and nothing else. The Floor log window's
+stage filter offers the word when the rows on screen carry it. A label is not a
+stage: it cannot be tapped, seeded, held or written.
+
+**B. The colour rule** (`ST.glassColours`, still pure and still callable from
+Node): how many of the two glass stages are complete decides DG, TG and NOT
+TUFF — none blank, **one yellow**, **both gold**. TUFF is gold on its own count
+and blank otherwise, with no yellow of its own. Still reversible, still needing
+a total to reach. `finished` on a board record is cutting and hotmelting
+complete. The seed: office gold → `Cut = Hotmelt = total`; office yellow →
+`Cut = total, Hotmelt = 0`; the sheet's own Cut green → `Cut = total` as
+before; anything else the office's own count, as before. Everything about the
+two-way arrangement — last writer wins, ties to the office, the `Dashboard Log`
+line per paint — is unchanged.
+
+**C. One tablet page per stage.** One `glass.html` serves both. The stage comes
+from `?stage=cut` / `?stage=hotmelt`, else from the device's own
+`cw_stationstage`, else from a two-button chooser shown before the person
+picker; a word that is not a stage falls through to the chooser rather than
+drawing a page of nothing. The header reads `GLASS · CUTTING` /
+`GLASS · HOTMELTING` with a `Cutting ▾` control beside it that switches the
+tablet (confirm first; it signs the person out, because the name was chosen for
+the stage that is leaving). The people picker offers only the Glass people who
+hold this page's stage — plus, on the cutting page, anyone who holds `tuff`. A
+card draws this page's stage and, on the cutting page, Tuff where the job has
+any and the signed-in person holds it; the header count and the card's "N left"
+are this page's stage alone. **A card is done on THIS page when this page's
+stage is complete** (`boardNow()` re-reads `finished` for the page), so the
+cutter's finished jobs leave the cutter's way before hotmelting has started —
+while the record's own `finished`, which the office reads, still needs both.
+The office lock (`OfficeDone`) locks the card on both pages. Notes keep
+`Station = "Glass"` on both, so the two tablets share one thread per job.
+
+**D. The office's Glass station board is a working surface.** Modelled on the
+welding board, and using the tablet's own two functions rather than a second
+implementation: each stage line (Cutting, Hotmelting, and Tuff where the job
+has any) carries `−`, `+` and `All`, clamped 0…total. One click is **one
+PATCH** of five fields — `ST.floorOnly(ST.tapFields(stage, value, who, at))`,
+so that stage's counter, that stage's `By`/`At`, and `DoneBy`/`DoneAt` — with
+the row **re-read immediately before** the number is derived (the welding
+board's reason: the board's copy is up to ten seconds old and the floor is
+tapping the same counter). It leaves **one `Dashboard Log` line** through
+`noteChange` — "Glass cutting" / "Glass hotmelting" / "Glass tuff", from → to —
+and **no `Station log` line**: `app.js` calls `ST.logFields` nowhere at all. A
+refused write puts the old number back and toasts. A job locked by `OfficeDone`
+has its steppers disabled and the click refused, with the drawer's own wording:
+*"glass complete — clear it in the job card"*. Clicking the card head opens the
+job drawer; a board job no longer in the workbook parse has no drawer and its
+head is not clickable. **Nothing on this path goes near the workbook** — the
+sheet's colours follow on `glassColourRun`'s next pass, from the new counters,
+by rule B.
+
+**`web/CLAUDE.md` rule 3 gains a dated fourth exception** for that write.
+
+**Tests.** `test_station.js` 246 → 259 and `test_glasscolour.js` 68 → 70; every
+glazing-gate assertion was converted to its new-rule equivalent rather than
+deleted. New: the colour table re-written to the count-of-complete-stages rule;
+a row carrying old `Glazed` values planning blank; `finished` without glazing;
+the seed both ways; a run-wide assertion that **no request body of either suite
+ever carries `Glazed`, `GlazedBy` or `GlazedAt`**; the queued `glazed` tap
+dropped on replay; the hotmelting page's people and steppers; the chooser and
+what it remembers; a legacy log line reading "Glazing"; and the office board's
+clamp, its five-field PATCH, its `Dashboard Log` line, its silence in
+`Station log`, the `OfficeDone` lock and a failed write.
+
+### Not built here
+
+- A glazing station. The owner will brief it separately.
+- The move of the glass lists to `Floor stations`: `ST.GLASS.site` is still
+  `"own"` and that one word is still the whole of the move (§21).
