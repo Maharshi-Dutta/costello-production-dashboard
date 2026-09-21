@@ -39,7 +39,10 @@ edit counters there and open the job from there.
    in them; nothing reads or writes them any more.
 
 Tuff is unchanged: a fourth counter the cutter taps, its total carried from the
-sheet, outside the glass total and outside the finished rule.
+sheet, outside the glass total and outside the finished rule. (**Superseded in
+part** by "Owner, after the demo" under the amendments below: it is still
+outside the glass total, the lock and the header count, but a job with tuff
+still to do is no longer *shown* as finished.)
 
 ## Hard rules (unchanged, re-stated because this brief touches all of them)
 
@@ -267,6 +270,27 @@ rows, 116 of them never tapped by the floor). All to be fixed before ship.
   until somebody acts; and one office stepper click makes a row "touched" for
   good, handing that job's four glass cells to the counters (brief §D, by
   design).
+- **Owner, after the demo (2026-09-21): a job that still owes TUFF is not shown
+  as finished.** The owner's words: *"why are moving the jobs to complete when
+  tuff is left? if job has tuff and is not done dont move it, if done then
+  move."* A job with `TuffTotal > 0` whose `Tuff` count is not complete is not
+  drawn gold and does not sink into the Finished group — on the office's Glass
+  station board, on the job row's `Glass 8/16` chip, and on the **cutting**
+  tablet, whose bench the tuff is. The **hotmelting** tablet is unaffected: tuff
+  is not that bench's work and never appears on it. A job with no tuff finishes
+  on the glass stages as before. One pure helper, `ST.tuffOwed(g)`
+  (`tuffTotal > 0 && !stageComplete(g, "tuff")`), used in `buildJobs` and in
+  `station.js`'s `boardNow`.
+
+  **This reverses one clause of the 2026-09-10 decision** ("Tuff … outside the
+  glass total and outside the `finished` rule") and **only** that clause. It is
+  a display rule: `tuffOwed` decides nothing about the colour the `Production`
+  sheet is painted (`glassColours` reads the counters direct), nothing about the
+  office's lock (`officeComplete` asks the office's own DG and TG checkpoints
+  and has never known about tuff — see R2), nothing about the feeder's `Active`,
+  seed or hash, and nothing about the header's "N left", which is this page's
+  stage alone. `test_station.js` carries an assertion for each of those four
+  saying the same row with and without tuff owed answers identically.
 
 ## Report back
 

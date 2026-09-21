@@ -308,6 +308,17 @@ yet", not "there is none done". A TUFF cell ticked gold by hand in the office
 stays gold. Once the cutter taps tuff, the cell follows the counter from then
 on — including back to blank if they tap it down to nought.
 
+**A job with tuff still to count is not shown as finished** (owner, after the
+demo on 2026-09-21). It does not go gold and does not drop into the Finished
+group — on the office's Glass station board, on the job row's `Glass 8/16`
+chip, and on the **cutting** tablet, which is the bench the tuff belongs to.
+The **hotmelting** tablet is not affected: tuff never appears on it, so a job
+that is hotmelted through is finished there whatever its tuff says. A job with
+no tuff on it is finished on the glass stages, exactly as before. This is only
+about how a card *looks*: the tuff count is still not part of the job's glass
+total, the office's lock still has nothing to do with it, and the "N left"
+number beside the search box is still this tablet's own stage alone.
+
 **Glazing no longer appears on the glass tablets at all.** There is no glazing
 stepper, no glazing number and no glazing person. Nothing that was recorded has
 been deleted: the old counts are still on the list and the old log lines are

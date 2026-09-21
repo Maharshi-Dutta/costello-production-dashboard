@@ -77,13 +77,25 @@ three columns stay on the list untouched and nothing reads or writes them; old
 `Station log` lines saying `glazed` are still shown, labelled "Glazing".)
 **Tuff** is a third counter beside them, added 2026-09-10: a different
 department, the same person, its own quantity. It is deliberately *not* one of
-the three, and the difference shows in three places — it is not part of the
-job's `Total`, it does not decide whether a job is finished (the gold card,
-the Finished group, the job row's `Glass 8/24` chip are all still the three
-glass stages), and it is never seeded by the feeder. It *is* counted in the
-tablet's "N left": eight glasses to cut plus eleven tuff to count is nineteen
-things left for whoever holds both. In `station-core.js` the three are
-`STAGES` / `STAGE_KEYS` and the four are `ALL_STAGES` / `ALL_STAGE_KEYS`.
+the glass stages, and the difference shows in three places — it is not part of
+the job's `Total`, it is never seeded by the feeder, and the office's lock
+(`OfficeDone`) is never about it. In `station-core.js` the two glass stages are
+`STAGES` / `STAGE_KEYS` and all three are `ALL_STAGES` / `ALL_STAGE_KEYS`.
+
+**It does, since 2026-09-21, decide whether a job is shown as FINISHED.** The
+owner, watching the demo: *"why are moving the jobs to complete when tuff is
+left? if job has tuff and is not done dont move it, if done then move."* So a
+job that has tuff on it (`TuffTotal > 0`) and has not counted it is not drawn
+gold and does not sink into the Finished group — on the office's board, on the
+job row's `Glass 8/16` chip, and on the **cutting** tablet, whose bench the tuff
+is. The **hotmelting** tablet is unaffected: tuff is not that bench's work and
+never appears on it. A job with no tuff finishes on the glass stages exactly as
+before. One helper, `ST.tuffOwed(g)`, is the whole rule.
+
+This **reverses one clause** of the 2026-09-10 decision and only that clause.
+Tuff is still outside the job's glass total, still outside the lock, and still
+outside the header's "N left" — that number is this tablet's own stage. What
+changed is what a card is allowed to *look* like.
 
 **The lock (`OfficeDone`).** When the office has ticked every DG and TG item
 of a job off, the feeder writes `OfficeDone = "Yes"` and that job's **glass

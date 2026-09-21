@@ -2241,6 +2241,92 @@ const person = (name, stages, pin, active, station) =>
     "the finished card has dropped below the ones still being worked on");
   pass("a finished job goes gold on the office board too, and drops to the bottom");
 
+  /* ---- OWNER, AFTER THE DEMO (2026-09-21): tuff owed is not finished, on the
+     office's board too. R5301's two glass counters are at four of four; give it
+     four tuff and none counted and it must leave the gold group. ---- */
+  const tuffWas = JSON.parse(JSON.stringify(ITEMS.find(x => x.id === "502").fields));
+  Object.assign(ITEMS.find(x => x.id === "502").fields, { TuffTotal: 4, Tuff: 0 });
+  A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
+  await readStation();
+  const oweRec = A("stationForJob('R5301')");
+  assert.strictEqual(ST.tuffOwed(oweRec), true, "four tuff on the job and none counted");
+  assert.strictEqual(oweRec.finished, false,
+    "so the record is not finished, however complete the two glass stages are");
+  renderRows();
+  html = EL["#rows"].innerHTML;
+  /* one card out of the board, from its own opening tag to the next card's */
+  const cardFor = (page, job) => {
+    const at = page.indexOf(">" + job + "<");
+    if (at < 0) return "";
+    const from = page.lastIndexOf('<div class="stcard', at);
+    const next = page.indexOf('<div class="stcard', at);
+    return page.slice(from, next < 0 ? page.length : next);
+  };
+  assert.ok(cardFor(html, "R5301").indexOf('<div class="stcard">') === 0,
+    "the card is drawn plain, not gold: " + cardFor(html, "R5301").slice(0, 40));
+  assert.ok(html.indexOf("R5301") < html.indexOf("R5303"),
+    "and it is not sorted to the bottom any more: it is work in hand again");
+  /* count the tuff and it is finished, gold and last, with no glass tap */
+  ITEMS.find(x => x.id === "502").fields.Tuff = 4;
+  A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
+  await readStation();
+  assert.strictEqual(ST.tuffOwed(A("stationForJob('R5301')")), false);
+  assert.strictEqual(A("stationForJob('R5301').finished"), true, "now it is finished");
+  renderRows();
+  html = EL["#rows"].innerHTML;
+  assert.ok(cardFor(html, "R5301").indexOf('<div class="stcard done">') === 0, "gold again");
+  assert.ok(html.indexOf("R5301") > html.indexOf("R5303"), "and back at the bottom");
+  pass("owner, after the demo: the office's board does not call a job finished while it owes tuff");
+
+  /* AND NOTHING ELSE MOVED WITH IT. The 2026-09-10 decision put tuff outside
+     the finished rule, the glass total, the lock, the colour and the feeder;
+     this reverses the first clause ONLY. The proof is that the same row with
+     and without tuff owed gives identical answers everywhere else. */
+  const owedRow = item({ Title: "R7700", Job: "R7700", Customer: "Customer One", GlassType: "GLASS",
+    Total: 4, TuffTotal: 4, Seq: 1, Active: "Yes", OfficeDone: "No",
+    Cut: 4, Hotmelt: 4, Tuff: 0, TuffAt: "2026-09-21T09:00:00.000Z",
+    DoneAt: "2026-09-21T09:00:00.000Z" }, "992");
+  const paidRow = item(Object.assign({}, owedRow.fields, { Tuff: 4 }), "993");
+  const owedRec = ST.jobRecord([owedRow], "R7700"), paidRec = ST.jobRecord([paidRow], "R7700");
+  assert.strictEqual(ST.tuffOwed(owedRec), true);
+  assert.strictEqual(ST.tuffOwed(paidRec), false);
+  assert.notStrictEqual(owedRec.finished, paidRec.finished, "`finished` is the one thing that differs");
+  /* 1. the colour rule: the four glass columns say exactly the same thing */
+  assert.deepStrictEqual(
+    Object.assign({}, ST.glassColours(owedRec), { tuff: "x" }),
+    Object.assign({}, ST.glassColours(paidRec), { tuff: "x" }),
+    "glassColours says the same about DG, TG and NOT TUFF either way - `finished` is not in it");
+  assert.strictEqual(ST.glassColours(owedRec).dg, "gold", "both glass stages complete is gold");
+  assert.strictEqual(ST.glassColours(paidRec).dg, "gold");
+  /* 2. the lock: officeComplete asks the office's own DG and TG and has never
+        known about tuff, so tuff owed cannot move it in either direction */
+  const lockCounts = [gl("dg", 2, "done"), gl("tg", 2, "done")];
+  assert.strictEqual(ST.officeComplete(lockCounts), true,
+    "the lock is the office's DG and TG, and it does not consult the floor's row at all");
+  assert.strictEqual(ST.officeComplete(lockCounts.concat([gl("tuff", 4, "")])), true,
+    "not even when a tuff item is handed to it");
+  /* 3. the feed plan: identical for both rows, seed, Active and hash alike */
+  const feedSlice = ST.glassSlice(
+    [mkJob({ id: "R7700", cust: "Customer One", glass: { dg: 2, tg: 2, tuff: 4 }, blk: 4, seq: 1 })],
+    NAMES, () => lockCounts);
+  const planOwed = ST.feedPlan(feedSlice, [owedRow], { at: AT, by: BY });
+  const planPaid = ST.feedPlan(feedSlice, [paidRow], { at: AT, by: BY });
+  assert.deepStrictEqual(planOwed.patches.map(p => p.fields), planPaid.patches.map(p => p.fields),
+    "the feeder plans the same fields for a row that owes tuff and one that does not");
+  assert.deepStrictEqual(planOwed.adds, planPaid.adds);
+  assert.strictEqual(ST.sliceHash(feedSlice), ST.sliceHash(feedSlice), "and the hash is the slice's own");
+  assert.ok(!JSON.stringify(planOwed).includes("Tuff"), "with no tuff counter in the plan at all");
+  /* 4. the header's "N left" is this page's stage and never tuff */
+  assert.deepStrictEqual(ST.boardLefts([owedRec], ["cut"]), ST.boardLefts([paidRec], ["cut"]),
+    "and the header counts the same either way");
+  pass("the reversal is the finished rule alone: colour, lock, feed plan and header are identical");
+
+  ITEMS.find(x => x.id === "502").fields = tuffWas;
+  A("STATION_ITEMS = null; STATION_FEEDS.items.token = null;");
+  await readStation();
+  renderRows();
+  html = EL["#rows"].innerHTML;
+
   assert.ok(/last: Person A Cutting 5→8/.test(html),
     "each card carries one line from the log: who moved what, and by how much");
   assert.ok(html.indexOf("Person C") > 0, "and each stage names who last moved it");
@@ -3680,11 +3766,23 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(EL["#gtotal"].textContent, "Cutting 5 left",
     "and they stay out once it has");
   /* and a job this page's stage is done with sinks to the Finished group,
-     whether or not the OTHER tablet has started on it (2026-09-21) */
+     whether or not the OTHER tablet has started on it (2026-09-21) - BUT NOT
+     WHILE IT STILL OWES TUFF (owner, after the demo the same day: "why are
+     moving the jobs to complete when tuff is left?"). R5330 carries three tuff
+     and none of them counted, so cutting being complete is not enough. */
+  assert.strictEqual(S("ST.tuffOwed(boardNow().find(g => g.job === 'R5330'))"), true,
+    "three tuff on the job and none counted");
+  assert.strictEqual(S("boardNow().find(g => g.job === 'R5330').finished"), false,
+    "so the card is NOT finished on the cutting page, however much glass is cut");
+  S("tap('970', 'tuff', 'all')");
+  assert.strictEqual(S("ST.tuffOwed(boardNow().find(g => g.job === 'R5330'))"), false);
   assert.strictEqual(S("boardNow().find(g => g.job === 'R5330').finished"), true,
-    "cutting complete is finished ON THIS PAGE, with hotmelting still at one of two on the record");
+    "and once the tuff is counted too, cutting complete IS finished on this page - with " +
+    "hotmelting still at one of two on the record");
+  await settle(80);
   assert.strictEqual(S("ST.jobBoard(ITEMS).find(g => g.job === 'R5330').finished"), false,
-    "while the record's own `finished` - what the office reads - is still false until both are done");
+    "while the record's own `finished` - what the office reads - is still false until both " +
+    "glass stages are done as well");
   S("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
   pass("a tap counts the card and the header down together, before anything is sent");
 
@@ -3958,6 +4056,74 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("NODES['R5303'].className"), "card", "one glass short and it is not gold");
   S("ITEMS[0].fields.Cut = 6; ITEMS[0].fields.Hotmelt = 6; render();");
   pass("a job this page's stage has finished goes gold and drops to a collapsed Finished group");
+
+  /* ---- OWNER, AFTER THE DEMO (2026-09-21): a job that still owes TUFF is not
+     shown as finished ----
+     "why are moving the jobs to complete when tuff is left? if job has tuff and
+     is not done dont move it, if done then move." This reverses one clause of
+     the 2026-09-10 decision that put tuff outside the finished rule - and only
+     that clause: tuff is still outside the glass total, outside the office's
+     lock and outside the header's "N left". */
+  const tuffBoard = [
+    item({ Title: "R7710", Job: "R7710", Customer: "Customer One", GlassType: "GLASS",
+           Total: 4, TuffTotal: 4, Seq: 1, Active: "Yes", OfficeDone: "No",
+           Cut: 4, Hotmelt: 0, Tuff: 0 }, "990"),
+    item({ Title: "R7711", Job: "R7711", Customer: "Customer Two", GlassType: "GLASS",
+           Total: 4, TuffTotal: 0, Seq: 2, Active: "Yes", OfficeDone: "No",
+           Cut: 4, Hotmelt: 0, Tuff: 0 }, "991")];
+  ITEMS = tuffBoard.slice();
+  S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = ''; FINOPEN = false;");
+  /* let the previous section's card nodes go, so this board is painted fresh
+     and the two groups hold only these two jobs */
+  S("DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = '';");
+  S("PERSON = { name: 'Person T', stages: ['cut', 'tuff'], pin: '' }; LAST_TAP = Date.now();");
+  await S("readList()");
+  assert.strictEqual(S("PAGE_STAGE"), "cut", "this is the cutting tablet");
+  assert.strictEqual(S("ST.tuffOwed(boardNow().find(g => g.job === 'R7710'))"), true,
+    "R7710 is cut through and has four tuff, none counted");
+  assert.strictEqual(S("boardNow().find(g => g.job === 'R7710').finished"), false,
+    "so cutting complete does NOT finish it on this page");
+  assert.strictEqual(S("NODES['R7710'].className"), "card", "and it is not drawn gold");
+  assert.strictEqual(S("FIN.kids.length"), 1, "and it is not in the Finished group");
+  assert.strictEqual(S("DOING.kids.map(n => n.getAttribute('data-job')).join(',')"), "R7710",
+    "it is still on the working side of the board");
+  /* the job with no tuff at all finishes on cutting alone, exactly as before */
+  assert.strictEqual(S("ST.tuffOwed(boardNow().find(g => g.job === 'R7711'))"), false,
+    "R7711 has no tuff on it, so it owes none");
+  assert.strictEqual(S("boardNow().find(g => g.job === 'R7711').finished"), true);
+  assert.strictEqual(S("NODES['R7711'].className"), "card done",
+    "a job with no tuff is finished on cutting alone, as it always was");
+  /* count the tuff and it goes gold and sinks, without another glass tap */
+  S("tap('990', 'tuff', 'all');");
+  assert.strictEqual(S("boardNow().find(g => g.job === 'R7710').finished"), true,
+    "the tuff is counted, so now it is finished on this page");
+  assert.strictEqual(S("NODES['R7710'].className"), "card done", "gold");
+  assert.ok(S("FIN.kids.map(n => n.getAttribute('data-job')).indexOf('R7710')") >= 0,
+    "and it has moved into the Finished group beside the other one");
+  assert.ok(/Finished · 2/.test(S("FINHEAD.textContent")), "which now counts two");
+  await settle(80);
+  S("if (retryT) { clearTimeout(retryT); retryT = null; } QUEUE = {}; LOGQ = {};");
+  pass("owner, after the demo: a job with tuff still to count is not finished on the cutting tablet");
+
+  /* THE HOTMELTING TABLET IS UNAFFECTED BY IT: tuff is the cutting bench's own
+     work and never appears on that page at all */
+  tuffBoard[0].fields.Tuff = 0;
+  tuffBoard[0].fields.Hotmelt = 4;
+  mem.cw_stationstage = "hotmelt";
+  const sbHT = newStation();
+  const SHT = code => vm.runInContext(code, sbHT);
+  SHT("SITEID = " + JSON.stringify(FSITE) + "; TOKEN = null; QUEUE = {}; LOGQ = {};");
+  SHT("PEOPLE = [{ name: 'Person H', stages: ['hotmelt'], pin: '' }]; PEOPLE_READ = true;");
+  SHT("PERSON = PEOPLE[0]; LAST_TAP = Date.now();");
+  await SHT("readList()");
+  assert.strictEqual(SHT("PAGE_STAGE"), "hotmelt");
+  assert.strictEqual(SHT("ST.tuffOwed(boardNow().find(g => g.job === 'R7710'))"), true,
+    "the job still owes its four tuff");
+  assert.strictEqual(SHT("boardNow().find(g => g.job === 'R7710').finished"), true,
+    "but hotmelting is complete, and tuff is not this bench's work: the card is finished here");
+  assert.strictEqual(SHT("NODES['R7710'].className"), "card done");
+  mem.cw_stationstage = "cut";
+  pass("and the hotmelting tablet is untouched by it: tuff is not that bench's work");
 
   /* ---- the tablet's theme ---- */
   delete mem.cw_stationtheme;

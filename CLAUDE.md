@@ -135,7 +135,9 @@ the one that first wrote them down.
    means "the record says this job's glass is done": still a feeder column
    the tablet can never write, still greying the **glass** steppers (since
    2026-09-21 it has never greyed Tuff — that is a different department's
-   count and the lock says nothing about it) — but since the
+   count and the lock says nothing about it; a job that still owes tuff is
+   nonetheless not *shown* as finished, which is a display rule and not the
+   lock — owner, after the demo, 2026-09-21) — but since the
    floor's own work goes onto the record too, the floor finishing a job is
    what locks it, and only an office row stamped later unlocks it again.
 

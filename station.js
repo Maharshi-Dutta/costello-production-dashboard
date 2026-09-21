@@ -1016,10 +1016,16 @@ function tap(id, stage, delta) {
     `finished` is re-read for THIS PAGE (2026-09-21): a card is done here when
     this page's stage is complete, so the cutter's finished jobs sink out of the
     cutter's way whether or not hotmelting has started. The record's own
-    `finished` - both stages - is the office's answer and is what the office's
-    board and the drawer keep reading. Everything below (the card's class, the
-    Finished group, boardDiff's "the order moved") follows this one field, so
-    this is the whole of the change. */
+    `finished` - both stages, and the tuff - is the office's answer and is what
+    the office's board and the job row keep reading. Everything below (the
+    card's class, the Finished group, boardDiff's "the order moved") follows
+    this one field, so this is the whole of the change.
+
+    AND THE CUTTER'S TUFF COUNTS HERE (owner, after the demo on 2026-09-21).
+    Tuff is the cutting bench's own work, on the cutting tablet's own card, so a
+    job with tuff still to count has not left the cutter's way however much
+    glass is cut. The hotmelting page is untouched by it: tuff is not that
+    bench's work and never appears on it. */
 function boardNow() {
   const over = ITEMS.map(it => {
     const q = queuedFor(String(it.id));
@@ -1027,7 +1033,9 @@ function boardNow() {
     return { id: it.id, fields: Object.assign({}, it.fields, q) };
   });
   const board = ST.jobBoard(over);
-  board.forEach(g => { g.finished = ST.stageComplete(g, PAGE_STAGE); });
+  board.forEach(g => {
+    g.finished = ST.stageComplete(g, PAGE_STAGE) && !(tuffHere() && ST.tuffOwed(g));
+  });
   return board;
 }
 

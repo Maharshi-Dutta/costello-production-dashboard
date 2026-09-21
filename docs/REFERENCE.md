@@ -755,11 +755,17 @@ last-writer-wins comparison below.
 fourth thing the same person counts on the tablet, with its own quantity off
 the sheet's TUFF column. New columns: `Tuff`, `TuffBy`, `TuffAt` (the floor's)
 and `TuffTotal` (a job fact, fed like `Total`). It is deliberately **not** one
-of the three glass stages: `STAGES` / `STAGE_KEYS` still mean the three and
-`ALL_STAGES` / `ALL_STAGE_KEYS` are the four, so the job's `Total` is still
-DG + TG, `finished` (the gold card, the Finished group, the job row's
-`Glass 8/24` chip) is still the three, and the feeder never seeds `Tuff`. It
-gets a row and a number of its own (`stageLeft` against `TuffTotal`): eight
+of the glass stages: `STAGES` / `STAGE_KEYS` mean the glass stages and
+`ALL_STAGES` / `ALL_STAGE_KEYS` are all of them, so the job's `Total` is still
+DG + TG and the feeder never seeds `Tuff`.
+
+> **CHANGED 2026-09-21 by §22 (owner, after the demo).** `finished` — the gold
+> card, the Finished group, the job row's `Glass 8/16` chip — **does** ask
+> about tuff now: a job that has tuff and has not counted it is not shown as
+> finished. Only that clause moved; tuff is still outside the glass total, the
+> lock and the header count. `ST.tuffOwed(g)` is the whole rule.
+
+It gets a row and a number of its own (`stageLeft` against `TuffTotal`): eight
 glasses to cut and eleven tuff show as **two** numbers, "Cutting 8 left" and
 "Tuff 11 left", never the nineteen that adding them would have said. The stepper is drawn only on jobs that
 have tuff on them. **NOT TUFF gets no counter at all** — its colour is derived
@@ -1645,6 +1651,18 @@ untouched row a seed field is only ever raised** (R1 below). Everything about
 the two-way arrangement — last writer wins, ties to the office, the
 `Dashboard Log` line per paint — is unchanged.
 
+**A job that still owes TUFF is not shown as finished** (owner, after the demo
+on 2026-09-21: *"why are moving the jobs to complete when tuff is left? if job
+has tuff and is not done dont move it, if done then move."*). `ST.tuffOwed(g)`
+— `tuffTotal > 0 && !stageComplete(g, "tuff")` — is the whole rule, and it is
+**display only**: it decides the gold card, the Finished group and the job
+row's chip on the office's board and on the **cutting** tablet (the bench whose
+work tuff is), and nothing else. The **hotmelting** tablet is unaffected — tuff
+never appears on it. This **reverses one clause** of the 2026-09-10 decision
+that put tuff "outside the finished rule": tuff is still outside the job's
+glass total, still outside the office's lock (R2), still outside the header's
+"N left", and still never seeded. A job with no tuff on it is unaffected.
+
 **TUFF has THREE answers, not two** (R5 below): `"gold"` once its own count is
 complete, `""` once somebody has tapped it and it is not, and **`null` — no
 opinion at all — while `TuffAt` is empty**. `ST.tuffSpoken(g)` is that question
@@ -1664,9 +1682,11 @@ hold this page's stage — plus, on the cutting page, anyone who holds `tuff`. A
 card draws this page's stage and, on the cutting page, Tuff where the job has
 any and the signed-in person holds it; the header count and the card's "N left"
 are this page's stage alone. **A card is done on THIS page when this page's
-stage is complete** (`boardNow()` re-reads `finished` for the page), so the
+stage is complete — and, on the cutting page, when the job's tuff is counted
+too** (`boardNow()` re-reads `finished` for the page), so the
 cutter's finished jobs leave the cutter's way before hotmelting has started —
-while the record's own `finished`, which the office reads, still needs both.
+while the record's own `finished`, which the office reads, needs both glass
+stages and the tuff.
 The office lock (`OfficeDone`) locks the card's **glass** stages on both pages
 — **Tuff stays live under it** (R2 below). Notes keep
 `Station = "Glass"` on both, so the two tablets share one thread per job.

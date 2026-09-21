@@ -53,9 +53,14 @@ const LEGACY_STAGE_LABELS = { glazed: "Glazing" };
    department, the same hands, and its own quantity off the sheet's TUFF column
    rather than the DG + TG one. It is NOT one of the two above, and the
    difference matters in three places - it is not part of the job's glass total,
-   it does not decide whether a job is finished, and it is not one of the
-   counters the feeder may seed. So the two keep their own list (STAGES /
-   STAGE_KEYS) and all three have their own beside it. */
+   it is not one of the counters the feeder may seed, and the office's lock is
+   never about it. So the two keep their own list (STAGES / STAGE_KEYS) and all
+   three have their own beside it.
+
+   IT DOES DECIDE WHETHER A JOB IS SHOWN AS FINISHED, since the owner's word
+   after the demo on 2026-09-21 ("if job has tuff and is not done dont move
+   it"). That clause of the 2026-09-10 decision is reversed and no other; see
+   tuffOwed(). */
 const TUFF_STAGE = "tuff";
 const ALL_STAGES = STAGES.concat([[TUFF_STAGE, "Tuff"]]);
 const ALL_STAGE_KEYS = ALL_STAGES.map(s => s[0]);
@@ -684,12 +689,30 @@ function sliceHash(slice, def) {
    is what the office reads out as "Cutting 8 of 8 - Person A - Tue 14:02".
 
    A job is finished, and goes gold on the office's board, when both glass
-   counters have reached the total and there is a total to reach: a row with no
-   glasses on it is not something anybody finished. Each TABLET has its own
+   counters have reached the total, there is a total to reach, and the job's
+   tuff (if it has any) is counted too: a row with no glasses on it is not
+   something anybody finished. Each TABLET has its own
    answer to "done here" since 2026-09-21 - the cutter's finished jobs leave
    the cutter's way before hotmelting has started - and that is the page's own
    reading of this record, not a second field on it.                         */
 const isActive = f => stTxt(f && f.Active).trim().toLowerCase() === "yes";
+
+/** Does this job still owe tuff? Owner, after the demo on 2026-09-21: "why are
+    moving the jobs to complete when tuff is left? if job has tuff and is not
+    done dont move it, if done then move."
+
+    DISPLAY ONLY, and the boundary matters because 2026-09-10 put tuff outside
+    the finished rule on purpose and this reverses exactly one clause of that.
+    It decides whether a card is drawn gold and sinks to the bottom, on the
+    office's board and on the cutting tablet, and NOTHING else: not the colour
+    the Production sheet is painted (`glassColours` reads the counters direct),
+    not the office's lock (`officeComplete` asks the office's own DG and TG
+    checkpoints and has never known about tuff), not the feeder's `Active`,
+    seed or hash, and not the header's "N left", which is this page's stage
+    alone. A job with no tuff on it owes none and is unaffected. */
+function tuffOwed(g) {
+  return Math.max(0, Math.round(stNum(g && g.tuffTotal, 0))) > 0 && !stageComplete(g, TUFF_STAGE);
+}
 
 /** The job a list row is about, whichever iteration wrote it: v3 writes the
     job number as the Title, v2 wrote `JOB|TYPE`. */
@@ -745,10 +768,16 @@ function buildJobs(items, keep) {
       g.at[k] = stTxt(f[STAGE_AT[k]]);
       g.bars[k] = { done: g[STAGE_ROW[k]], total: t2, by: g.by[k], at: g.at[k] };
     });
-    /* the two glass stages decide this, not the three. Tuff is a different
-       department's count against a different quantity, and a job whose tuff
-       nobody has counted is still a job the glass area has finished. */
-    g.finished = total > 0 && STAGE_KEYS.every(k => g[STAGE_ROW[k]] >= total);
+    /* The two glass stages, AND the tuff the job is carrying (owner, after the
+       demo, 2026-09-21: "why are moving the jobs to complete when tuff is
+       left? if job has tuff and is not done dont move it, if done then move").
+       This REVERSES the 2026-09-10 decision that tuff was outside the finished
+       rule - and only that one. Tuff is still outside the job's glass total,
+       still outside the office's lock, and still outside the header's "N left":
+       what changed is only whether a card is SHOWN as done and sinks to the
+       bottom. A job with no tuff on it finishes on the glass stages, exactly as
+       before. */
+    g.finished = total > 0 && STAGE_KEYS.every(k => g[STAGE_ROW[k]] >= total) && !tuffOwed(g);
     return g;
   });
   out.sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
@@ -1967,7 +1996,7 @@ const ST = {
   STAGES, STAGE_KEYS, STAGE_FIELD, STAGE_ROW, STAGE_BY, STAGE_AT, stageLabel,
   LEGACY_STAGE_LABELS,
   ALL_STAGES, ALL_STAGE_KEYS, STAGE_TOTAL_ROW, TUFF_STAGE,
-  COLOUR_TYPES, stageComplete, glassColours, tuffSpoken, floorStamp,
+  COLOUR_TYPES, stageComplete, glassColours, tuffSpoken, tuffOwed, floorStamp,
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,
