@@ -354,8 +354,9 @@
   .worow.c-green { border-color:var(--green); background:var(--green-bg) }
   .worow.done .wototal { font-weight:700 }
   .wohead { display:grid; grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
-            64px 90px 92px 92px auto minmax(90px,1fr); gap:9px; align-items:center;
+            64px 90px 92px 92px 34px minmax(90px,1fr); gap:9px; align-items:center;
             padding:9px 11px; cursor:pointer; font-size:12.5px }
+  .wonotes-slot { display:flex; justify-content:center }
   .wotog { color:var(--ink-4) }
   .wohead .stjob { font-size:17px }
   .wocust, .wosect, .wolast { color:var(--ink-2); overflow:hidden;
@@ -402,8 +403,12 @@
   .weldline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:7px 0 2px }
   .weldnum { font-size:15px; font-weight:700 }
   @media (max-width:900px){
-    .wohead { grid-template-columns:18px 70px 1fr auto; row-gap:5px }
-    .wohead .wosect, .wohead .wolast, .wohead .wobar { display:none }
+    /* job, customer, total, badge - one row, no auto track: Frames/Sashes join
+       section/bar/last-touch in the hidden set here, so the row never wraps
+       and never drifts with digit count (2026-09-18, same fix as .wohead
+       above: a per-row auto column sizes to that row's own content). */
+    .wohead { grid-template-columns:18px 70px 1fr 64px 34px; row-gap:5px }
+    .wohead .wosect, .wohead .wolast, .wohead .wobar, .wohead .wopart { display:none }
     .woline { grid-template-columns:58px 58px auto; row-gap:4px }
     .woline .wobar, .woline .wowho { display:none }
   }

@@ -3071,9 +3071,9 @@ function weldRowHtml(c) {
       weldBarHtml(c.done, c.total) +
       '<span class="wopart tab">Frames ' + fr.done + '/' + fr.total + '</span>' +
       '<span class="wopart tab">Sashes ' + sa.done + '/' + sa.total + '</span>' +
-      (notes.length ? '<span class="wonotes" title="' +
+      '<span class="wonotes-slot">' + (notes.length ? '<span class="wonotes" title="' +
         esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' +
-        notes.length + '</span>' : "") +
+        notes.length + '</span>' : "") + '</span>' +
       '<span class="wolast">' + (c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
     '</div>' +
     (open ? '<div class="wobody">' + c.groups.map(weldOfficeGroupHtml).join("") +
