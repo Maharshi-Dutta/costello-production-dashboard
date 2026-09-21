@@ -6916,9 +6916,23 @@ function renderDaySheets() {
   renderFab();                 // a window is open: the wheel steps aside
 }
 
-/** The rows and the week subtotals, and nothing else on the window. */
-function paintDaySheets() {
+/** The rows and the week subtotals, and nothing else on the window.
+
+    NOT WHILE A ROW IS BEING CORRECTED (review, 2026-09-21). The floor's poll
+    re-reads this list every twenty seconds while the window is open, and each
+    read repainted the whole table body - so a correction half typed into a row
+    was silently thrown away, mid-sentence, roughly three times a minute. The
+    read still happens; only the paint waits, and it is OWED rather than lost,
+    so the moment the edit is saved or cancelled the table shows everything
+    that arrived while it was open. Exactly the rule the job list already uses
+    for a search box somebody is typing in (rowsInUse / ROWS_STALE). */
+let DAY_PAINT_OWED = false;
+function paintDaySheets(force) {
   if (!$("#dayhost")) return;
+  /* `force` is the office's own click - opening an edit, saving it, cancelling
+     it - which is the one thing that may rebuild the body while one is open */
+  if (DAYEDIT && !force) { DAY_PAINT_OWED = true; return; }
+  DAY_PAINT_OWED = false;
   const counts = dayCountCols();
   const all = DAY_OK === true ? dayRowsNow() : [];
   const rows = ST.dayRows(DAY_ITEMS || [], counts,
@@ -6986,8 +7000,10 @@ function paintDaySheets() {
   const more = $("#dsmore");
   if (more) more.onclick = () => { DAYF.show += DAY_PAGE; paintDaySheets(); };
   (box.querySelectorAll("[data-dsedit]") || []).forEach(b =>
-    b.onclick = () => { DAYEDIT = b.dataset.dsedit; paintDaySheets(); });
+    b.onclick = () => { DAYEDIT = b.dataset.dsedit; paintDaySheets(true); });
   (box.querySelectorAll("[data-dscancel]") || []).forEach(b =>
+    /* the edit is let go first, so this paints the rows the polls brought in
+       while it was open rather than the ones that were there when it opened */
     b.onclick = () => { DAYEDIT = ""; paintDaySheets(); });
   (box.querySelectorAll("[data-dssave]") || []).forEach(b => b.onclick = () => {
     if (b.disabled) return;
@@ -7006,8 +7022,17 @@ function paintDaySheets() {
     The office is the only writer of this list, and the tablet reads it. */
 async function saveDayTarget(raw) {
   if (typeof ST === "undefined" || !CW || !CW.listUpsert || !dayStage()) return false;
+  /* A TARGET IS AT LEAST ONE (review, 2026-09-21). Clearing the box and tapping
+     Save used to write a target of NOUGHT - which is not "no target": every
+     week measured against it reads "+44" as if the week had beaten it, and the
+     tablet says "35 of 0". Removing a target is not built, so a box with
+     nothing in it is a mistake and is refused with nothing written. */
   const n = ST.dayCount(raw);
-  if (n == null) { toast("A target is a whole number of sheets.", true); return false; }
+  if (n == null || n < 1) {
+    toast("A target is a whole number of " + ((daySheetNow() || {}).unit || "sheets") +
+          ", one or more. Nothing was saved.", true);
+    return false;
+  }
   if (dayWriting) return false;
   const had = dayTargetNow();
   if (had && had.target === n) return false;         // nothing to say
@@ -7046,9 +7071,16 @@ async function saveDayEdit(id, got) {
   const counts = dayCountCols();
   const body = ST.dayOfficeFields(counts, { counts: got.counts, note: got.note,
                                             who: feedWho(), at: new Date().toISOString() });
-  if (!body) { toast("Whole numbers only — no minus signs and no decimals.", true); return false; }
+  if (!body) {
+    toast("Whole numbers only — no minus signs, no decimals, nothing over " +
+          ST.DAY_COUNT_MAX + ".", true);
+    return false;
+  }
   dayWriting = true;
-  paintDaySheets();
+  /* the row is NOT repainted here, and that is the point: a repaint rebuilds
+     the boxes from the row as the list has it, which would throw away what was
+     typed the moment Save was tapped. Only the button is greyed, in place. */
+  dayEditBusy(true);
   try {
     const siteId = await CW.stationSite(glassSite());
     if (!siteId) throw new Error(STATION_SITE_MISSING);
@@ -7065,10 +7097,20 @@ async function saveDayEdit(id, got) {
     return true;
   } catch (e) {
     dayWriting = false;
+    /* the edit stays open with what was typed still in it - nothing is
+       repainted - so a correction that could not be saved is not thrown away
+       as well. The button comes back and it can simply be tapped again. */
+    dayEditBusy(false);
     toast("That correction could not be saved. " + friendly(e), true);
-    paintDaySheets();
     return false;
   }
+}
+/** Grey (or un-grey) the Save button of the row being corrected, without
+    touching a box somebody has typed into. */
+function dayEditBusy(on) {
+  const box = $("#dsbody");
+  if (!box || !box.querySelectorAll) return;
+  (box.querySelectorAll("[data-dssave]") || []).forEach(b => { b.disabled = !!on; });
 }
 
 /** "This week: N of T sheets" - one line under the head of the station board,

@@ -1804,21 +1804,44 @@ sheets" and "This week: N of T" with a bar — N being this person's saved sheet
 this ISO week **plus what is typed now**, T the target, or "no target set" in
 those words rather than "of 0".
 
-- **A draft survives a poll and a reload** (`cw_daysheetdraft`) and is dropped
-  at the change of day: yesterday's typing is not today's sheet.
+- **A draft belongs to the day it was started**, carries **whose** it is, and
+  survives a poll, a reload and midnight (`cw_daysheetdraft`). The form's
+  header shows that day and says so when it is not today; Save files it under
+  that day, that day's ISO week and the target that was in force then. It is
+  dropped at the end of the **following** day. Keying it on "today" was the
+  first build's bug in both directions: typing at 23:55 and saving at 00:01
+  filed the evening under tomorrow, and the same tick threw an unsaved draft
+  away. `who` is why the next person to pick their name is never handed
+  somebody else's numbers on a form that would save them under their own —
+  and **switching person, or the ten-minute idle lock, closes the sheet.**
+- **Save is dead until something has been written.** An untouched form is not
+  four noughts. A day with nothing cut but a line about why ("machine down all
+  day") is a real entry and saves perfectly well.
 - **Save asks once** ("It cannot be changed from the tablet afterwards"),
   queues one row (`cw_stationdayq`) and sends it through the page's existing
   queue — so offline it says "waiting to send" and goes when the wifi is back.
   Re-opening later that day shows the saved sheet read-only, with
   "saved 17:02 — ask the office to correct a mistake"; the next day it is a
   blank form again.
-- **A count that is not a whole number is refused at the form**, not rounded:
-  `ST.dayFields` answers null for a minus, a decimal or a word, so there is
-  nothing to queue and nothing to send.
+- **Only a list that is genuinely missing refuses a save.** A list that could
+  not be *read* is the workshop wifi, and the sheet is queued exactly like any
+  other offline write; refusing it was the one way this feature could lose
+  somebody's day. `DAY_MISSING` is the flag that tells the two apart.
+- **A count that is not a whole number, or over 9999, is refused at the form**,
+  not rounded: `ST.dayFields` answers null for a minus, a decimal, a word or a
+  stuck finger, so there is nothing to queue and nothing to send.
 - **A unique-value refusal means ALREADY SAVED, never an error.** A second
   tablet on the same key, or this tablet replaying a row whose answer was lost,
   makes `flushDay` read the list back; if the row is there the owed item is let
   go and the saved sheet is what the person sees.
+- **A row SharePoint keeps refusing stops pointing at the wifi.** After three
+  4xx refusals of the same row the words become "could not be saved — tell the
+  office", and the row **stays queued** (the tablet cannot show it, so dropping
+  it is the only way the day is really lost). The count survives a reload with
+  the row. An owed day sheet no longer holds `checkBuild` back from reloading
+  onto a new build — the queue is in `localStorage` and is rebuilt on load, and
+  a new build may be exactly the fix a refusing list needs (`owingWrites`,
+  which is the counter and log queues only, is what a reload waits for).
 - The person's last seven saved days are listed under the form, read-only.
 
 The tablet POSTs and reads. It never PATCHes or DELETEs either list, and it can
@@ -1835,15 +1858,34 @@ changing the target today cannot rewrite what last week was measured against.
 A week with no stored target falls back to the live one, which is what the
 current week needs before anybody has saved a sheet in it.
 
+**A duplicate row is read once.** `ST.dayRows` de-duplicates by `Title` with
+the oldest item id winning, the same rule `buildJobs`, `weldRecords` and
+`targetOf` use. Enforce-unique-values on `Title` is still the owner's step in
+SharePoint, but the code no longer depends on it having been done — without
+this, one duplicate doubled that person's day in the window, in the subtotal,
+in the board's line, in the tablet's own week and in the report, silently.
+
+**A correction is not wiped by the poll.** The window re-reads the list every
+20 seconds; the *paint* waits while a row is in edit mode and is owed until
+the edit is saved or cancelled (`DAY_PAINT_OWED`), so what somebody is typing
+into a row cannot be thrown away under them. The read still happens, and the
+moment the edit closes everything that arrived meanwhile is on screen. A
+correction that fails to save leaves the row open with the typing in it.
+
 **Two writes, and they are the whole of the new rule-2 exception:**
 
 | write | body | log |
 |---|---|---|
-| the weekly target | `CW.listUpsert` of `Station targets` with `ST.targetFields(n, who, at)` — a number, a name and a time | one `Dashboard Log` line, "Cutting weekly target", from → to |
+| the weekly target | `CW.listUpsert` of `Station targets` with `ST.targetFields(n, who, at)` — a number, a name and a time. **A whole number of one or more**: an empty box or a nought is refused with a toast and nothing is written, because a target of 0 is not "no target" (every week then reads as beating it, and the tablet says "35 of 0"). Removing a target is not built | one `Dashboard Log` line, "Cutting weekly target", from → to |
 | a correction | `CW.listPatch` of one `Station day sheets` row with `ST.dayOfficeFields(counts, e)` — the counts, the note, `EditedBy`, `EditedAt`, and nothing else | one `Dashboard Log` line, "Day sheet corrected", the day and person, old → new total |
 
-Neither writes `Station log`. Neither deletes anything. Neither goes near the
-workbook.
+Neither writes `Station log`. Neither goes near the workbook. **No day sheet is
+ever deleted, by either side.** The one delete in the feature is `listUpsert`'s
+own duplicate settle on `Station targets` — if two browsers set the target at
+once and the unique rule is off, the oldest row is kept and the surplus one
+deleted — which is the settle `Dashboard phases` has always used and can only
+ever remove a duplicate of the row it is writing (`web/CLAUDE.md` rule 3 says
+so).
 
 ### The station report
 
@@ -1854,22 +1896,49 @@ week, last week, this month, custom). Excel only; PDF is not built.
 
 `stationReport(def, stage, data, period)` in `export.js` is pure and **has no
 station-specific branch in it**. Everything a station says about itself comes
-off its definition: `def.name`, `def.stageLabel(stage)`, `ST.daySheetOf(def,
-stage)` for the counts, and `def.reportJobs(data, stage)` — the adapter, which
-is `ST.glassReportJobs` (one row per job) and `WELDC.weldReportJobs` (one row
-per job **and product group**, frames and sashes as the board shows them). The
-other four sheets are built from the three lists every station already shares.
+off its definition:
+
+| what it asks | glass | welding |
+|---|---|---|
+| `def.name`, `def.stageLabel(stage)` | Glass, Cutting / Hotmelting | Welding |
+| `ST.daySheetOf(def, stage)` — the day-sheet counts | the four, for `cut` | none |
+| `def.reportJobs(data, stage)` — **the adapter** | `ST.glassReportJobs`, one row per job | `WELDC.weldReportJobs`, one row per job **and product group** |
+| `def.reportLogStages(stage)` — which `Station log` stages feed this report stage | `k => [k]` | its part keys, `frames` and `sashes` |
+| `def.reportGroupLabel` — has this station's log a product group in it? | absent | `"Group"` |
+
+**`reportLogStages` is why the welding report was empty at first.** The welding
+tablet logs `Stage = frames | sashes` (`weldLogEntry`), never "weld", so
+matching the report's stage name against the log found nothing: no Activity
+sheet and an empty Days. The fixture that missed it hand-wrote `Stage: "weld"`;
+it is now built through `ST.logFields(WELDC.weldLogEntry(...))`, the way the
+tablet builds it.
+
+The other four sheets are built from the three lists every station shares.
 
 | sheet | what is on it | left out when |
 |---|---|---|
 | Summary | station, stage, period, who and when; then a line per ISO week: units recorded, jobs touched, jobs complete at this stage, and — for a stage with a day sheet — the counts, the total, the target and the difference | never (an empty period gets a Summary saying so) |
 | Days | a row per day: units recorded and by whom; for a day-sheet stage the four counts, the total, the note and whether the office corrected it | no log line and no sheet in the period |
 | Jobs | the station's own adapter's answer | the board is empty |
-| Activity | the `Station log` lines in the period, oldest first, with a note row saying the office's own edits are in `Dashboard Log` | no lines |
+| Activity | the `Station log` lines in the period, oldest first, with a note row saying the office's own edits are in `Dashboard Log`. **Group** only where the definition names one, and **Part** only where the report stage is made of more than one log stage — glass has neither and gets six columns, welding has both and gets eight | no lines |
 | Notes | `Station comments` in the period: when, who, job, text | no notes |
 
-**Rule 3.** The two free-text columns — a day sheet's note and a floor note —
-go through `ST.stripContact` on their way into the file. That is the strip
+**One definition of "day" for the whole report.** A day sheet is filed under
+the tablet's local date; log lines and notes are bucketed by
+`ST.dayKey(new Date(at))` — the local date of the stamp — and not by slicing
+the ISO string, which is the UTC date. In Irish summer time that put everything
+recorded between midnight and one in the morning on the day before, in a
+different row of Days from the sheet it was cut for and sometimes in a
+different ISO week of the Summary. `data.dayOf` overrides it for a caller
+reporting in a fixed zone, and is how the test pins the behaviour down without
+being able to change the machine's own zone.
+
+**Rule 3.** The free-text columns — a day sheet's note, a floor note and **the
+customer name on the Jobs sheet** — go through `ST.stripContact` on their way
+into the file. The customer joined them after review: it is free text off the
+sheet like any other, welding's feeder has stripped it since that station
+shipped, and "Customer Two 086 123 4567" typed into a name is exactly how a
+phone number reaches a file that has no column for one. That is the strip
 `welding-core.js` has used for the COMMENT column since 2026-09-16, **moved to
 `station-core.js` on 2026-09-21** so it has one home: `weldStripDigits` is now a
 call to it with the comment's own cap, welding's behaviour and its 61 checks
@@ -1882,11 +1951,11 @@ names the template, the station, the stage and the period).
 
 ### Tests
 
-`test_daysheets.js` (40 checks), plus `test_export.js` 53 → 54 — the standing
+`test_daysheets.js` (52 checks), plus `test_export.js` 53 → 54 — the standing
 "no phone number and no eircode in any export" scan now builds a station report
 from fixtures that type a phone number in three written shapes and an
 address code into a day note and a floor note, and runs over the rows and over
-the real workbook. The new suite covers the row shape and the refusals, one
+the real workbook. The suite covers the row shape and the refusals, one
 save per person per day, the unique-value refusal read as already-saved, the
 offline save, the week helper across a year boundary and at 23:30 local, "this
 week N of T" including the draft, both office writes, the week subtotal's stored
@@ -1894,6 +1963,17 @@ target, the filters, a missing list on both screens, all five report sheets for
 glass cutting, hotmelting without the day-sheet columns, welding's per-group
 Jobs sheet, an empty period, rule 3 in four written shapes, and the workbook
 gate over the tablet's files and over every request in the run.
+
+**The review's thirteen findings each brought a test that fails without its
+fix** — the first build's suites were green and caught none of them, which is
+the thing worth remembering about this feature. A fixture that agrees with the
+code instead of with the tablet (`Stage: "weld"`, hand-written) proved nothing;
+so did a suite that never asked what happens at midnight, to a second person at
+the same tablet, to a duplicate row, to an empty target box, or to a
+correction while the poll was running. The layout one (D13) has no offline test
+at all and was found by a browser harness measuring `scrollWidth` against
+`innerWidth` at 800 px; what `test_station.js` can hold is the CSS rules
+themselves, and it now does.
 
 ### Not built here
 

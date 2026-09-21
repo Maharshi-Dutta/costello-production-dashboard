@@ -707,6 +707,17 @@ const WELD = {
   /* no end-of-day sheet here yet: one line of `daySheets` when the owner asks
      and says which counts they want (spec 2026-09-21, "Not built here") */
   reportStages: [WELD_STAGE],
+  /* THE LINES THIS STATION'S ONE REPORT STAGE IS MADE OF (review, 2026-09-21).
+     The tablet logs one `Station log` line per PART - `Stage = frames` and
+     `Stage = sashes`, from weldLogEntry - and never the word "weld". A report
+     that matched its stage name against the log found nothing, so the welding
+     report shipped with no Activity sheet and an empty Days. */
+  reportLogStages: () => WELD_PART_KEYS.slice(),
+  /* this station's log lines carry a PRODUCT GROUP in the shared list's
+     GlassType column, so the report's Activity sheet gets a column for it.
+     Glass names none and loses the column rather than printing "GLASS" on
+     every row of it. */
+  reportGroupLabel: "Group",
   reportJobs: weldReportJobs,
   fields: WELD_FIELDS,
   feederFields: WELD_FEEDER_FIELDS,

@@ -1634,11 +1634,10 @@ const XP_PERIODS = [["week", "This week"], ["last", "Last week"],
 
 /** Is this ISO stamp inside the period? A row with no stamp at all is out: a
     report of a fortnight must not quietly carry a line nothing can date. */
-const xpInPeriod = (at, p) => {
-  const d = xpDay(at);
-  if (!xpIsIso(d)) return false;
-  if (p.from && d < p.from) return false;
-  if (p.to && d > p.to) return false;
+const xpInPeriod = (day, p) => {
+  if (!xpIsIso(day)) return false;
+  if (p.from && day < p.from) return false;
+  if (p.to && day > p.to) return false;
   return true;
 };
 
@@ -1651,7 +1650,12 @@ const xpInPeriod = (at, p) => {
       notes   ST.commentRows of `Station comments` for this station
       days    ST.dayRows of `Station day sheets` for this stage
       target  the weekly target in force, or null
-      who / when / build   who pressed Download, and when                    */
+      who / when / build   who pressed Download, and when
+      dayOf   optional: which day an ISO stamp belongs to. The default is the
+              LOCAL date of the stamp, which is the office's own day and the
+              day a tablet files a sheet under; a caller reporting for a fixed
+              zone (and the test, which cannot change the machine's) hands in
+              its own.                                                        */
 function stationReport(def, stage, data, period) {
   const S = xpStationCore();
   const d = def || {};
@@ -1662,10 +1666,24 @@ function stationReport(def, stage, data, period) {
   const ds = typeof S.daySheetOf === "function" ? S.daySheetOf(d, sheet) : null;
   const counts = ds ? ds.counts : [];
   const unit = ds ? xpStr(ds.unit) || "sheets" : "";
+  /* ONE DEFINITION OF "DAY" FOR THE WHOLE REPORT (review, 2026-09-21). A day
+     sheet is filed under the tablet's LOCAL date; log lines and notes were
+     being bucketed by slicing their ISO stamp, which is the UTC date - so in
+     Irish summer time everything recorded between midnight and one in the
+     morning landed on the day before, in a different row of Days and sometimes
+     in a different ISO week of the Summary than the sheet it was cut for. */
+  const dayOf = typeof D.dayOf === "function" ? D.dayOf : (at => S.dayKey(new Date(xpStr(at))));
+
+  /* WHICH LOG STAGES THIS REPORT STAGE IS MADE OF: the definition's answer, not
+     the stage's own name - welding logs `frames` and `sashes`, never "weld" */
+  const logStages = typeof d.reportLogStages === "function"
+    ? (d.reportLogStages(sheet) || []).map(k => xpStr(k).trim().toLowerCase())
+    : [sheet];
 
   /* what is in the period, and only what is in it */
-  const log = (D.log || []).filter(r => r && r.stage === sheet && xpInPeriod(r.at, p));
-  const notes = (D.notes || []).filter(r => r && xpInPeriod(r.at, p));
+  const log = (D.log || []).filter(r => r && logStages.indexOf(r.stage) >= 0 &&
+                                        xpInPeriod(dayOf(r.at), p));
+  const notes = (D.notes || []).filter(r => r && xpInPeriod(dayOf(r.at), p));
   const days = (D.days || []).filter(r => r && r.stage === sheet &&
                                           (!p.from || r.day >= p.from) && (!p.to || r.day <= p.to));
   const jobsOut = typeof d.reportJobs === "function" ? d.reportJobs(D, sheet) : null;
@@ -1699,7 +1717,7 @@ function stationReport(def, stage, data, period) {
     return g;
   };
   log.forEach(r => {
-    const g = weekOf(xpDay(r.at));
+    const g = weekOf(dayOf(r.at));
     if (!g) return;
     if (r.to > r.from) g.units += r.to - r.from;
     g.jobs[r.job] = 1;
@@ -1742,7 +1760,7 @@ function stationReport(def, stage, data, period) {
     return g;
   };
   log.forEach(r => {
-    const g = dayAt(xpDay(r.at));
+    const g = dayAt(dayOf(r.at));
     const n = r.to > r.from ? r.to - r.from : 0;
     g.units += n;
     g.people[r.who || "—"] = (g.people[r.who || "—"] || 0) + n;
@@ -1774,15 +1792,28 @@ function stationReport(def, stage, data, period) {
   if (jobRows.length)
     out.push({ name: "Jobs", head: [], columns: jobsOut.columns, rows: jobRows });
 
-  /* ---- 4. Activity: the floor's own log, oldest first ---- */
+  /* ---- 4. Activity: the floor's own log, oldest first ----
+     The GROUP column only for a station whose definition names one: welding's
+     lines carry a product group, and a station with none would otherwise get a
+     column of its own name repeated on every row. The STAGE column earns its
+     place the same way - it says something only where a report stage is made
+     of more than one log stage (welding: frames, sashes). */
   if (log.length) {
+    const groupLabel = xpStr(d.reportGroupLabel);
+    const manyStages = logStages.length > 1;
     const rows = log.slice().sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-      .map(r => [xpStr(r.at).slice(0, 16).replace("T", " "), r.who, r.job,
-                 r.type || "", r.from, r.to, r.to - r.from]);
+      .map(r => [xpStr(r.at).slice(0, 16).replace("T", " "), r.who, r.job]
+        .concat(groupLabel ? [r.type || ""] : [])
+        .concat(manyStages ? [r.stage] : [])
+        .concat([r.from, r.to, r.to - r.from]));
     out.push({ name: "Activity",
                head: [["Note", "The floor's own log, written by the tablet. The office's own edits " +
                        "to this station's counters are in Dashboard Log, not here."]],
-               columns: ["When", "Who", "Job", "Group", "From", "To", "Units"], rows: rows });
+               columns: ["When", "Who", "Job"]
+                 .concat(groupLabel ? [groupLabel] : [])
+                 .concat(manyStages ? ["Part"] : [])
+                 .concat(["From", "To", "Units"]),
+               rows: rows });
   }
 
   /* ---- 5. Notes, stripped ---- */

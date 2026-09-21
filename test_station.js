@@ -3979,8 +3979,23 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(gs.indexOf(".pk { min-height:56px") > 0, "and the PIN pad's are 56");
   assert.ok(/\.sbtn \{ width:56px; height:56px/.test(gs), "the steppers are 56, as the owner asked");
   assert.ok(/\.sall \{ min-height:56px/.test(gs), "and so is All");
-  assert.ok(/@media \(min-width:700px\)\{[\s\S]*grid-template-columns:1fr 1fr/.test(gs),
-    "one column of cards under 700 px, two above");
+  /* ONE FULL-WIDTH COLUMN ACROSS THE WHOLE TABLET BAND (700-1100 px), which is
+     the owner's rule of 2026-09-17 and what this assertion used to get wrong:
+     it required the two-column break at 700 px, so a 10-inch tablet in
+     portrait (800 px) drew two columns - and because a bare `1fr` track cannot
+     shrink below its own min-content, one nowrap span in a card head pushed
+     the board wider than the screen and the page scrolled sideways. Measured
+     in the browser at 800 px on both stage pages, 2026-09-21. */
+  assert.ok(/\.grp \{ display:grid; grid-template-columns:minmax\(0,1fr\)/.test(gs),
+    "one column of cards, and a track that can never be forced wider than the screen");
+  assert.ok(/@media \(min-width:1101px\)\{[\s\S]*grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(gs),
+    "two columns only past 1100 px, which is a desk browser and not a tablet");
+  assert.ok(!/@media \(min-width:(7|8|9|10)\d\d px?\)/.test(gs.replace(/\s/g, "")),
+    "and nothing else breaks the layout inside the tablet band");
+  assert.ok(/\.step \{ display:grid; grid-template-columns:minmax\(0,1fr\) auto/.test(gs),
+    "the steppers keep one fixed column and the label beside them shrinks");
+  assert.ok(/\.chead \{[^}]*flex-wrap:wrap/.test(gs),
+    "and the card head wraps its count rather than widening the card");
   assert.ok(/\.card\.done \{ background:var\(--done-bg\)/.test(gs), "a finished card is gold, not faded");
   assert.ok(/--done-bg:/.test(gs), "with a token for it in both themes");
   assert.ok(gs.indexOf("id=\"search\"") > 0, "and the search box is in the header, not over the cards");

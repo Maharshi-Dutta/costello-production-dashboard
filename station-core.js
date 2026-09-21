@@ -184,6 +184,14 @@ const GLASS = {
   /* the stages a report may be run for: the two real ones. Tuff is a counter
      the cutter also moves, not a station somebody reports on. */
   reportStages: STAGE_KEYS,
+  /* WHICH `Station log` STAGES FEED A REPORT STAGE (review, 2026-09-21). Here
+     they are the same word - a cutting line is logged `Stage = cut` - but they
+     are not the same QUESTION, and welding proves it: its tablet logs one line
+     per PART (`frames`, `sashes`), so a report of the welding stage that
+     matched on "weld" found nothing at all and shipped an empty Days and no
+     Activity sheet. Asking the definition is what keeps stationReport free of
+     both answers. */
+  reportLogStages: k => [stTxt(k).trim().toLowerCase()],
   reportJobs: (data, stage) => glassReportJobs(data, stage),
   fields: STATION_FIELDS,
   feederFields: FEEDER_FIELDS,
@@ -1705,13 +1713,21 @@ function dayTitle(station, stage, day, who) {
 /** One count as it may be saved: a whole number, nought or more. A blank is
     nought (the paper sheet leaves them blank); anything else - a decimal, a
     minus, a word - is null, and the form refuses the save rather than rounding
-    somebody's afternoon into a number they did not write. */
+    somebody's afternoon into a number they did not write.
+
+    CAPPED AT DAY_COUNT_MAX (review, 2026-09-21). Nobody cuts ten thousand
+    sheets in a day, and a finger held on a number pad is the likeliest way one
+    would arrive - on a row the cutter cannot correct afterwards, into a week
+    total, and into the office's report. Above the cap it is refused at the form
+    like any other thing that is not a count. */
+const DAY_COUNT_MAX = 9999;
 function dayCount(v) {
   const s = stTxt(v).trim();
   if (s === "") return 0;
   if (!/^\d+$/.test(s)) return null;
   const n = Number(s);
-  return isFinite(n) ? n : null;
+  if (!isFinite(n) || n > DAY_COUNT_MAX) return null;
+  return n;
 }
 /** The one row a save POSTs, or null when a count is not a whole number. Every
     column it can carry is here: there is no path that could add another. */
@@ -1759,7 +1775,16 @@ function dayOfficeFields(counts, e) {
 }
 /** The list read into rows and filtered. `counts` is the definition's own list
     of [key, label]; `f` may narrow by station, stage, who, from/to day, weekday
-    (0 = Monday) and ISO week. Newest day first. */
+    (0 = Monday) and ISO week. Newest day first.
+
+    ONE ROW PER TITLE, OLDEST ITEM ID WINNING (review, 2026-09-21). Title is the
+    key and the owner turns enforce-unique-values on, but the code must not
+    depend on that having been done: without this, a list with the rule left off
+    - or two rows typed in by hand - doubles that person's day in the office
+    window, in the week subtotal, in the board's line, in the tablet's own "this
+    week" and in the report, all silently. It is the same rule every other list
+    here already uses (buildJobs, weldRecords, targetOf), and it runs before the
+    filters so a duplicate carrying a hand-edited Day cannot hide the real row. */
 function dayRows(items, counts, f) {
   const cols = counts || [];
   const want = f || {};
@@ -1769,9 +1794,18 @@ function dayRows(items, counts, f) {
   const from = dayKey(want.from || ""), to = dayKey(want.to || "");
   const week = stTxt(want.week).trim();
   const dow = want.weekday == null || want.weekday === "" ? -1 : Number(want.weekday);
-  const out = [];
+  const best = {}, order = [];
   (items || []).forEach(it => {
     if (!it) return;
+    /* a row with no Title cannot have come off a tablet and is nobody's
+       duplicate: it keeps its own identity rather than colliding on "" */
+    const k = stTxt((it.fields || {}).Title).trim().toUpperCase() || ("#" + stTxt(it.id));
+    if (!best[k]) { best[k] = it; order.push(k); return; }
+    if (stItemAge(it, best[k]) < 0) best[k] = it;
+  });
+  const out = [];
+  order.forEach(k => {
+    const it = best[k];
     const fl = it.fields || {};
     const day = dayKey(stTxt(fl.Day));
     if (!day) return;
@@ -1876,7 +1910,15 @@ function targetOf(items, station, stage) {
    itself comes off its own definition. This is the glass station's half of
    that, and welding-core.js has the matching one. A third station writes one
    more of these and appears in the report by being defined.                  */
-/** One row per job on the board, at this stage, in the report's own order. */
+/** One row per job on the board, at this stage, in the report's own order.
+
+    THE CUSTOMER GOES THROUGH THE STRIP (rule 3, review 2026-09-21). It is free
+    text off the sheet like any other: the office types a site contact into a
+    customer name often enough that welding's feeder has stripped it since the
+    day that station shipped, and a report that carried it as typed would put a
+    phone number in an exported file - which is the one thing rule 3 forbids
+    outright. 60 characters, the width the column is read at. */
+const REPORT_CUSTOMER_MAX = 60;
 function glassReportJobs(data, stage) {
   const k = stTxt(stage).trim().toLowerCase();
   const board = (data && data.board) || [];
@@ -1885,7 +1927,7 @@ function glassReportJobs(data, stage) {
     const total = Math.max(0, Math.round(stNum(g[STAGE_TOTAL_ROW[k]], 0)));
     const done = stClamp(g[STAGE_ROW[k]], total);
     jobs.push({ job: g.job, done: done, total: total });
-    rows.push([g.job, g.customer,
+    rows.push([g.job, stripContact(g.customer, REPORT_CUSTOMER_MAX),
                g.officeDone ? "the office says complete" : g.active ? "on the floor" : "off the board",
                total, done, Math.max(0, total - done),
                g.by && g.by[k] ? g.by[k] : g.doneBy, (g.at && g.at[k]) || g.doneAt,
@@ -1915,8 +1957,8 @@ const ST = {
   DAY_LIST, TARGET_LIST, DAY_BASE_FIELDS, TARGET_FIELDS, DAY_NOTE_MAX,
   DAY_MISSING_FLOOR, DAY_MISSING_OFFICE, TARGET_MISSING_OFFICE, DAY_UNREACHABLE, DAY_SAVED_WORDS,
   daySheetOf, daySheetStages, dayFieldsFor, dayKey, isoWeek, DAY_NAMES,
-  dayTitle, dayCount, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
-  targetTitle, targetFields, targetOf, glassReportJobs,
+  dayTitle, dayCount, DAY_COUNT_MAX, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
+  targetTitle, targetFields, targetOf, glassReportJobs, REPORT_CUSTOMER_MAX,
   inProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,

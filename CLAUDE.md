@@ -215,9 +215,15 @@ the one that first wrote them down.
      `Title` in. Each of the two leaves **one `Dashboard Log` line**
      (`noteChange`: "Cutting weekly target" from → to, "Day sheet corrected"
      with the day, the person and old → new totals) and **no `Station log`
-     line**. Neither side ever deletes a row of either list — the tablet
-     appends one row a day and nothing else, and the office never deletes at
-     all. Nothing on this path goes near the workbook.
+     line**. **No day sheet is ever deleted, by either side**: the tablet
+     appends one row a day and nothing else, and no code path in the app
+     removes one. The **one** delete anywhere in this feature is
+     `listUpsert`'s own duplicate settle on `Station targets`: if two browsers
+     set the target in the same second and the list's unique rule is not on,
+     the oldest row is kept and the surplus row it created is deleted — the
+     same settle `Dashboard phases` and `Dashboard print notes` have always
+     used. It can only ever remove a duplicate of the row it is writing, and
+     never a day sheet. Nothing on this path goes near the workbook.
    Only the tablet (`station.js`, `welding.js`) writes a By, an At, a last touch
    or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.

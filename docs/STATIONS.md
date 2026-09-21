@@ -397,7 +397,7 @@ and can never write it.
 | column | type | written by | meaning |
 |---|---|---|---|
 | Title | text, unique | office | `<Station>\|<Stage>`, e.g. `Glass\|cut` |
-| WeeklyTarget | number | office | total sheets per week — one number, not one per glass type and not one per day (owner's decision 1) |
+| WeeklyTarget | number | office | total sheets per week — one number, not one per glass type and not one per day (owner's decision 1). **One or more**: the dashboard refuses an empty box or a nought, because a target of nought is not "no target" |
 | SetBy, SetAt | text | office | who set it, when |
 
 **Creating it**: a plain list named exactly `Station targets`, same site, with
@@ -439,10 +439,12 @@ N of 250 sheets". The window shows one row per saved sheet — day, weekday,
 person, the four counts, the total, the note, when it was saved, and "edited by
 the office" where it was — grouped by ISO week (Monday to Sunday, `2026-W39`)
 newest week first, each week with a subtotal row carrying its **own** target and
-the difference. The target at the top of the window is the office's to set; it
-writes `Station targets` and logs "Cutting weekly target", from → to. **Edit**
-on a row opens the counts and the note, and Save logs "Day sheet corrected".
-There is no delete anywhere on either path.
+the difference. The target at the top of the window is the office's to set — a
+whole number of one or more, or it is refused with nothing written; it writes
+`Station targets` and logs "Cutting weekly target", from → to. **Edit** on a
+row opens the counts and the note, and Save logs "Day sheet corrected"; a row
+being edited is left alone by the twenty-second poll until it is saved or
+cancelled. No day sheet is ever deleted, by either side.
 
 **Report** (2026-09-21) is the chip beside them on any station's board: it opens
 the Export window on the **Station report** template with that station already
@@ -666,6 +668,8 @@ own rules, never inside `station-core.js`:
 | `daySheets` | *optional* (2026-09-21). `{ <stage>: { counts: [[column, question], …], unit } }` — the end-of-day sheet this stage asks for. **A stage with no entry gets no button, reads neither day-sheet list and sends no request for either.** That one line of definition is the whole of switching it on |
 | `reportStages` | which stages a **station report** may be run for (glass: `cut`, `hotmelt` — not `tuff`, which is a counter rather than a station somebody reports on) |
 | `reportJobs(data, stage)` | the report's **Jobs** sheet, as `{ columns, rows, jobs }` — the adapter. Glass answers one row per job; welding answers one row per job **and product group**. `jobs` is the same rows read as `{job, done, total}`, which is all the Summary needs. It is the only reason `stationReport` needs no branch per station |
+| `reportLogStages(stage)` | which **`Station log` stages** feed one report stage. Glass answers `[stage]`; welding answers its part keys (`frames`, `sashes`), because its tablet logs one line per part and never the word "weld". Getting this wrong is invisible: the report simply comes out with no Activity sheet and an empty Days, which is how the welding report shipped at first |
+| `reportGroupLabel` | *optional*: the heading for the product-group column of the report's Activity sheet, for a station whose log lines carry one (welding: `"Group"`). A station that names none loses the column rather than printing its own name down it |
 
 `ST.GLASS` (in `station-core.js`) and `WELDC.WELD` (in `welding-core.js`) are
 the two that exist. `ST.feedPlan`, `ST.sliceHash` and `ST.floorOnly` take one;

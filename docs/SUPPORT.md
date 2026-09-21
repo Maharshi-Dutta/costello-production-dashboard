@@ -333,22 +333,49 @@ nothing else. The correction is stamped with who made it, shown on the row as
 **"waiting to send"** under a saved sheet means the tablet has the sheet and
 SharePoint has not got it yet — the wifi dropped, or the site was slow. It is
 kept on the device and goes on its own within a few seconds of the connection
-coming back; nothing is lost and nobody needs to retype it. If it still says
-that after a few minutes, check the tablet is on the workshop wifi, then reload
-the page — the sheet is in storage and is sent again after the reload.
+coming back; nothing is lost and nobody needs to retype it. It is safe to
+reload the tablet, or to let it reload itself onto a new build: the sheet is in
+the device's own storage and is sent again afterwards.
+
+**"could not be saved — tell the office"** is a different thing and means what
+it says: SharePoint has refused the same sheet three times, so it is not the
+wifi and waiting will not fix it (a column renamed, the station account's
+permission changed, the list locked). **The sheet is still on the tablet and is
+not lost** — it will go the moment the list takes it. Tell the office; they can
+read the numbers off the screen in the meantime.
 
 **"saved" appearing for a sheet somebody else already saved** is the right
 answer, not an error: one sheet per person per day is enforced by SharePoint as
 well as by the page, and a second attempt (two tablets, or a retry that already
 landed) is read back as the sheet that is there.
 
-**"Whole numbers only, please"** — a count cannot be a minus, a decimal or a
-word. Nothing is rounded or guessed; Save simply waits for a whole number.
+**A sheet started before midnight saves under the day it was started.** If
+somebody types the sheet at 23:55 and taps Save at 00:05, it is filed under the
+day they worked, not the new one — the form says which day it will save under,
+in as many words, when that day is not today. An unsaved sheet is still there
+the next morning for the same reason; the day after that it is cleared away.
+
+**Save stays greyed until something has been written.** An untouched form is
+not a day of four noughts. A day with nothing cut is still a real entry as long
+as there is a line saying why ("machine down all day") — write that and Save
+comes alive.
+
+**"Whole numbers only, please"** — a count cannot be a minus, a decimal, a word
+or anything over 9999. Nothing is rounded or guessed; Save simply waits for a
+whole number.
 
 **"no target set"** means nobody has set a weekly target for cutting yet. The
 office sets it at the top of the Day sheets window; the tablet picks it up
 within ten minutes, and the target saved with each sheet is the one that week
-is measured against for ever after.
+is measured against for ever after. **A target has to be one or more** — an
+empty box or a nought is refused and nothing is written, because a target of
+nought would read as every week beating it. Taking a target away again is not
+something the dashboard can do; set it to the number you want instead.
+
+**A correction being typed in the Day sheets window is safe from the poll.**
+The window re-reads the floor's list every twenty seconds, but a row that is
+open for editing is left exactly as it is until Save or Cancel — and anything
+that arrived while it was open appears the moment it closes.
 
 **"The 'Station day sheets' list is not in the floor's site yet"** on either
 screen means exactly that: the two lists are made by hand in SharePoint (see

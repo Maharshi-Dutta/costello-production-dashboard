@@ -159,6 +159,12 @@ function switchPerson() {
   QUERY = "";
   const sb = $("#search");
   if (sb) sb.value = "";
+  /* AND NEITHER IS THE DAY SHEET (review, 2026-09-21). It was left open across
+     a change of person, so the next name to be picked was shown the last
+     person's half-typed numbers, on a form whose Save would have filed them
+     under the new name. The typing is not lost - it is in storage under whose
+     it is, and comes back when they pick their name again. */
+  DAYOPEN = false; DAYBAD = ""; DAYDRAFT = null;
   savePerson(); render();
 }
 /** The lock. Checked on a timer as well as on every draw, because a tablet
@@ -221,10 +227,18 @@ function saveQueue() {
   try { localStorage.setItem(LOGQ_KEY, JSON.stringify(LOGQ)); } catch (e) {}
   try { localStorage.setItem(DAYQ_KEY, JSON.stringify(DAYQ)); } catch (e) {}
 }
-/** Does this tablet owe anything at all? A reload, and the build check that
-    triggers one, must wait until it does not. */
+/** Does this tablet owe anything at all? What keeps the retry timer armed. */
 const owingAnything = () => !!(Object.keys(QUEUE).length || Object.keys(LOGQ).length ||
                                Object.keys(DAYQ).length);
+/** ... and what a RELOAD would actually put off (review, 2026-09-21).
+    Deliberately NOT the day sheets. Every one of these three queues is in
+    localStorage and rebuilt on the next load, so none of them is lost by a
+    reload - but a day sheet the list keeps refusing would otherwise pin the
+    tablet on an old build for as long as it sat there, which is exactly the
+    state a new build is most likely to be the fix for. The counter and log
+    queues keep the guard they have always had: they are minutes of somebody's
+    tapping, and a reload delays them until the next tap. */
+const owingWrites = () => !!(Object.keys(QUEUE).length || Object.keys(LOGQ).length);
 
 /* ---- the office's lock ------------------------------------------------------
    The office can mark a job's GLASS finished, and that job's glass stages then
@@ -573,8 +587,12 @@ let DAYROWS = [];                // this stage's saved sheets, as last read
 let DAY_OK = null;               // null not looked · false missing or unreachable · true read it
 let DAY_WHY = "";
 let TARGET = null;               // the weekly target in force, or null
-let DAYDRAFT = null;             // { day, stage, counts, note } typed but not saved
+let DAYDRAFT = null;             // { day, stage, who, counts, note, target } typed but not saved
 let DAYBAD = "";                 // what is wrong with what is typed, in words
+/* "there is no such list" and "I could not reach the list" are two different
+   answers and only the first of them is a reason to refuse a save (review,
+   2026-09-21). DAY_OK is false for both; this says which. */
+let DAY_MISSING = false;
 let DAYQ = {};
 try { DAYQ = cleanDayQ(JSON.parse(localStorage.getItem(DAYQ_KEY) || "{}")); } catch (e) { DAYQ = {}; }
 
@@ -591,7 +609,11 @@ function cleanDayQ(raw) {
     ds.counts.forEach(c => { counts[c[0]] = f[c[0]]; });
     const rebuilt = ST.dayFields(ST.GLASS, f.Stage, { day: f.Day, who: f.Who, counts: counts,
                                                       note: f.Note, weekTarget: f.WeekTarget, at: f.SavedAt });
-    if (rebuilt) out[rebuilt.Title] = { fields: rebuilt, err: 0 };
+    /* how often SharePoint has refused it survives the reload with it: a row
+       that has been refused three times must not read as brand new every time
+       somebody restarts the tablet */
+    if (rebuilt) out[rebuilt.Title] = { fields: rebuilt, err: 0,
+                                        refused: Math.max(0, Math.round(Number(e.refused) || 0)) };
   });
   return out;
 }
@@ -610,11 +632,16 @@ async function readDay() {
   let got = false;
   try {
     const items = await CW.listItems(ST.DAY_LIST, dayOpts());
-    if (items == null) { DAY_OK = false; DAY_WHY = ST.DAY_MISSING_FLOOR; return false; }
+    if (items == null) {
+      DAY_OK = false; DAY_MISSING = true; DAY_WHY = ST.DAY_MISSING_FLOOR; return false;
+    }
     DAYROWS = ST.dayRows(items, daySheet().counts,
                          { station: ST.STATION_NAME, stage: PAGE_STAGE });
-    DAY_OK = true; DAY_WHY = ""; got = true;
+    DAY_OK = true; DAY_MISSING = false; DAY_WHY = ""; got = true;
   } catch (e) {
+    /* a throw is the wifi, a bad gateway, a refused token - never "there is no
+       such list", which is the null above. DAY_MISSING is deliberately left
+       alone: a save must still be queued through a bad afternoon. */
     if (DAY_OK !== true) { DAY_OK = false; DAY_WHY = ST.DAY_UNREACHABLE; }
     console.warn("[station] the day sheets could not be read:", (e && e.message) || e);
     return false;
@@ -629,34 +656,66 @@ async function readDay() {
   return got;
 }
 
-/* A draft belongs to one day and one stage. At the change of day it is gone:
-   yesterday's typing is not today's sheet, and carrying it over would be the
-   one way this feature could put a number somebody did not write on a row they
-   cannot correct. */
+/* ---- the draft, and WHICH DAY IT IS ABOUT -----------------------------------
+   A DRAFT BELONGS TO THE DAY IT WAS STARTED (review, 2026-09-21), not to
+   whatever day it happens to be when Save is tapped. The first build keyed it
+   on "today", which broke in both directions on the one shift it matters on:
+   typing at 23:55 and tapping Save at 00:01 filed the evening's work under
+   tomorrow - the wrong day, the wrong ISO week, possibly the wrong target, and
+   on a row the cutter cannot correct - and the same tick silently threw away a
+   draft that had been typed and not yet saved.
+
+   So the record carries its own `day`, the form's header shows THAT day, Save
+   files it under it, and it survives until the end of the FOLLOWING day before
+   being dropped. It also carries `who`: a draft is one person's writing, and
+   the tablet is passed around - without that, whoever picked their name next
+   would be handed somebody else's numbers to save under their own.
+
+   The target is stamped on at the same moment for the same reason: the sheet
+   is about that day, so it is measured against the target that was in force
+   then rather than whatever the office has changed it to since.             */
+function draftKeep(d) {
+  if (!d || d.stage !== PAGE_STAGE) return null;
+  if (String(d.who || "") !== who()) return null;        // one person's writing
+  const day = ST.dayKey(String(d.day || ""));
+  if (!day) return null;
+  /* today, or yesterday: a night shift's sheet is still there in the morning,
+     and the day after that it is gone rather than sitting there for a week */
+  const age = Math.round((Date.parse(dayToday() + "T12:00:00Z") -
+                          Date.parse(day + "T12:00:00Z")) / 86400000);
+  if (!isFinite(age) || age < 0 || age > 1) return null;
+  return { day: day, stage: d.stage, who: String(d.who || ""),
+           counts: d.counts || {}, note: String(d.note || ""),
+           target: d.target == null ? null : Number(d.target) };
+}
 function loadDraft() {
   let d = null;
   try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch (e) { d = null; }
-  if (!d || d.stage !== PAGE_STAGE || d.day !== dayToday()) return null;
-  return { day: d.day, stage: d.stage, counts: d.counts || {}, note: String(d.note || "") };
+  return draftKeep(d);
 }
 function draftNow() {
-  if (!DAYDRAFT || DAYDRAFT.day !== dayToday() || DAYDRAFT.stage !== PAGE_STAGE)
-    DAYDRAFT = loadDraft() || { day: dayToday(), stage: PAGE_STAGE, counts: {}, note: "" };
+  if (!draftKeep(DAYDRAFT))
+    DAYDRAFT = loadDraft() || { day: dayToday(), stage: PAGE_STAGE, who: who(),
+                                counts: {}, note: "", target: TARGET };
   return DAYDRAFT;
 }
 function saveDraft() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(DAYDRAFT)); } catch (e) {} }
 function clearDraft() { DAYDRAFT = null; try { localStorage.removeItem(DRAFT_KEY); } catch (e) {} }
+/** The day the sheet on screen is about: the draft's own, which is normally
+    today and is yesterday for a draft carried over midnight. */
+const sheetDay = () => draftNow().day;
 
-/** This person's sheet for today, if it is already on the list. */
-function savedToday() {
-  const day = dayToday(), nm = who();
+/** This person's sheet for that day, if it is already on the list. (`owedFor`
+    up in the counter queue is a different question about a different queue,
+    which is why these two say "daySheet" out loud.) */
+function daySheetSaved(day) {
+  const nm = who();
   return DAYROWS.find(r => r.day === day && r.who === nm) || null;
 }
 /** ... or still owed by this tablet, which reads the same to whoever typed it
     apart from the word: "waiting to send" rather than "saved". */
-function owedToday() {
-  const want = ST.dayTitle(ST.STATION_NAME, PAGE_STAGE, dayToday(), who());
-  return DAYQ[want] || null;
+function daySheetOwed(day) {
+  return DAYQ[ST.dayTitle(ST.STATION_NAME, PAGE_STAGE, day, who())] || null;
 }
 /** What is typed now, added up - the "Today: N" under the boxes. */
 function draftTotal() {
@@ -667,41 +726,65 @@ function draftTotal() {
   ds.counts.forEach(c => { n += ST.dayCount(d.counts[c[0]]) || 0; });
   return n;
 }
-/** Is everything typed a whole number? The save is refused otherwise, rather
-    than rounding somebody's afternoon into a number they did not write. */
-function draftOk() {
+/** Is everything typed a whole number within the cap? */
+function draftValid() {
   const ds = daySheet();
   if (!ds) return false;
   const d = draftNow();
   return ds.counts.every(c => ST.dayCount(d.counts[c[0]]) != null);
 }
-/** "This week: N of T": this person's saved sheets this ISO week plus what is
-    typed now, against the target in force. */
+/** Has anybody actually written anything? AN UNTOUCHED FORM IS NOT FOUR
+    NOUGHTS (review, 2026-09-21): Save was live the moment the sheet opened, so
+    one stray tap filed a day of nothing on a row nobody on the floor can
+    correct. A day with no sheets cut but a note ("machine down all day") is a
+    real entry and saves perfectly well. */
+function draftTyped() {
+  const ds = daySheet();
+  if (!ds) return false;
+  const d = draftNow();
+  return ds.counts.some(c => String(d.counts[c[0]] == null ? "" : d.counts[c[0]]).trim() !== "") ||
+         String(d.note || "").trim() !== "";
+}
+/** May Save be tapped at all? */
+const draftOk = () => draftValid() && draftTyped();
+
+/** "This week: N of T": this person's saved sheets in the week of the day this
+    sheet is about, plus what is typed now, against the target in force. */
 function weekWords(extra) {
-  const wk = ST.isoWeek(dayToday()).key;
+  const wk = ST.isoWeek(sheetDay()).key;
+  const target = draftNow().target == null ? TARGET : draftNow().target;
   const done = ST.dayWeekTotal(DAYROWS, who(), wk) + (extra || 0);
   const unit = (daySheet() || {}).unit || "sheets";
-  return { done: done, target: TARGET,
-           words: TARGET == null ? done + " " + unit + " · no target set"
-                                 : done + " of " + TARGET + " " + unit,
-           pct: TARGET > 0 ? Math.max(0, Math.min(100, Math.round(done * 100 / TARGET))) : 0 };
+  return { done: done, target: target,
+           words: target == null ? done + " " + unit + " · no target set"
+                                 : done + " of " + target + " " + unit,
+           pct: target > 0 ? Math.max(0, Math.min(100, Math.round(done * 100 / target))) : 0 };
 }
 
-/** Save today's sheet: one row queued, sent by the page's own queue. */
+/** Save the sheet: one row queued, sent by the page's own queue. */
 function saveDay() {
   const ds = daySheet();
   if (!ds || !PERSON) return false;
-  if (savedToday() || owedToday()) return false;         // one per person per day
   const d = draftNow();
+  if (daySheetSaved(d.day) || daySheetOwed(d.day)) return false;   // one per person per day
+  if (!draftTyped()) { DAYBAD = "Fill in a number or write a line first."; render(); return false; }
   const fields = ST.dayFields(ST.GLASS, PAGE_STAGE, {
     day: d.day, who: who(), counts: d.counts, note: d.note,
-    weekTarget: TARGET, at: new Date().toISOString() });
-  if (!fields) { DAYBAD = "Whole numbers only, please — no minus signs and no decimals."; render(); return false; }
-  if (DAY_OK === false) { DAYBAD = DAY_WHY; render(); return false; }
+    weekTarget: d.target == null ? TARGET : d.target, at: new Date().toISOString() });
+  if (!fields) {
+    DAYBAD = "Whole numbers only, please — no minus signs, no decimals, nothing over " +
+             ST.DAY_COUNT_MAX + ".";
+    render(); return false;
+  }
+  /* ONLY A LIST THAT IS NOT THERE refuses the save (review, 2026-09-21). A list
+     that could not be READ is the workshop wifi, and a sheet typed out at the
+     end of a shift must be queued through that exactly like any other offline
+     save - refusing it was the one way this feature could lose somebody's day. */
+  if (DAY_MISSING) { DAYBAD = DAY_WHY || ST.DAY_MISSING_FLOOR; render(); return false; }
   if (typeof confirm === "function" &&
-      !confirm("Save today's sheet? It cannot be changed from the tablet afterwards.")) return false;
+      !confirm("Save the sheet for " + d.day + "? It cannot be changed from the tablet afterwards.")) return false;
   DAYBAD = "";
-  DAYQ[fields.Title] = { fields: fields, err: 0 };
+  DAYQ[fields.Title] = { fields: fields, err: 0, refused: 0 };
   saveQueue();
   clearDraft();
   touch();
@@ -713,7 +796,15 @@ function saveDay() {
     catching a second tablet, or this tablet replaying a row that landed and
     whose answer was lost on the workshop wifi. Both of those mean ALREADY
     SAVED, so the list is read back before anything is called a failure - and
-    then the row that is there is what the person is shown. */
+    then the row that is there is what the person is shown.
+
+    A row SharePoint keeps refusing (a 4xx: the column was renamed, the account
+    lost its write, the list was locked) is not the wifi, and after
+    DAY_REFUSE_MAX of them the card stops saying "waiting to send" - which
+    invites somebody to stand there waiting for it - and says to tell the
+    office. It STAYS QUEUED either way: the tablet cannot show it, so throwing
+    it away would be the only way the day was really lost. */
+const DAY_REFUSE_MAX = 3;
 async function flushDay() {
   if (!SITEID || !daySheet()) return;
   const keys = Object.keys(DAYQ);
@@ -726,13 +817,27 @@ async function flushDay() {
       await readDay();
     } catch (err) {
       const landed = (await readDay()) && DAYROWS.some(r => r.title === e.fields.Title);
-      if (landed) delete DAYQ[keys[i]];
-      else e.err = 1;
-      console.warn("[station] the day sheet " + (landed ? "was already saved" : "is not saved yet") +
+      if (landed) { delete DAYQ[keys[i]]; saveQueue(); continue; }
+      e.err = 1;
+      /* only a refusal counts. A dropped connection is not the list saying no,
+         and a tablet carried out of range for an hour must not end the day
+         telling somebody to go and see the office about nothing. */
+      const refused = !!(CW.isMissing && CW.isMissing(err)) || !!(CW.isRefused && CW.isRefused(err)) ||
+                      /->\s*4\d\d\b/.test((err && err.message) || "");
+      if (refused) e.refused = (Number(e.refused) || 0) + 1;
+      console.warn("[station] the day sheet is not saved yet" +
+                   (e.refused >= DAY_REFUSE_MAX ? " and has been refused " + e.refused + " times" : "") +
                    ":", (err && err.message) || err);
     }
     saveQueue();
   }
+}
+/** What the card says about an owed sheet. */
+function owedWords(e) {
+  if (e && Number(e.refused) >= DAY_REFUSE_MAX)
+    return "could not be saved — tell the office";
+  if (e && e.err) return "waiting to send — it will go when the tablet is back on the wifi";
+  return "waiting to send…";
 }
 
 /** Everything that can go wrong with a read, decided in one place. Only
@@ -1064,8 +1169,6 @@ function pickerHtml() {
    tapped under 44 px - the tablet rule of 2026-09-17. It takes the board's
    place rather than opening over it, so there is one thing on screen at a time
    and Back is the only way out.                                             */
-const DAY_SAVE_ASK = "Save today's sheet? It cannot be changed from the tablet afterwards.";
-
 /** One saved sheet, read-only: the day, the counts and the total. */
 function dayLineHtml(r, counts) {
   return '<div class="dayline"><span class="daylday">' + esc(r.day) + '</span>' +
@@ -1078,21 +1181,26 @@ function daySheetHtml() {
   const ds = daySheet();
   if (!ds || !PERSON) return '<div class="msg">Nothing to fill in here.</div>';
   const counts = ds.counts, unit = ds.unit || "sheets";
-  const today = dayToday(), w = ST.isoWeek(today);
+  /* THE DAY THIS SHEET IS ABOUT, which is the draft's own and is yesterday for
+     one carried over midnight - not "today", which is what filed an evening's
+     work under the wrong date */
+  const day = sheetDay(), w = ST.isoWeek(day);
+  const carried = day !== dayToday();
   const head = '<div class="picker daysheet">' +
     '<div class="pickh">End of day</div>' +
-    '<div class="picksub">' + esc(PERSON.name + " · " + w.weekday + " " + today +
-      " · " + stageWords()) + '</div>';
+    '<div class="picksub">' + esc(PERSON.name + " · " + w.weekday + " " + day +
+      " · " + stageWords()) + '</div>' +
+    (carried ? '<div class="daycarry">This is the sheet you started on ' + esc(w.weekday) +
+       ', and it saves under that day.</div>' : "");
   const back = '<button class="pcancel" data-dayback="1">Back to the board</button></div>';
-  const saved = savedToday(), owed = owedToday();
+  const saved = daySheetSaved(day), owed = daySheetOwed(day);
 
-  /* already done today: the sheet as it was saved, and the one sentence that
-     says what to do about a mistake */
+  /* already done: the sheet as it was saved, and the one sentence that says
+     what to do about a mistake */
   if (saved || owed) {
     const row = saved || ST.dayRows([{ id: "", fields: owed.fields }], counts)[0];
-    const when = saved ? esc("saved " + String(saved.savedAt).slice(11, 16) + " — " + ST.DAY_SAVED_WORDS)
-                       : (owed.err ? "waiting to send — it will go when the tablet is back on the wifi"
-                                   : "waiting to send…");
+    const when = saved ? "saved " + String(saved.savedAt).slice(11, 16) + " — " + ST.DAY_SAVED_WORDS
+                       : owedWords(owed);
     return head +
       '<div class="dayread">' +
         counts.map(c => '<div class="dayrow"><span class="dayl">' + esc(c[1]) + '</span>' +
@@ -1100,7 +1208,8 @@ function daySheetHtml() {
         '<div class="dayrow"><span class="dayl">Total</span>' +
           '<span class="dayv tab">' + row.total + '</span></div>' +
         (row.note ? '<div class="daynote">' + esc(row.note) + '</div>' : "") +
-        '<div class="daysaid' + (owed ? " owed" : "") + '">' + esc(when) + '</div>' +
+        '<div class="daysaid' + (owed ? " owed" : "") +
+          (owed && Number(owed.refused) >= DAY_REFUSE_MAX ? " bad" : "") + '">' + esc(when) + '</div>' +
       '</div>' + dayHistoryHtml(counts) + back;
   }
 
@@ -1117,13 +1226,14 @@ function daySheetHtml() {
         '<textarea class="daytext" data-daynote="1" rows="3" maxlength="' + ST.DAY_NOTE_MAX +
         '" placeholder="Machine down, waiting on glass, helped on another bench…">\n' +
         esc(d.note) + '</textarea></label>' +
-      '<div class="daytot">Today: <strong class="tab" id="daytoday">' + draftTotal() + '</strong> ' +
-        esc(unit) + '</div>' +
+      '<div class="daytot">' + esc(carried ? w.weekday : "Today") +
+        ': <strong class="tab" id="daytoday">' + draftTotal() + '</strong> ' + esc(unit) + '</div>' +
       '<div class="dayweek">This week: <strong class="tab" id="dayweeknum">' + esc(wk.words) + '</strong></div>' +
       '<div class="daybar"><span id="daybarfill" style="width:' + wk.pct + '%"></span></div>' +
       (DAYBAD ? '<div class="daybad">' + esc(DAYBAD) + '</div>' : "") +
       '<button class="daysave" id="daysave" data-daysave="1"' +
-        (draftOk() ? "" : ' disabled aria-disabled="true"') + '>Save today’s sheet</button>' +
+        (draftOk() ? "" : ' disabled aria-disabled="true"') + '>Save the sheet for ' +
+        esc(carried ? w.weekday : "today") + '</button>' +
     '</div>' + dayHistoryHtml(counts) + back;
 }
 /** This person's last seven saved days, read-only, one line each. */
@@ -1597,7 +1707,7 @@ async function checkBuild() {
     const latest = (await r.json()).build;
     if (!latest) return;
     if (!BUILD_NOW) { BUILD_NOW = latest; return; }             // the first look is the baseline
-    if (latest !== BUILD_NOW && !owingAnything()) location.reload(true);
+    if (latest !== BUILD_NOW && !owingWrites()) location.reload(true);
   } catch (e) { /* offline or blocked - the board is what matters */ }
 }
 

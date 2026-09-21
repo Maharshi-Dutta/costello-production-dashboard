@@ -94,7 +94,13 @@
   /* ---- the board ---- */
   #main { padding:14px; max-width:1180px; margin:0 auto }
   #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
-  .grp { display:grid; grid-template-columns:1fr; gap:13px }
+  /* ONE FULL-WIDTH COLUMN, and `minmax(0,1fr)` rather than `1fr` is what makes
+     that true (2026-09-21). A plain `1fr` track is `minmax(auto,1fr)`, so its
+     MINIMUM is the min-content width of whatever is in it: one nowrap span -
+     the card head's "49 glasses · 10 tuff" - was enough to push the track, and
+     with it the whole board, wider than the tablet. The page then scrolled
+     sideways, which the owner's rule of 2026-09-17 forbids outright. */
+  .grp { display:grid; grid-template-columns:minmax(0,1fr); gap:13px }
   .grouphead { font-size:11px; letter-spacing:.15em; text-transform:uppercase; cursor:pointer;
                font-weight:600; color:var(--ink-4); margin:16px 0 8px; min-height:44px;
                display:flex; align-items:center }
@@ -108,11 +114,16 @@
      office's, so it is read across a workshop rather than looked for */
   .card.done { background:var(--done-bg); border-color:var(--done) }
   .card.done .stepn { color:var(--done) }
-  .chead { display:flex; align-items:baseline; gap:10px; margin-bottom:12px }
-  .job { font-size:30px; font-weight:700; line-height:1 }
-  .cust { font-size:14px; color:var(--ink-2); flex:1; min-width:0;
+  /* the head WRAPS rather than widening the card: the job number and the
+     customer take the first line and the count drops under them when there is
+     no room for it, which is the one thing it may do - a card that grows to
+     fit its own text takes the whole board sideways with it */
+  .chead { display:flex; align-items:baseline; gap:10px; margin-bottom:12px; flex-wrap:wrap }
+  .job { font-size:30px; font-weight:700; line-height:1; flex:0 0 auto }
+  .cust { font-size:14px; color:var(--ink-2); flex:1 1 60px; min-width:0;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-  .cnum { font-size:14px; font-weight:600; color:var(--ink-2); white-space:nowrap }
+  .cnum { font-size:14px; font-weight:600; color:var(--ink-2); white-space:nowrap;
+          flex:0 0 auto; margin-left:auto; max-width:100% }
 
   .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
   .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
@@ -126,9 +137,13 @@
      56 px, because it is tapped with a work glove on. A stage this person does
      not hold is greyed and disabled - still readable, never movable. */
   .steps { display:grid; gap:10px }
-  .step { display:grid; grid-template-columns:minmax(72px,1fr) auto; gap:10px; align-items:center }
+  /* the label column may SHRINK (minmax(0,...), not minmax(72px,...)) and the
+     buttons keep their own fixed column: the steppers are what a hand reaches
+     for and must never be pushed off the side or made smaller, and a long
+     stage name must never be the reason the card grows */
+  .step { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center }
   .step.locked { opacity:.5 }
-  .stepl { font-size:14px; color:var(--ink-2) }
+  .stepl { font-size:14px; color:var(--ink-2); min-width:0; overflow-wrap:anywhere }
   /* how much of this stage of this job is still to do, under the name of the
      stage: the number a person works off, on the row whose buttons move it.
      Bigger and brighter than the stage's name, because it is the thing being
@@ -161,8 +176,10 @@
   .cmicon { flex:none; opacity:.8 }
   .cmbody { margin-top:10px }
   .cmthread { display:grid; gap:8px; margin-bottom:10px; max-height:220px; overflow-y:auto }
+  /* minmax(0,...) here for the same reason the board has it: a long name in a
+     note's "who" must widen nothing */
   .cmrow { background:var(--surface-2); border:1px solid var(--line-soft); border-radius:6px;
-           padding:8px 10px; display:grid; grid-template-columns:1fr auto; gap:2px 10px }
+           padding:8px 10px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px 10px }
   .cmwho { font-size:12px; font-weight:600; color:var(--ink-2) }
   .cmwhen { font-size:11.5px; color:var(--ink-4); text-align:right }
   .cmtext { grid-column:1/-1; font-size:14px; line-height:1.45; white-space:pre-wrap;
@@ -212,6 +229,12 @@
   .daysave:disabled { opacity:.4; cursor:default }
   .daysaid { font-size:13.5px; color:var(--ink-3); margin-top:2px }
   .daysaid.owed { color:var(--fab); font-weight:600 }
+  /* a row SharePoint keeps refusing: not the wifi, and not something to stand
+     and wait for - it says so in the colour a problem is said in here */
+  .daysaid.owed.bad { color:var(--urgent) }
+  /* a sheet started yesterday and still open this morning says which day it is
+     about, above the boxes, because Save files it under that day */
+  .daycarry { font-size:13px; color:var(--fab); font-weight:600; margin:-8px 0 12px }
   .daynote { font-size:14px; line-height:1.45; white-space:pre-wrap; color:var(--ink-2);
              background:var(--surface-2); border:1px solid var(--line-soft); border-radius:6px;
              padding:9px 11px }
@@ -238,7 +261,7 @@
   .pindots { font-size:32px; letter-spacing:.3em; color:var(--ink-2); min-height:44px; margin:6px 0 2px }
   .pindots.shake { animation:shake .4s both }
   .pinbad { color:var(--urgent); font-size:13.5px; font-weight:600; margin-bottom:6px }
-  .pinpad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:10px }
+  .pinpad { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:10px }
   .pk { min-height:56px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
         color:var(--ink); font-size:22px; font-weight:600 }
   .pk:active { background:var(--surface-2) }
@@ -248,8 +271,14 @@
 
   /* two columns of cards once there is room for them - a tablet in portrait
      is 768 px, so the break is under it */
-  @media (min-width:700px){
-    .grp { grid-template-columns:1fr 1fr }
+  /* TWO COLUMNS ONLY WELL PAST A TABLET (2026-09-21). The break used to be
+     700px, which put two columns on a 10-inch tablet in portrait (800px) -
+     against the owner's rule of 2026-09-17, which is one full-width column and
+     no sideways scroll anywhere between 700 and 1100. Above that band this is
+     a desk browser somebody is checking the board on, and two columns are
+     welcome again. */
+  @media (min-width:1101px){
+    .grp { grid-template-columns:minmax(0,1fr) minmax(0,1fr) }
   }
 </style>
 </head>
