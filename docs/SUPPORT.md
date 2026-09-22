@@ -223,6 +223,14 @@ Three things that are asked about it:
   not, because the owner has not asked for one. It is one line of definition to
   switch on when they do.
 
+If **Sign in does nothing** on this or any other floor page — no Microsoft
+popup, nothing — first check the browser console for `Identifier ... has
+already been declared`: it means two of the page's own `<script>` files
+declared the same top-level name and the page never parsed past it (this
+happened to `glazing.html` itself, 2026-09-22, HISTORY.md B29). Then run
+`node test_pages.js`, which parses every page's scripts together and catches
+exactly that.
+
 The office reads it at **Show ▸ Glazing station**, can set and clear the counter
 there, and sees the same numbers in a read-only **Glazing** line in any job's
 card. Every office change is logged in `Dashboard Log`; none of it goes near the

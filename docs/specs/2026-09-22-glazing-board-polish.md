@@ -1,7 +1,7 @@
 # Glazing board polish: alignment, gold from the sheet, no bar
 
-**Status: approved to build, 2026-09-22** (owner's answers in chat that day:
-Q1 yes, Q2 done, Q3 keep, Q4 yes).
+**Status: shipped 2026-09-22, build 20260922-1309, commit 697c920** (owner's
+answers in chat that day: Q1 yes, Q2 done, Q3 keep, Q4 yes).
 
 **Builds on** `2026-09-21-glazing-station.md` sections C and D. Office side
 only. **The glazing tablet (`glazing.html`, `glazing.js`) is not touched.**

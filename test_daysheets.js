@@ -499,6 +499,12 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      the same case the clock produces once a night. */
   const YESTERDAY = ST.dayKey(new Date(Date.parse(TODAY + "T12:00:00Z") - 86400000));
   const DAYBEFORE = ST.dayKey(new Date(Date.parse(TODAY + "T12:00:00Z") - 2 * 86400000));
+  /* the sheet seeded above sits on this week's Monday, which IS yesterday every
+     Tuesday - and one sheet per person per day would then rightly refuse the
+     save below (seen 2026-09-22, HISTORY.md). Start this block with nothing
+     saved, so it tests the draft's date and not the calendar. */
+  DAYITEMS = [];
+  await S("readDay()");
   mem.cw_daysheetdraft = JSON.stringify({ day: YESTERDAY, stage: "cut", who: "Person A",
                                           counts: { Clear: "9" }, note: "late finish", target: 200 });
   S("DAYDRAFT = null;");

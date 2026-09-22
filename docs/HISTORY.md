@@ -58,6 +58,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A29 | 2026-09-21 | **Glazing complete → Ready to deliver will be one click in the office, not automatic.** Not built yet; the seam (`GLZC.finished`, the office board already knowing which jobs are complete) is left for it. | Owner's "yes" to the manager's recommendation over the automatic option: the row move is the heaviest write the dashboard makes (insert, copy, verify, delete) and the owner wants to see it before it fires. |
 | A30 | 2026-09-21 | **No unlock of a locked job from any office board**, glazing included. | Owner: "no." Unlocking stays the job card's Clear, same as glass. |
 | A31 | 2026-09-21 | Rehearsal finding R4941 ("cannot remove TG") raised and dropped, not fixed. | Owner's call after seeing it live. |
+| A32 | 2026-09-22 | **The Glazing station board shows gold when the sheet already says the job is done** (a whole gold `Production` row, or a full glazed count), hides the steppers for the word "done" on that row, and drops the progress bar. | Owner, live on the board: a job whose row was already gold (4998, 5091) showed no colour, and the bar was noise — "I only need the number of doors and windows and colour as ready (completed, gold) and in progress (yellow)." |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -489,6 +490,48 @@ nothing on it changed.
 **Measured:** a test rig sending a real no-change delta shows the ~230-row
 list rebuilding roughly three times a minute on its own.
 **Cause:** not yet traced. Left open, section E.
+**Update:** the owner reports it fixed on their side, 2026-09-22. Not
+re-measured in the rig, so left open in section E until it is.
+
+### B29. The glazing tablet's Sign in button did nothing
+
+**Symptom:** since the glazing station shipped 2026-09-21, tapping Sign in on
+`glazing.html` had no effect at all — no Microsoft popup, nothing.
+**Cause:** `glazing.js` declared `const G = GLZC` at the top level; `graph.js`
+already declares a global `const G` (the Graph base URL). Classic `<script>`
+files share one global lexical scope, so `glazing.js` failed at parse time
+with `Identifier 'G' has already been declared` — the whole file never ran,
+so the Sign in button never got its click handler.
+**Fix:** the alias renamed to `GZ` (`da89168`, build 20260922-1244).
+**Why every gate missed it:** `node --check` is per file and cannot see a
+name collide across files; the browser rig stubs `graph.js` with a fake `CW`
+that has no `const G`, so the collision never had a chance to fire in a test.
+Found by a headless probe of the live page — the welding page on the same
+probe opened the Microsoft popup, glazing did not.
+**New gate:** `test_pages.js` concatenates every page's own `<script src>`
+files and parses them once as a single `vm.Script` (parse only, nothing
+runs), so a duplicate top-level name across files now fails a suite instead
+of only a live tablet. Failed on `glazing.html` before the rename, passes
+4/4 after.
+**Lesson:** stubbing `graph.js` away hides anything `graph.js` contributes to
+the global scope.
+
+### B30. The steppers track re-broke the alignment the same brief was meant to fix
+
+**Symptom, caught in review before ship:** a row with the four stepper
+buttons and a gold row showing only the word "done" landed at different x
+positions on the Glazing station board — the exact misalignment the brief
+existed to remove.
+**Cause:** the steppers track was specified as `auto`. Each `.wohead` is its
+own CSS grid, so an `auto` track sizes to that row's own content — about
+165px for four buttons, about 32px for the word "done" — and the `fr` tracks
+on either side absorbed the difference. The rig measured the section cell at
+x=430 on one row and x=474 on the next.
+**Fix:** a fixed 170px track (four buttons plus their three 5px gaps),
+measured in Edge at the board's font size — the same lesson as the welding
+board's fixed 34px notes column (`b5103ba`, 2026-09-18, build log C/2026-09-21).
+**Lesson:** in a grid drawn once per row, `auto` is not safe for a track
+whose content differs row to row; only a fixed track keeps two rows agreeing.
 
 ---
 
@@ -624,6 +667,15 @@ glazing 26/26. Rehearsed on a saved copy of the real `Glass station` list
 (138 active rows, 116 never tapped by the floor): zero gold cells wiped,
 zero counters lowered.
 
+### 2026-09-22 — the glazing tablet could not sign in; the glazing board polished
+
+| Commit | What it added |
+|---|---|
+| `da89168`, build 20260922-1244 | **Hotfix: the glazing tablet's Sign in did nothing** (B29) — `glazing.js`'s top-level `const G` collided with `graph.js`'s global `const G` in the shared classic-script scope; renamed to `GZ`. New gate `test_pages.js` (parses every page's concatenated scripts once, so a duplicate top-level name across files fails a suite; `node --check` alone cannot see it) — passes 4/4. |
+| `9fa1528` → `afbe16b` (fix pass) → `697c920`, build 20260922-1309 | **Glazing board polish**, branch `glazing-polish` (`docs/specs/2026-09-22-glazing-board-polish.md`, A32). Office's Glazing station board only; the tablet untouched. The board gets its own CSS grid tracks instead of inheriting welding's (nine cells were sitting one track left). A job whose `Production` row is already gold, or whose glazed count is full, shows gold (`GLZC.glzOfficeColour`); its steppers are replaced with the word "done"; the progress bar is removed, the count and quantity words kept. Independent review found five things, all fixed in one pass: the steppers track had to be a fixed 170px, not `auto` (B30); the same fix applied to the phone layout; `byId` was an O(n) scan called twice per comparison inside the board's sort, now decorated once per card; "done" in `--ink-4` read about 3:1 contrast, moved to `--done`; a clamp-branch test added. Suites: pages 4/4, move 7, checkpoints 70, alerts 30, export 54, phases 26, phases-list 35, station 270, glasscolour 72, john 31, doors 29, comments 58, welding 61, glazing 54, digest 26/0. Browser rig 11/12 (the 12th needed a fixture row the saved list did not have). |
+
+---
+
 ## D. Symptom index
 
 | What you see | Read |
@@ -647,6 +699,8 @@ zero counters lowered.
 | A station list grows by hundreds of rows overnight | B20 |
 | A board is empty or frozen while another station's is fine | B19 |
 | An office edit overwrote what the floor had just done | B19 |
+| The glazing tablet's Sign in does nothing | B29 |
+| Columns on a station board do not line up | B30 |
 
 ---
 
@@ -676,18 +730,17 @@ zero counters lowered.
   quiet explained state without it.
 - The permanent `Floor stations` site, once the owner has Global Administrator
   (A5).
-- The owner still has to run the new list scripts: `Station day sheets` and
-  `Station targets` in the workbook's own site, `Glazing station` in
-  `Floor stations`; switch on enforce-unique on Title by hand on each if the
-  API refuses it, as with `Welding station`.
 - Each glass tablet must be told its stage once — the `?stage=` bookmark or
   the on-page chooser.
-- A glazer row (or rows) needed in `Station people`: Station `Glazing`,
-  Stages `glaze`.
 - **Section F** (glazing complete → one-click Move to Ready to deliver) is
   briefed (A29) but not built.
-- **The flicker (B28):** the idle job list rebuilds its ~230 rows about
-  three times a minute with nothing changed; cause not traced.
+- **The flicker (B28):** owner reports it fixed on their side, 2026-09-22;
+  not re-measured in the rig, so left open here until it is.
+- ~~`test_daysheets.js` fails at line 514 on `main` (2026-09-22)~~ — closed the
+  same day, test fixture, not the app: the block seeds one saved sheet for
+  Person A on this week's Monday, then saves a draft dated yesterday for
+  Person A; every Tuesday those are the same day and "one sheet per person per
+  day" rightly refuses. The D4 block now starts with nothing saved.
 - The glass lists' move to `Floor stations` (`ST.GLASS.site` `"own"` →
   `"floor"`) still to do.
 - **G4** (welding's and glazing's polls each delta their own copy of the
