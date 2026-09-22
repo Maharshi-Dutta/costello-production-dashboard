@@ -82,6 +82,18 @@ class from `glzOfficeColour(c, !!j.done)`, and a gold-row job reads
   `welding_check.js` measured it).
 - Suites unchanged elsewhere; `test_pages.js` 4/4.
 
+## Amendments after review
+
+- **The steppers track is a fixed 170px, not `auto`** (review, 2026-09-22).
+  Section 1 said "steppers auto". Each `.wohead` is its own grid, so an `auto`
+  track sizes to that row's own content: a row with the four buttons made it
+  ~165px wide and a gold row showing only the word "done" made it ~32px, and
+  the `fr` tracks either side swallowed the difference — the section cell was
+  measured in the rig at x=430 on one row and x=474 on the next, which is the
+  misalignment this brief exists to remove. 170px is the four buttons plus
+  their three 5px gaps (164px measured in Edge at the board's font size). The
+  phone rule uses the same fixed track for the same reason.
+
 ## What to report
 Diff summary, suite counts, screenshots of the board (light and dark) with one
 gold-row job, one full-count job, one in-progress job, one untouched job, and

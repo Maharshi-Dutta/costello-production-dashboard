@@ -387,6 +387,8 @@ JOBS.blockNames = NAMES;
     "a gold Production row is gold on the board even with nothing counted");
   assert.strictEqual(Z.glzOfficeColour({ glazed: 4, total: 4 }, false), "gold",
     "a full count is gold before the office has moved the row");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 6, total: 4 }, false), "gold",
+    "a counter above its own quantity is clamped here too, and reads gold");
   assert.strictEqual(Z.glzOfficeColour({ glazed: 1, total: 3 }, false), "yellow", "started");
   assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 3 }, false), "", "nothing glazed");
   assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 0 }, false), "",

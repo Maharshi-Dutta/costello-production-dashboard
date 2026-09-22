@@ -3823,9 +3823,11 @@ function glzCardsShown() {
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
      own screen: the two boards are read side by side over the phone. A job whose
      `Production` row is already gold is finished for this sort too (2026-09-22),
-     so it does not sit above jobs the floor has not started. */
-  const fin = c => (c.finished || !!(byId(c.job) || {}).done) ? 1 : 0;
-  return rows.slice().sort((a, b) => fin(a) - fin(b));
+     so it does not sit above jobs the floor has not started.
+     Each card is asked ONCE and carried through the sort: `byId` walks the whole
+     job list, and a comparator runs it O(n log n) times for nothing. */
+  return rows.map(c => ({ c: c, f: (c.finished || !!(byId(c.job) || {}).done) ? 1 : 0 }))
+    .sort((a, b) => a.f - b.f).map(x => x.c);
 }
 
 /** One job's row on the office's glazing board: the counter, the office's own
@@ -3841,9 +3843,10 @@ function glzRowHtml(c) {
   const live = !!j;
   /* the sheet speaks first: a job whose `Production` row is gold is done, and
      the owner asked for no steppers on it (2026-09-22) - the count still shows
-     what the floor recorded, and the word "done" holds the steppers' track so
-     the columns keep lining up. A full count that is NOT row-gold keeps its
-     steppers: the office may still take a unit back. */
+     what the floor recorded, and the word "done" sits where they were. The
+     column stays lined up because the steppers' grid track is a fixed width in
+     index.html, not because of what is in it. A full count that is NOT row-gold
+     keeps its steppers: the office may still take a unit back. */
   const rowDone = !!(j && j.done);
   const col = GLZC.glzOfficeColour(c, rowDone);
   return '<div class="worow c-' + (col || "none") + ((c.finished || rowDone) ? " done" : "") +

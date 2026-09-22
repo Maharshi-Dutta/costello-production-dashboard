@@ -370,11 +370,18 @@
      It shares welding's row markup but emits one cell fewer: there is no
      toggle column and no bar, so on welding's ten-track grid every glazing
      cell sat one column left of the header it belonged under. One track per
-     cell actually emitted, in the order glzRowHtml writes them. */
+     cell actually emitted, in the order glzRowHtml writes them.
+     The steppers track is FIXED at 170px and not `auto`: each .wohead is its
+     own grid, so an auto track sized itself to that row's own content - four
+     buttons on a working row, the word "done" on a gold one - and the fr
+     tracks either side absorbed the difference, putting the section cell 44px
+     apart on two rows of the same board (measured in the rig, 2026-09-22).
+     170px is the four buttons and their three 5px gaps, measured at 164px. */
   .glzboard .wohead { grid-template-columns:78px minmax(90px,1.4fr) minmax(80px,1fr)
-            64px minmax(120px,1fr) auto 34px minmax(90px,1fr) }
-  /* a job whose Production row is gold has no steppers: the word holds the track */
-  .wobtns.wodone { color:var(--ink-4); align-items:center }
+            64px minmax(120px,1fr) 170px 34px minmax(90px,1fr) }
+  /* a job whose Production row is gold has no steppers: the fixed track above
+     holds the column open, and the word simply sits in it */
+  .wobtns.wodone { color:var(--done); align-items:center }
   .wotog { color:var(--ink-4) }
   .wohead .stjob { font-size:17px }
   .wocust, .wosect, .wolast { color:var(--ink-2); overflow:hidden;
@@ -432,7 +439,7 @@
     .wohead .wosect, .wohead .wolast, .wohead .wobar, .wohead .wopart { display:none }
     /* glazing keeps its steppers in the head, so the phone shows job, customer,
        the count and the buttons, and the notes badge joins the hidden set */
-    .glzboard .wohead { grid-template-columns:70px 1fr 64px auto }
+    .glzboard .wohead { grid-template-columns:70px 1fr 64px 170px }
     .glzboard .wohead .wonotes-slot { display:none }
     .woline { grid-template-columns:58px 58px auto; row-gap:4px }
     .woline .wobar, .woline .wowho { display:none }
