@@ -27,7 +27,8 @@ Three pages ship from this repo:
 
 Check `docs/specs/README.md` for the status of every spec.
 
-Read `docs/REFERENCE.md` (what has been built and how, feature by feature),
+Read `docs/REFERENCE.md` (now a short index into linked topic notes under
+`docs/`; what has been built and how, feature by feature),
 `docs/ARCHITECTURE.md`, `docs/SUPPORT.md`, `docs/STATIONS.md` and
 `docs/specs/README.md` before making any change. **If something is
 misbehaving, read `docs/HISTORY.md` section B first** — it is the record of
