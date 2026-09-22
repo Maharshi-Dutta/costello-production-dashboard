@@ -24,7 +24,7 @@
 
 const $ = s => document.querySelector(s);
 const esc = STU.stuEsc;
-const G = GLZC;
+const GZ = GLZC;
 
 /* This page's own storage keys. Deliberately not the other pages': the same
    tablet can have more than one open, and a glazer's queue must never be read
@@ -90,7 +90,7 @@ function who() { return PERSON ? PERSON.name : ""; }
 /* One stage here, so anybody signed in holds it. canStage is still asked - a
    Stages column typed by hand can say anything, and a person holding nothing
    may move nothing, on this station exactly as on the other two. */
-const mayGlaze = () => ST.canStage(PERSON, G.GLZ_STAGE);
+const mayGlaze = () => ST.canStage(PERSON, GZ.GLZ_STAGE);
 
 /* ---- the queues -------------------------------------------------------------
    One entry per list row - which, with one counter per job, is also exactly
@@ -128,7 +128,7 @@ function cleanLogQ(raw) {
     if (!e || !e.fields || !e.fields.Title) return;
     /* rebuilt through ST.logFields, so whatever was in storage comes out as the
        eight columns of the log list and nothing else */
-    out[String(k)] = { key: String(k), err: 0, fields: ST.logFields(G.glzLogEntry({
+    out[String(k)] = { key: String(k), err: 0, fields: ST.logFields(GZ.glzLogEntry({
       job: e.fields.Title, from: e.fields.From, to: e.fields.To,
       who: e.fields.Who, at: e.fields.At })) };
   });
@@ -192,7 +192,7 @@ function rebaseQueue() {
     const e = QUEUE[k];
     const it = ITEMS.find(x => String(x.id) === String(e.id));
     if (!it) return;
-    const r = G.glzRebase(e, it.fields || {});
+    const r = GZ.glzRebase(e, it.fields || {});
     if (r.action === "drop") {
       LOST[String(e.job).trim().toUpperCase()] = { job: e.job, value: e.value };
       console.warn("[glazing] dropping a queued tap for " + e.job + ": " + e.value +
@@ -262,7 +262,7 @@ async function flushQueue() {
          air would be deleted as though it had been sent. (welding.js learned
          this; docs/HISTORY.md B19.) */
       const want = e.value, when = e.at, whose = e.who, wantFrom = e.from;
-      const body = G.glzFloorOnly(G.glzTapFields(want, whose, when));
+      const body = GZ.glzFloorOnly(GZ.glzTapFields(want, whose, when));
       const id = currentId(e);
       if (!id) {
         console.warn("[glazing] dropping a queued tap for " + e.job +
@@ -271,7 +271,7 @@ async function flushQueue() {
       }
       e.id = id; e.site = SITEID;
       try {
-        await CW.listPatch(G.GLZ_LIST, id, body, listOpts());
+        await CW.listPatch(GZ.GLZ_LIST, id, body, listOpts());
         wrote = true;
         /* the counter is in the list now, so the log line describing it may be
            owed - and only now: a line about a write that never happened would
@@ -289,7 +289,7 @@ async function flushQueue() {
         /* only a 404 is a reason to doubt the cached site: a refusal or a bad
            gateway says nothing about where the list is */
         if (CW.isMissing && CW.isMissing(err) && CW.forgetStationSite)
-          CW.forgetStationSite(false, G.GLAZE.site);
+          CW.forgetStationSite(false, GZ.GLAZE.site);
         console.warn("[glazing] counter write failed for item " + id + ":", (err && err.message) || err);
       }
       saveQueue();
@@ -310,7 +310,7 @@ function queueLog(e) {
   const from = Number(e.from) || 0;
   if (from === e.value) return;                 // nothing actually moved
   const key = e.id + "|" + e.at;
-  LOGQ[key] = { key: key, err: 0, fields: ST.logFields(G.glzLogEntry({
+  LOGQ[key] = { key: key, err: 0, fields: ST.logFields(GZ.glzLogEntry({
     job: e.job, from: from, to: e.value, who: e.who, at: e.at })) };
   saveQueue();
 }
@@ -333,7 +333,7 @@ async function flushLog() {
 
 /* ---- the lists ---- */
 let SITEID = null;
-const listOpts = () => ({ siteId: SITEID, fields: G.GLZ_FIELDS });
+const listOpts = () => ({ siteId: SITEID, fields: GZ.GLZ_FIELDS });
 const peopleOpts = () => ({ siteId: SITEID, fields: ST.PEOPLE_FIELDS });
 const logOpts = () => ({ siteId: SITEID, fields: ST.LOG_FIELDS });
 const commentOpts = () => ({ siteId: SITEID, fields: ST.COMMENT_FIELDS });
@@ -343,7 +343,7 @@ const commentOpts = () => ({ siteId: SITEID, fields: ST.COMMENT_FIELDS });
    changing ONE word. Every line of it - the composer, the thread, the row and
    the two list calls - is in station-core.js. */
 const NOTES = ST.stationComments({
-  station: G.GLZ_NAME,
+  station: GZ.GLZ_NAME,
   listItems: (name, o) => CW.listItems(name, o),
   listAdd: (name, fields, o) => CW.listAdd(name, fields, o),
   opts: commentOpts
@@ -359,7 +359,7 @@ function trouble(e) {
   console.warn("[glazing] could not read SharePoint:", m);
   if (CW.isMissing && CW.isMissing(e)) {
     SITEID = null;
-    if (CW.forgetStationSite) CW.forgetStationSite(false, G.GLAZE.site);
+    if (CW.forgetStationSite) CW.forgetStationSite(false, GZ.GLAZE.site);
   }
   if (/interaction_required|login_required/.test(m)) { PROBLEM = "reauth"; SOFT = ""; READY = false; }
   else if (/permission needed/.test(m)) { PROBLEM = "consent"; SOFT = ""; READY = false; }
@@ -368,10 +368,10 @@ function trouble(e) {
 }
 
 /** The site this station's lists are in: `Floor stations` and nothing else
-    (G.GLAZE.site === "floor"). A missing one is not an error and not a fallback
+    (GZ.GLAZE.site === "floor"). A missing one is not an error and not a fallback
     - it is the quiet explained state, the same one a missing list gets. */
 async function resolveSite() {
-  if (!SITEID) SITEID = await CW.stationSite(G.GLAZE.site);
+  if (!SITEID) SITEID = await CW.stationSite(GZ.GLAZE.site);
   return SITEID;
 }
 
@@ -380,7 +380,7 @@ async function readPeople() {
     if (!(await resolveSite())) { PROBLEM = "site"; SOFT = ""; READY = false; render(); return false; }
     const items = await CW.listItems(ST.PEOPLE_LIST, peopleOpts());
     if (items == null) { PROBLEM = "people"; SOFT = ""; READY = false; render(); return false; }
-    PEOPLE = ST.stationPeople(items, G.GLZ_NAME, G.GLAZE.stages);
+    PEOPLE = ST.stationPeople(items, GZ.GLZ_NAME, GZ.GLAZE.stages);
     PEOPLE_READ = true;
     if (PROBLEM === "people") PROBLEM = "";
     if (PERSON) {
@@ -408,12 +408,12 @@ async function readList() {
     if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
     let items = null;
     if (deltaOff()) {
-      items = await CW.listItems(G.GLZ_LIST, listOpts());
+      items = await CW.listItems(GZ.GLZ_LIST, listOpts());
       if (items == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
       TOKEN = null;
     } else {
       try {
-        const d = await CW.listDelta(G.GLZ_LIST, listOpts());
+        const d = await CW.listDelta(GZ.GLZ_LIST, listOpts());
         if (d == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
         items = d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
         TOKEN = d.next;
@@ -424,7 +424,7 @@ async function readList() {
           DELTA_OFF = Date.now();
           console.warn("[glazing] the board list refused a delta; polling the plain way for five minutes");
         }
-        items = await CW.listItems(G.GLZ_LIST, listOpts());
+        items = await CW.listItems(GZ.GLZ_LIST, listOpts());
         if (items == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
         TOKEN = null;
       }
@@ -445,17 +445,17 @@ async function readList() {
     token only means anything in the site it was issued in. */
 let SITE_GEN = 0;
 function siteMoved() {
-  const m = CW.stationSiteMoves ? CW.stationSiteMoves(G.GLAZE.site) : 0;
+  const m = CW.stationSiteMoves ? CW.stationSiteMoves(GZ.GLAZE.site) : 0;
   if (m === SITE_GEN) return false;
   SITE_GEN = m;
   return true;
 }
 async function pollList() {
-  try { SITEID = (await CW.stationSite(G.GLAZE.site)) || SITEID; } catch (e) { /* keep the last one */ }
+  try { SITEID = (await CW.stationSite(GZ.GLAZE.site)) || SITEID; } catch (e) { /* keep the last one */ }
   if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
   if (!TOKEN) return readList();
   try {
-    const d = await CW.listDelta(G.GLZ_LIST, { siteId: SITEID, fields: G.GLZ_FIELDS, token: TOKEN });
+    const d = await CW.listDelta(GZ.GLZ_LIST, { siteId: SITEID, fields: GZ.GLZ_FIELDS, token: TOKEN });
     if (d == null) return readList();
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
@@ -486,7 +486,7 @@ function tap(id, delta) {
   if (!rec) return;
   /* somebody is working the screen, whether or not the number could move */
   touch();
-  const value = G.glzApplyTap(rec, delta);
+  const value = GZ.glzApplyTap(rec, delta);
   if (value == null || value === rec.glazed) return;      // already at the clamp
   /* the apology for a dropped tap goes the moment they tap again: they have
      been told, and they are now saying it a second time */
@@ -509,7 +509,7 @@ function itemsNow() {
 }
 let RECS_BY_ID = {};
 function boardNow() {
-  const board = G.glzBoard(itemsNow());
+  const board = GZ.glzBoard(itemsNow());
   RECS_BY_ID = {};
   board.forEach(c => { RECS_BY_ID[String(c.id)] = c; });
   return board;
@@ -537,7 +537,7 @@ function stepHtml(c) {
   const full = c.glazed >= c.total;
   return '<div class="step' + (mine ? "" : " locked") + ' c-' + (c.colour || "none") + '">' +
     '<span class="stepl">Glazed' +
-      (mine ? '<span class="stepleft tab">' + esc(G.glzLeftWords(c.left)) + '</span>'
+      (mine ? '<span class="stepleft tab">' + esc(GZ.glzLeftWords(c.left)) + '</span>'
             : ' <span class="nomine">not yours</span>') + '</span>' +
     '<span class="stepmid">' +
       '<span class="stepn tab' + (full ? " full" : "") + '">' + c.glazed + ' / ' + c.total + '</span>' +
@@ -552,11 +552,11 @@ function stepHtml(c) {
 function cardInner(c) {
   const owed = owedFor(c.id), bad = badFor(c.id);
   const lost = lostFor(c.job);
-  const qty = G.glzQtyWords(c);
+  const qty = GZ.glzQtyWords(c);
   return '<div class="chead">' +
       '<span class="cond job">' + esc(c.job) + '</span>' +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
-      '<span class="cunits tab">' + esc(G.glzUnitWords(c.total)) + '</span>' +
+      '<span class="cunits tab">' + esc(GZ.glzUnitWords(c.total)) + '</span>' +
     '</div>' +
     (qty || c.comment
       ? '<div class="cfacts">' + (qty ? '<span class="cqty tab">' + esc(qty) + '</span>' : "") +
@@ -664,7 +664,7 @@ function paintBoard(host, board) {
     host.appendChild(DOING); host.appendChild(FINHEAD); host.appendChild(FIN);
     NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
   }
-  const diff = ST.boardDiff(BOARD_PREV, board, G.glzCardSig);
+  const diff = ST.boardDiff(BOARD_PREV, board, GZ.glzCardSig);
   const byJob = {};
   board.forEach(c => { byJob[c.job] = c; });
 
@@ -732,7 +732,7 @@ function render() {
   if (gt) {
     gt.hidden = !on;
     gt.style.display = on ? "" : "none";
-    gt.textContent = on ? G.glzLeftWords(G.glzLeft(live)) : "";
+    gt.textContent = on ? GZ.glzLeftWords(GZ.glzLeft(live)) : "";
   }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + STU.stuAgo(LASTREAD) : "";
@@ -748,7 +748,7 @@ function render() {
     return;
   }
 
-  const board = G.glzFilter(live, QUERY);
+  const board = GZ.glzFilter(live, QUERY);
   if (!board.length) {
     DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
@@ -781,7 +781,7 @@ function wireAgain() {
   const a = $("#again");
   if (a) a.onclick = () => {
     PROBLEM = ""; SOFT = ""; SITEID = null; TOKEN = null;
-    if (CW.forgetStationSite) CW.forgetStationSite(true, G.GLAZE.site);   // a person asked: look now
+    if (CW.forgetStationSite) CW.forgetStationSite(true, GZ.GLAZE.site);   // a person asked: look now
     render(); readPeople(); readList();
   };
   const r = $("#reauth");
