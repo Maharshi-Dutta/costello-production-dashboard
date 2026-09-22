@@ -191,6 +191,22 @@ function glzColour(done, total) {
   return d >= t ? "green" : d > 0 ? "yellow" : "";
 }
 
+/** The OFFICE board's colour, which is a different sentence from the tablet's
+    (owner, 2026-09-22: jobs whose whole `Production` row was already gold showed
+    no colour at all). `rowDone` is the parser's own `j.done` - nothing new is
+    read off the sheet - and it speaks first: a gold row is finished work
+    whatever this list's counter says, including a job with nothing to glaze. A
+    full count is gold too, because the floor has finished and the office moves
+    the row to its next section later. Display only; this writes nothing and
+    `glzColour` (green, the tablet's) is deliberately left alone. */
+function glzOfficeColour(c, rowDone) {
+  if (rowDone) return "gold";
+  const t = Math.max(0, gInt(c && c.total, 0));
+  const d = gClamp(c && c.glazed, t);
+  if (!(t > 0)) return "";
+  return d >= t ? "gold" : d > 0 ? "yellow" : "";
+}
+
 /** One list row as the boards read it. */
 function glzRecord(it) {
   const f = (it && it.fields) || {};
@@ -435,7 +451,7 @@ const GLZC = {
   GLZ_SEED_FIELDS, GLZ_FEEDER_WRITES, GLZ_CUSTOMER_MAX, GLZ_COMMENT_MAX,
   glzStrip, glzSlice, glzRowOrder, glzFeederFields, glzSeedFields, glzHashRow,
   glzWindowsOf, glzDoorsOf, glzCommentOf, glzSectionOf,
-  glzActive, glzInProduction, glzColour,
+  glzActive, glzInProduction, glzColour, glzOfficeColour,
   glzRecord, glzCards, glzBoard, glzOfficeBoard, glzJobCard, glzFilter,
   glzLeft, glzLeftWords, glzUnitWords, glzQtyWords,
   glzApplyTap, glzTapFields, glzOfficeFields, glzFloorOnly,

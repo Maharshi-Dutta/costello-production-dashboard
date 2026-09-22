@@ -379,6 +379,24 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(board[0].finished, false);
   pass("the board narrows by Active and section, and the colour is none / yellow / green");
 
+  /* the OFFICE's own colour rule (2026-09-22): the sheet speaks first. A job
+     whose Production row is already gold is gold here whatever the counter
+     says, and a full count is gold too - the floor has finished, the office
+     moves the row later. The tablet's green sentence above is untouched. */
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 8 }, true), "gold",
+    "a gold Production row is gold on the board even with nothing counted");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 4, total: 4 }, false), "gold",
+    "a full count is gold before the office has moved the row");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 1, total: 3 }, false), "yellow", "started");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 3 }, false), "", "nothing glazed");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 0 }, false), "",
+    "a job with nothing to glaze is not coloured");
+  assert.strictEqual(Z.glzOfficeColour({ glazed: 0, total: 0 }, true), "gold",
+    "the sheet outranks a count of nothing");
+  assert.strictEqual(Z.glzColour(4, 4), "green",
+    "and the tablet's own rule still says green, not gold");
+  pass("the office board's colour: the gold Production row first, then the count");
+
   /* a counter above its own quantity is clamped for display and nothing else */
   const shrunk = Z.glzRecord(item({ Title: "R8050", Job: "R8050", Total: 4, Glazed: 6 }, "550"));
   assert.strictEqual(shrunk.glazed, 4, "a shortened job reads 4 of 4, never 150%");

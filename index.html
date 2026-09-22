@@ -358,11 +358,23 @@
   .worow { border:1px solid var(--line); border-radius:6px; background:var(--surface) }
   .worow.c-yellow { border-color:var(--fab); background:var(--fab-bg) }
   .worow.c-green { border-color:var(--green); background:var(--green-bg) }
+  /* the glazing board's fourth level, the sheet's own gold - the same two tokens
+     the glass board's finished card uses, so "done" reads the same everywhere */
+  .worow.c-gold { border-color:var(--done); background:var(--done-bg) }
   .worow.done .wototal { font-weight:700 }
   .wohead { display:grid; grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
             64px 90px 92px 92px 34px minmax(90px,1fr); gap:9px; align-items:center;
             padding:9px 11px; cursor:pointer; font-size:12.5px }
   .wonotes-slot { display:flex; justify-content:center }
+  /* ---- the Glazing board's own tracks (2026-09-22) -----------------------
+     It shares welding's row markup but emits one cell fewer: there is no
+     toggle column and no bar, so on welding's ten-track grid every glazing
+     cell sat one column left of the header it belonged under. One track per
+     cell actually emitted, in the order glzRowHtml writes them. */
+  .glzboard .wohead { grid-template-columns:78px minmax(90px,1.4fr) minmax(80px,1fr)
+            64px minmax(120px,1fr) auto 34px minmax(90px,1fr) }
+  /* a job whose Production row is gold has no steppers: the word holds the track */
+  .wobtns.wodone { color:var(--ink-4); align-items:center }
   .wotog { color:var(--ink-4) }
   .wohead .stjob { font-size:17px }
   .wocust, .wosect, .wolast { color:var(--ink-2); overflow:hidden;
@@ -408,6 +420,9 @@
   /* the drawer's one welding line, under the window types */
   .weldline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:7px 0 2px }
   .weldnum { font-size:15px; font-weight:700 }
+  /* the glazing line carries the board's colour so the two never disagree */
+  .weldline.c-gold .weldnum { color:var(--done) }
+  .weldline.c-yellow .weldnum { color:var(--fab) }
   @media (max-width:900px){
     /* job, customer, total, badge - one row, no auto track: Frames/Sashes join
        section/bar/last-touch in the hidden set here, so the row never wraps
@@ -415,6 +430,10 @@
        above: a per-row auto column sizes to that row's own content). */
     .wohead { grid-template-columns:18px 70px 1fr 64px 34px; row-gap:5px }
     .wohead .wosect, .wohead .wolast, .wohead .wobar, .wohead .wopart { display:none }
+    /* glazing keeps its steppers in the head, so the phone shows job, customer,
+       the count and the buttons, and the notes badge joins the hidden set */
+    .glzboard .wohead { grid-template-columns:70px 1fr 64px auto }
+    .glzboard .wohead .wonotes-slot { display:none }
     .woline { grid-template-columns:58px 58px auto; row-gap:4px }
     .woline .wobar, .woline .wowho { display:none }
   }

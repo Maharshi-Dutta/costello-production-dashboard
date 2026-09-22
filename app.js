@@ -3821,8 +3821,11 @@ function glzCardsShown() {
   let rows = GLZC.glzFilter(all, String(GLZ_Q || "").trim());
   if (GLZ_SECT) rows = rows.filter(c => c.section === GLZ_SECT);
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
-     own screen: the two boards are read side by side over the phone */
-  return rows.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
+     own screen: the two boards are read side by side over the phone. A job whose
+     `Production` row is already gold is finished for this sort too (2026-09-22),
+     so it does not sit above jobs the floor has not started. */
+  const fin = c => (c.finished || !!(byId(c.job) || {}).done) ? 1 : 0;
+  return rows.slice().sort((a, b) => fin(a) - fin(b));
 }
 
 /** One job's row on the office's glazing board: the counter, the office's own
@@ -3834,8 +3837,16 @@ function glzRowHtml(c) {
   const b = (t, act) => '<button class="wobtn" data-zid="' + esc(c.id) +
     '" data-zact="' + esc(act) + '"' + (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
   const notes = glzNotesFor(c.job);
-  const live = !!byId(c.job);
-  return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") +
+  const j = byId(c.job);
+  const live = !!j;
+  /* the sheet speaks first: a job whose `Production` row is gold is done, and
+     the owner asked for no steppers on it (2026-09-22) - the count still shows
+     what the floor recorded, and the word "done" holds the steppers' track so
+     the columns keep lining up. A full count that is NOT row-gold keeps its
+     steppers: the office may still take a unit back. */
+  const rowDone = !!(j && j.done);
+  const col = GLZC.glzOfficeColour(c, rowDone);
+  return '<div class="worow c-' + (col || "none") + ((c.finished || rowDone) ? " done" : "") +
       '" data-zjob="' + esc(c.job) + '">' +
     '<div class="wohead' + (live ? " stopen" : "") + '"' +
         (live ? ' data-zopen="' + esc(c.job) + '"' : "") + '>' +
@@ -3843,10 +3854,10 @@ function glzRowHtml(c) {
       '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
       '<span class="wosect">' + esc(c.section || "—") + '</span>' +
       '<span class="wototal tab">' + c.glazed + ' / ' + c.total + '</span>' +
-      weldBarHtml(c.glazed, c.total) +
       '<span class="wopart tab">' + esc(GLZC.glzQtyWords(c) || "—") + '</span>' +
-      '<span class="wobtns">' + b("&minus;", "-1") + b("+", "1") +
-        b("All", "all") + b("None", "none") + '</span>' +
+      (rowDone ? '<span class="wobtns wodone">done</span>'
+               : '<span class="wobtns">' + b("&minus;", "-1") + b("+", "1") +
+                 b("All", "all") + b("None", "none") + '</span>') +
       '<span class="wonotes-slot">' + (notes.length ? '<span class="wonotes" title="' +
         esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' +
         notes.length + '</span>' : "") + '</span>' +
@@ -3961,7 +3972,13 @@ function glzDrawerLine(j) {
   if (GLZ_OK !== true) return "";
   const c = GLZC.glzJobCard(GLZ_ITEMS || [], j.id);
   if (!c || !c.total) return "";
-  return '<div class="weldline"><span class="kick">Glazing</span>' +
+  /* the same sentence the board tells (2026-09-22), so the drawer and the board
+     never disagree about one job: the gold `Production` row first, then the
+     count. Still read-only, still not a checkpoint. */
+  const rowDone = !!j.done;
+  const col = GLZC.glzOfficeColour(c, rowDone);
+  return '<div class="weldline' + (col ? " c-" + col : "") + '">' +
+    '<span class="kick">Glazing' + (rowDone ? " · done" : "") + '</span>' +
     '<span class="weldnum tab">' + c.glazed + ' / ' + c.total + '</span>' +
     (c.at ? '<span class="stwho">' + esc(c.by || "—") + ' · ' + esc(stWhen(c.at)) + '</span>' : "") +
     '<button class="ghost" id="glzopen">open the glazing board</button></div>';
@@ -7934,7 +7951,9 @@ function renderRows() {
     }
     if (state.board === "glazing") {
       glzReadIfNeeded(() => { if (state.board === "glazing") renderRows(); });
-      host.innerHTML = '<div class="stboard weldboard">' + glzBoardHtml() + '</div>';
+      /* the glazing board borrows welding's row, but emits one cell fewer (no
+         toggle column), so it carries its own class for its own track list */
+      host.innerHTML = '<div class="stboard weldboard glzboard">' + glzBoardHtml() + '</div>';
       wireGlzBoard(host);
       const zn = (GLZ_OK === true && glzOn()) ? glzCardsShown().length : 0;
       $("#count").textContent = zn ? "Showing " + zn + " job" + (zn > 1 ? "s" : "") +
