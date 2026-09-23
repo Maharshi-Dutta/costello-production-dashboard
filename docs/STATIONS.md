@@ -849,7 +849,7 @@ job out of them.
 | `Active` | Single line | feeder | `Yes` while the job is on the sheet with this group having F or S > 0; `No` afterwards. **Never deleted** |
 | `FedAt` / `FedBy` | Single line | feeder | the last feed that changed this row, and whose dashboard did it |
 | `FramesDone` / `SashesDone` | Number | the tablet; the feeder as a **seed on an untouched row only**; the office from its welding board | welded so far |
-| `FramesRemade` / `SashesRemade` | Number | **the tablet only** (2026-09-23); never the feeder, never the office | how many times a frame / sash of this group was welded again. A record, not progress: it moves no count and no colour, and has no ceiling. Tapping it stamps that part's By/At and DoneBy/At like any tap, and logs a `Station log` line with `Stage = frames-remake` / `sashes-remake` |
+| `FramesRemade` / `SashesRemade` | Number | **the tablet only** (2026-09-23); never the feeder, never the office | how many times a frame / sash of this group was welded again. A record, not progress: it moves no count and no colour, and has no ceiling. The PATCH is the count alone — no By/At, no DoneBy/At, so a remake on a fresh row never closes the feeder's untouched-row seed; who and when are in the `Station log` line (`Stage = frames-remake` / `sashes-remake`), which the station report's Summary/Days do not count as work |
 | `FramesBy` / `FramesAt`, `SashesBy` / `SashesAt` | Single line | the tablet; the office | who last moved that counter, and when (ISO) |
 | `DoneBy` / `DoneAt` | Single line | the tablet; the office | the last touch of any counter on this row |
 

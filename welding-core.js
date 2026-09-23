@@ -70,9 +70,14 @@ const WELD_AT_FIELD = { frames: "FramesAt", sashes: "SashesAt" };
 
    A remake is queued, sent, logged and re-based through the SAME code as a tap
    on the done counter, under its own counter key - `frames-remake` and
-   `sashes-remake` - so every table below answers for it. Its By/At pair is the
-   part's own (a remake of a frame is a touch of the Frames line), and its log
-   line's Stage is the counter key, which is what the station report lists. */
+   `sashes-remake` - so every table below answers for it. Its PATCH carries the
+   count and nothing else (review, 2026-09-23): a remake tap stamps no By/At
+   and no DoneBy/DoneAt, because DoneAt is the feeder's only "has the floor
+   touched this row" gate, and a remake on a fresh row must not stop the
+   office's own record seeding that row's done counts later. Who and when live
+   in the Station log line, whose Stage is the counter key. The station
+   report's Summary and Days sum real work only (`reportLogStages` stays
+   frames/sashes); the remake counts are the Jobs sheet's own columns. */
 const WELD_REMAKE_KEY = { frames: "frames-remake", sashes: "sashes-remake" };
 const WELD_REMAKE_KEYS = WELD_PART_KEYS.map(k => WELD_REMAKE_KEY[k]);
 /* every counter a tap may move: the two done counts and the two remake counts */
@@ -631,6 +636,7 @@ function weldTapFields(part, value, who, at) {
   const name = wTxt(who);
   const out = {};
   out[WELD_DONE_FIELD[k]] = Math.max(0, wInt(value, 0));
+  if (weldIsRemake(k)) return out;              // the count alone: see the remakes note above
   out[WELD_BY_FIELD[k]] = name;
   out[WELD_AT_FIELD[k]] = when;
   out.DoneBy = name;
@@ -747,11 +753,13 @@ const WELD = {
   reportStages: [WELD_STAGE],
   /* THE LINES THIS STATION'S ONE REPORT STAGE IS MADE OF (review, 2026-09-21).
      The tablet logs one `Station log` line per PART - `Stage = frames` and
-     `Stage = sashes` (and `frames-remake` / `sashes-remake` for the remake
-     counters), from weldLogEntry - and never the word "weld". A report
+     `Stage = sashes`, from weldLogEntry - and never the word "weld". The
+     remake lines (`Stage = frames-remake` / `sashes-remake`) are deliberately
+     NOT here: the report's Summary and Days sum these stages as units of work,
+     and a remake is not one (review, 2026-09-23). A report
      that matched its stage name against the log found nothing, so the welding
      report shipped with no Activity sheet and an empty Days. */
-  reportLogStages: () => WELD_COUNTER_KEYS.slice(),
+  reportLogStages: () => WELD_PART_KEYS.slice(),
   /* this station's log lines carry a PRODUCT GROUP in the shared list's
      GlassType column, so the report's Activity sheet gets a column for it.
      Glass names none and loses the column rather than printing "GLASS" on

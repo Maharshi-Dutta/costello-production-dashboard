@@ -34,9 +34,9 @@ by the owner by hand before the build goes live:
 
 They are floor columns (`WELD_FLOOR_FIELDS`, `WELD_COUNTER_FIELDS`): the
 feeder never writes or seeds them, `weldFloorOnly` lets them through only as
-numbers. A remake tap stamps that part's By/At and `DoneBy`/`DoneAt` exactly
-like a done tap, and logs one `Station log` line with `Stage =
-frames-remake` / `sashes-remake` (`From`/`To` the old and new count).
+numbers. A remake tap's PATCH is the count alone (see Amendments), and it
+logs one `Station log` line with `Stage = frames-remake` / `sashes-remake`
+(`From`/`To` the old and new count, `Who`/`At` the welder and the moment).
 
 **Sequencing:** the columns must exist before the build is live, else the
 tablet's PATCH is refused and the tap is owed until they do.
@@ -54,8 +54,8 @@ tablet's PATCH is refused and the tap is owed until they do.
 - Locked for anyone not holding the weld stage, as the steppers are.
 - Office: read-only `↻ N` on each expanded line of the welding board; the
   drawer's Welding line adds `↻ N remade` when the job has any; the station
-  report gains `Frames remade` / `Sashes remade` columns and its Activity
-  sheet reads the remake log lines. `weldOfficeEdit` refuses a remake key.
+  report's Jobs sheet gains `Frames remade` / `Sashes remade` columns.
+  `weldOfficeEdit` refuses a remake key.
 
 ## UI
 
@@ -74,10 +74,29 @@ wraps under the done buttons rather than pushing the page sideways.
   the open board row shows `↻ 3` and offers no button for it.
 - Feeder test: the never-written set now includes the two new columns.
 - Browser rig (scratchpad `remake_check.js`, headless Edge, stubbed Graph):
-  23/23 — pill on every line, one PATCH with exactly five keys, one log
+  23/23 — pill on every line, one PATCH carrying the count alone, one log
   line, done count and colour unmoved, All beside it still works, 700 to
   1100 px no overflow and one column, 400 px no overflow, office row shows
   `↻ 3` with no remake button, steppers aligned.
+
+## Amendments after review
+
+Independent review (2026-09-23), two findings, both fixed in one pass:
+
+1. **A remake line was summed as work in the station report.** The first
+   build put the remake keys into `reportLogStages`, meaning to show them on
+   the Activity sheet; but the report's Summary and Days sum every line of
+   those stages as "Units recorded", so five remake taps would have read as
+   five more frames welded. Fix: `reportLogStages` is `frames`/`sashes`
+   again. Remake lines stay in `Station log` and on the office's Floor log
+   panel ("Frames remade · 2 → 3"); the report carries the counts on its
+   Jobs sheet only.
+2. **A remake tap stamped `DoneAt`, closing the feeder's seed for ever.**
+   `DoneAt` empty is the only thing that lets the feeder seed a row's done
+   counts from the office's own record. A welder tapping the remake pill on
+   a fresh row before any done tap would have made that row "touched" with
+   nothing welded. Fix: the remake PATCH is the count alone — no By/At, no
+   `DoneBy`/`DoneAt`. Who and when are on the log line.
 
 ## What to report
 

@@ -3,8 +3,9 @@
    What this page can do, in full: read four SharePoint lists in the `Floor
    stations` site ("Welding station", "Station people", "Station log", "Station
    comments"), PATCH the FramesDone / SashesDone counters of a Welding station
-   row - and, since 2026-09-23, its FramesRemade / SashesRemade remake counts -
-   with that part's By and At and the last-touch pair beside them -
+   row - with that counter's By and At and the last-touch pair beside them -
+   and, since 2026-09-23, its FramesRemade / SashesRemade remake counts (the
+   count alone, no stamp) -
    POST one line to the Station log for each counter write that succeeded, and
    POST one note per word somebody types for the office. That is all.
 

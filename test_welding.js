@@ -580,9 +580,9 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(W.weldApplyTap(rm, "frames-remake", "all"), 2, "All means nothing to a remake count");
   assert.strictEqual(W.weldApplyTap(rm, "frames-remake", "none"), 0);
   const rtf = W.weldTapFields("sashes-remake", 3, "Person A", "2026-09-23T12:00:00.000Z");
-  assert.deepStrictEqual(rtf, { SashesRemade: 3, SashesBy: "Person A",
-    SashesAt: "2026-09-23T12:00:00.000Z", DoneBy: "Person A", DoneAt: "2026-09-23T12:00:00.000Z" },
-    "a remake tap writes the remake count, that part's By/At and the last-touch pair - never a done count");
+  assert.deepStrictEqual(rtf, { SashesRemade: 3 },
+    "a remake tap writes the remake count ALONE: no By/At, no DoneBy/DoneAt (a remake on a fresh row " +
+    "must not close the feeder's untouched-row seed), never a done count");
   assert.deepStrictEqual(W.weldFloorOnly(Object.assign({ Frames: 9, Active: "No" }, rtf)), rtf,
     "and the whitelist lets exactly that through");
   assert.deepStrictEqual(W.weldFloorOnly({ FramesRemade: "3" }), {}, "a remake count that is not a number is dropped");
@@ -604,7 +604,8 @@ JOBS.blockNames = NAMES;
     Section: "In production", Active: "Yes" }, "603")]) });
   assert.strictEqual(rep.rows[0][rep.columns.indexOf("Frames remade")], 2);
   assert.strictEqual(rep.rows[0][rep.columns.indexOf("Sashes remade")], 1);
-  assert.ok(W.WELD.reportLogStages().indexOf("frames-remake") >= 0, "and the report's Activity sheet reads remake lines");
+  assert.deepStrictEqual(W.WELD.reportLogStages(), ["frames", "sashes"],
+    "and the report's Summary/Days sum real work only - a remake line is never a unit recorded");
   pass("the remake count: its own counter key, no ceiling, no effect on progress, floor-only, in the report");
 
   /* ================= 8. the rebase, and the office's later word ================= */
