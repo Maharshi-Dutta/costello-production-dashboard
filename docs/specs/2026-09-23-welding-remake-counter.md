@@ -24,8 +24,9 @@ the office gets a read-only view; the welder's name never enters the repo.
 
 ## Data model
 
-Two new Number columns on `Welding station` (`Floor stations` site), created
-by the owner by hand before the build goes live:
+Two new Number columns on `Welding station` (`Floor stations` site), added
+by script (`add_remake_columns.py`, rehearsed on a throwaway list first)
+after the push on 2026-09-23:
 
 | column | written by | meaning |
 |---|---|---|
