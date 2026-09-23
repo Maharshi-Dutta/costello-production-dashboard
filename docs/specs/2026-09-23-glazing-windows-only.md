@@ -1,9 +1,9 @@
 # Glazing counts windows only
 
-**Status: approved to build, 2026-09-23** (owner's answers in chat that day:
-door-only jobs leave glazing, yes; card words say windows only, yes; no
-separate rehearsal — the feeder mechanism in daily use since 2026-09-21 is the
-rehearsal).
+**Status: shipped 2026-09-23, build 20260923-0942, commit e3d671b** (owner's
+answers in chat that day: door-only jobs leave glazing, yes; card words say
+windows only, yes; no separate rehearsal — the feeder mechanism in daily use
+since 2026-09-21 is the rehearsal).
 
 **Builds on** `2026-09-21-glazing-station.md` (section B, the feeder) and
 `2026-09-22-glazing-board-polish.md`.
