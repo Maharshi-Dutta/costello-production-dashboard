@@ -1,7 +1,7 @@
 # Welding: a remake counter beside All (2026-09-23)
 
-**Status:** built on branch `welding-remake-counter`, reviewed, awaiting the
-owner's demo approval.
+**Status:** shipped 2026-09-23, build 20260923-1115 (`6cbeac5` build,
+`1eb7c61` spec, `d5e2ed7` fix pass, `6def102` build stamp), HISTORY A34.
 
 ## Context
 
