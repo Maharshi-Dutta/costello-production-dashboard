@@ -204,9 +204,11 @@ Two different reasons, both normal:
 
 The glazer's tablet is **`glazing.html`**, signed in with the same station
 account as the other floor pages. It shows one card per job in production with
-**one number on it: units glazed, out of the job's windows plus doors.** Not per
-glass type, not per product group, not per stage — the glazer counts finished
-units. − , + and **All** move it; All becomes **None** once it is at the total,
+**one number on it: units glazed, out of the job's windows.** Doors are not
+glazed at this station (owner, 2026-09-23), so a job of eleven windows and two
+doors reads eleven and a job of nothing but doors is not on the tablet at all.
+Not per glass type, not per product group, not per stage — the glazer counts
+finished units. − , + and **All** move it; All becomes **None** once it is at the total,
 so a mistake is undone the same way it was made. A finished job goes green and
 drops into the collapsed "Finished · n" group at the bottom.
 

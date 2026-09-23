@@ -16,15 +16,17 @@ dashboard. I should be able to edit glazing from that window."*
 
 ```
 Production sheet ──parse──▶ ALL ──glzSlice──▶ feedGlazing() ──▶ `Glazing station`
-                                (wndMain + drsMain)                    │
+                                    (wndMain)                          │
                                                                        ▼
 index.html + app.js  ◀──Glazed / GlazedBy / GlazedAt / DoneBy / DoneAt──┤
   Show ▸ Glazing station, the drawer's Glazing line, the phase bar      │
 glazing.html + glazing.js ──────────────────────────────────────────────┘
 ```
 
-**One number per job**: units glazed, out of the job's windows plus doors
-(owner's decision 1). No stages, no product groups, no glass types — which is
+**One number per job**: units glazed, out of the job's windows (owner's
+decision 1, and the windows alone since 2026-09-23 — doors are not glazed here,
+so they are fed as a fact and counted nowhere, and a door-only job is not fed at
+all: [`docs/specs/2026-09-23-glazing-windows-only.md`](specs/2026-09-23-glazing-windows-only.md)). No stages, no product groups, no glass types — which is
 why `glazing.js` is materially shorter than `welding.js` rather than a copy of
 it: a card is a job, one stepper and a note box.
 

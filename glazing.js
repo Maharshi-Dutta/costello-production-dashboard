@@ -11,8 +11,10 @@
    API path anywhere in this file - no delete, no editing of a job's facts, no
    export, and no link back to the master dashboard.
 
-   ONE NUMBER PER JOB: units glazed, out of the job's windows plus doors. There
-   are no stages here and no product groups, which is why this page is shorter
+   ONE NUMBER PER JOB: units glazed, out of the job's WINDOWS - doors are not
+   glazed at this station (owner, 2026-09-23), so they are fed as a fact and
+   counted nowhere, and a job of nothing but doors never reaches this page.
+   There are no stages here and no product groups, which is why this page is shorter
    than welding's rather than a copy of it: a card is a job, a stepper and a
    note box.
 
@@ -552,15 +554,16 @@ function stepHtml(c) {
 function cardInner(c) {
   const owed = owedFor(c.id), bad = badFor(c.id);
   const lost = lostFor(c.job);
-  const qty = GZ.glzQtyWords(c);
+  /* no quantity line under the head: since 2026-09-23 the head already says
+     "6 windows" and the quantity said the same six a second time */
   return '<div class="chead">' +
       '<span class="cond job">' + esc(c.job) + '</span>' +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
       '<span class="cunits tab">' + esc(GZ.glzUnitWords(c.total)) + '</span>' +
     '</div>' +
-    (qty || c.comment
-      ? '<div class="cfacts">' + (qty ? '<span class="cqty tab">' + esc(qty) + '</span>' : "") +
-        (c.comment ? '<span class="ccmt">“' + esc(c.comment) + '”</span>' : "") + '</div>'
+    (c.comment
+      ? '<div class="cfacts">' +
+        '<span class="ccmt">“' + esc(c.comment) + '”</span></div>'
       : "") +
     stepHtml(c) +
     (lost ? '<div class="unsaved">' + esc(String(lost.value)) +

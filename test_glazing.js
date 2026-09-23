@@ -347,6 +347,41 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(live[0].fields.Glazed, 5, "the floor's own number is exactly where they left it");
   pass("the feeder patches job facts and can never touch the counter, By, At or last touch");
 
+  /* THE MIGRATION, which happens once, on the office's first load after
+     2026-09-23. Two rows fed under the old rule: one with doors on it, saying
+     8 where the windows alone say 6, and one that is nothing but doors. Every
+     job fact on them is already what the slice says, so the whole of the plan
+     is the new Total on the first and Active = No on the second. The glazer's
+     own 8 is NOT corrected - it is not the feeder's number to write - and the
+     card clamps to 6 / 6 on screen until the next tap moves it. */
+  const oldRule = [
+    item({ Title: "R8001", Job: "R8001", Customer: "Customer One …", Section: "In production",
+           Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8,
+           Comment: "rang on …, eircode …, will collect Friday",
+           Glazed: 8, GlazedBy: "the glazer", GlazedAt: "2026-09-22T08:00:00.000Z",
+           DoneBy: "the glazer", DoneAt: "2026-09-22T08:00:00.000Z" }, "901"),
+    item({ Title: "R8005", Job: "R8005", Customer: "Customer Five", Section: "In production",
+           Seq: 4, Active: "Yes", Windows: 0, Doors: 3, Total: 3, Comment: "",
+           Glazed: 1, GlazedBy: "the glazer", GlazedAt: "2026-09-22T09:00:00.000Z",
+           DoneBy: "the glazer", DoneAt: "2026-09-22T09:00:00.000Z" }, "902")];
+  plan = ST.feedPlan(slice, oldRule, { at: "2026-09-23T09:00:00.000Z", by: "the office", def: Z.GLAZE });
+  const mig = plan.patches.find(p => p.id === "901");
+  assert.ok(mig, "the row whose Total carried its doors is patched");
+  assert.deepStrictEqual(Object.keys(mig.fields).sort(), ["FedAt", "FedBy", "Total"],
+    "and the whole of that patch is the new Total: " + JSON.stringify(mig.fields));
+  assert.strictEqual(mig.fields.Total, 6, "eight units become the six windows");
+  assert.strictEqual(oldRule[0].fields.Glazed, 8,
+    "while the glazer's own eight is exactly where they left it - the feeder never corrects a count");
+  const doorRow = plan.patches.find(p => p.id === "902");
+  assert.ok(doorRow, "and the door-only row is patched too");
+  assert.deepStrictEqual(Object.keys(doorRow.fields).sort(), ["Active", "FedAt", "FedBy"],
+    "with Active and nothing else: " + JSON.stringify(doorRow.fields));
+  assert.strictEqual(doorRow.fields.Active, "No", "a door-only job leaves the tablet and the board");
+  assert.strictEqual(plan.patches.filter(p => p.id === "902").length, 1);
+  assert.strictEqual(oldRule[1].fields.Glazed, 1,
+    "its counter is left alone as well: nothing is cleared, reset or deleted");
+  pass("the one-off migration: Total drops to the windows, a door-only row goes Active = No, no count is touched");
+
   /* a job that has left the sheet is deactivated, never deleted */
   plan = ST.feedPlan(slice.filter(r => r.job !== "R8001"), live,
                      { at: "2026-09-21T09:00:00.000Z", by: "the office", def: Z.GLAZE });
@@ -422,8 +457,9 @@ JOBS.blockNames = NAMES;
   /* ================= 6. "N left", the filter and the words ================= */
   assert.strictEqual(Z.glzLeft(board), 6 + 2, "left is the board's own, summed");
   assert.strictEqual(Z.glzLeftWords(10), "10 left");
-  assert.strictEqual(Z.glzUnitWords(8), "8 units");
-  assert.strictEqual(Z.glzUnitWords(1), "1 unit");
+  assert.strictEqual(Z.glzUnitWords(8), "8 windows",
+    "the tablet's card head counts windows, not \"units\" (owner, 2026-09-23)");
+  assert.strictEqual(Z.glzUnitWords(1), "1 window");
   assert.strictEqual(Z.glzQtyWords(board[0]), "6 windows",
     "the card says the windows and never the doors (owner, 2026-09-23)");
   assert.strictEqual(Z.glzQtyWords({ wnd: 1, drs: 3 }), "1 window");
@@ -898,7 +934,8 @@ JOBS.blockNames = NAMES;
     "and no target or day-sheet columns: this station's definition has no daySheets");
   const jobs = rep[2];
   assert.deepStrictEqual(jobs.columns.slice(0, 6),
-    ["Job", "Customer", "Section", "Windows", "Doors", "Total"]);
+    ["Job", "Customer", "Section", "Windows", "Doors (not glazed)", "Total"],
+    "the doors are in the report as a fact, with the header saying they are not counted");
   assert.strictEqual(jobs.rows.length, 2, "one row per job for glazing");
   assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Glazed")], 6);
   assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Left")], 0);

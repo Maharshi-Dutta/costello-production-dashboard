@@ -952,7 +952,7 @@ In the **`Floor stations`** site. `Title` is unique.
 | `Seq` | Number | feeder | the job's position in the master list, so the floor sees the office's order |
 | `Active` | Single line | feeder | `Yes` while the job is on the sheet with something to glaze; `No` afterwards. **Never deleted** |
 | `Windows` / `Doors` | Number | feeder | the job's quantities **on the `Production` sheet** |
-| `Total` | Number | feeder | `Windows + Doors` — the units to glaze |
+| `Total` | Number | feeder | `Windows` — the units to glaze. It was `Windows + Doors` until 2026-09-23, when the owner took the doors out of the count; `Doors` is still fed as a fact and is counted nowhere |
 | `Comment` | Multiple lines of text | feeder | the sheet's COMMENT after the rule-3 strip, max 140 characters, may be blank |
 | `FedAt` / `FedBy` | Single line | feeder | the last feed that changed this row, and whose dashboard did it |
 | `Glazed` | Number | the tablet; the office from its glazing board | units glazed so far, 0…`Total` |

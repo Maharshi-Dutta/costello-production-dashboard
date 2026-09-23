@@ -3351,9 +3351,12 @@ function weldDrawerLine(j) {
    1. NOTHING HERE WRITES THE WORKBOOK. Not a fill, not a value, not a row. The
       only workbook write anywhere in this feature is the `Dashboard Log` line
       an office edit leaves, which is a dashboard-owned sheet (rule 2).
-   2. THE QUANTITIES COME OFF `Production` ALONE (j.wndMain + j.drsMain, the
-      parser's Production-only pair). Never `j.wnd`/`j.drs`, which take the
-      first sheet that has a number - that is the door HISTORY B20 came through.
+   2. THE QUANTITY COMES OFF `Production` ALONE, and it is `j.wndMain` - the
+      job's WINDOWS - on its own since 2026-09-23 (owner, spec
+      2026-09-23-glazing-windows-only.md: doors are not glazed at this station).
+      `j.drsMain` is still fed, as the `Doors` fact on the row, and counted
+      nowhere. Never `j.wnd`/`j.drs`, which take the first sheet that has a
+      number - that is the door HISTORY B20 came through.
    3. The office's edits write the floor's counter. That is a dated exception in
       CLAUDE.md rule 3, and it goes in `Dashboard Log` and NEVER in
       `Station log` - there is no call to ST.logFields on this path at all.

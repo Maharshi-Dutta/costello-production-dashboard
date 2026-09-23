@@ -292,10 +292,12 @@ function glzLeft(cards) {
   return (cards || []).reduce((n, c) => n + Math.max(0, gInt(c.left, 0)), 0);
 }
 const glzLeftWords = n => Math.max(0, gInt(n, 0)) + " left";
-/** "6 units" under the job number, with "6 windows" beside it. */
+/** "6 windows" at the head of the tablet's card. It said "6 units" until
+    2026-09-23; now that the count is the windows and nothing else, the word for
+    what is being counted is the honest one to print. */
 function glzUnitWords(n) {
   const t = Math.max(0, gInt(n, 0));
-  return t + (t === 1 ? " unit" : " units");
+  return t + (t === 1 ? " window" : " windows");
 }
 /** The windows and nothing else. The doors are on the row as a fact but they
     are not glazed here (owner, 2026-09-23), so no screen says a door out loud -
@@ -418,7 +420,10 @@ function glzReportJobs(data, stage) {
                c.total, c.glazed, c.left, c.doneBy, c.doneAt,
                c.finished ? "Yes" : "No"]);
   });
-  return { columns: ["Job", "Customer", "Section", "Windows", "Doors", "Total",
+  /* `Doors (not glazed)` says in the header what the numbers would otherwise
+     make somebody work out: the doors are a fact off the sheet and are not in
+     Total, which is the windows (owner, 2026-09-23). */
+  return { columns: ["Job", "Customer", "Section", "Windows", "Doors (not glazed)", "Total",
                      "Glazed", "Left", "Last moved by", "When", "Complete"],
            rows: rows, jobs: jobs };
 }

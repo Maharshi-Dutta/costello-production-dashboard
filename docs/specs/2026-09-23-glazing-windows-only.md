@@ -51,6 +51,17 @@ above its new total shows clamped (`11 / 11`, gold); the list keeps the old
   is still fed).
 - Suites otherwise unchanged; `test_pages.js` 4/4.
 
+## Amendments after review
+
+- **A door-only job the glazer had already recorded units against loses its
+  voice in the phase bar.** Its row goes `Active = No` on the office's next
+  load, so `floorPhaseOf` stops hearing it and that job's phase falls back to
+  the sheet's own reading, or to welding's if welding has recorded anything.
+  Nothing is cleared, reset or deleted — the counter stays exactly where the
+  floor left it on a row nobody reads any more. Accepted: it is what "door-only
+  jobs leave glazing entirely" means, and a job that is not glazed here should
+  not be saying "In glazing" anywhere.
+
 ## What to report
 
 `git diff --stat`, suite lines, and the count of live rows the feeder will

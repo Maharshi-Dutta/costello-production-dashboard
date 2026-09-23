@@ -22,7 +22,9 @@ Three pages ship from this repo:
   2026-09-21, the **third**, built from the "Adding a station" checklist in
   `docs/STATIONS.md` and not by copying a page — see
   [`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md) and `docs/REFERENCE.md` §24.
-  One number per job: units glazed out of windows + doors. **The fourth station
+  One number per job: units glazed out of the job's **windows** — doors are not
+  glazed at this station and are fed as a fact only (owner 2026-09-23,
+  [`docs/specs/2026-09-23-glazing-windows-only.md`](docs/specs/2026-09-23-glazing-windows-only.md)). **The fourth station
   is the same checklist again.**
 
 Check `docs/specs/README.md` for the status of every spec.
