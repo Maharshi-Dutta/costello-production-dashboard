@@ -5,9 +5,14 @@
    glass, so it will be its own dashboard with its section" - and this is that
    dashboard's half of it (docs/specs/2026-09-21-glazing-station.md).
 
-   ONE NUMBER PER JOB: units glazed, out of the job's windows plus doors. Not
-   per glass type, not per product group, not per stage - the glazer counts
-   finished units and nothing else (owner's decision 1).
+   ONE NUMBER PER JOB: units glazed, out of the job's WINDOWS. Not per glass
+   type, not per product group, not per stage - the glazer counts finished units
+   and nothing else (owner's decision 1). Doors were counted with the windows
+   until 2026-09-23, when the owner said they are not glazed at this station -
+   "if a job has 11 windows and 2 doors the glazing should be 11" - so the
+   quantity is the windows alone and a job of nothing but doors is not fed
+   (docs/specs/2026-09-23-glazing-windows-only.md). The `Doors` column stays on
+   the list and is still fed as a fact; it is simply not counted.
 
    It reads four SharePoint lists in the `Floor stations` site - "Glazing
    station" (the work), "Station people", "Station log" and "Station comments" -
@@ -132,7 +137,11 @@ function glzSlice(jobs, blockNames) {
     const job = gKey(j.id);
     if (!job) return;
     const wnd = glzWindowsOf(j), drs = glzDoorsOf(j);
-    const total = wnd + drs;
+    /* the WINDOWS alone (owner, 2026-09-23): doors are not glazed here. The
+       doors go on the row as a fact and are not added to the count, so a job of
+       nothing but doors falls out on the next line and the feeder's own plan
+       marks whatever row it made before that day Active = No. */
+    const total = wnd;
     if (!(total > 0)) return;                      // nothing to glaze: not fed
     /* one Title, one row. Title is unique on the list, so a slice carrying a
        job twice would make the feeder POST a row SharePoint then refuses, every
@@ -283,17 +292,17 @@ function glzLeft(cards) {
   return (cards || []).reduce((n, c) => n + Math.max(0, gInt(c.left, 0)), 0);
 }
 const glzLeftWords = n => Math.max(0, gInt(n, 0)) + " left";
-/** "8 units" under the job number, with "6 windows · 2 doors" beside it. */
+/** "6 units" under the job number, with "6 windows" beside it. */
 function glzUnitWords(n) {
   const t = Math.max(0, gInt(n, 0));
   return t + (t === 1 ? " unit" : " units");
 }
+/** The windows and nothing else. The doors are on the row as a fact but they
+    are not glazed here (owner, 2026-09-23), so no screen says a door out loud -
+    a number the glazer cannot act on would only make the card read wrong. */
 function glzQtyWords(c) {
-  const bits = [];
-  const w = Math.max(0, gInt(c && c.wnd, 0)), d = Math.max(0, gInt(c && c.drs, 0));
-  if (w > 0) bits.push(w + (w === 1 ? " window" : " windows"));
-  if (d > 0) bits.push(d + (d === 1 ? " door" : " doors"));
-  return bits.join(" · ");
+  const w = Math.max(0, gInt(c && c.wnd, 0));
+  return w > 0 ? w + (w === 1 ? " window" : " windows") : "";
 }
 
 /* ---- the writes one tap makes ----------------------------------------------

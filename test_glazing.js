@@ -233,7 +233,10 @@ const JOBS = [
   /* THE B20 SHAPE: Production says three windows, some other sheet says
      eleven. The slice must read three. */
   mkJob({ id: "R8004", cust: "Customer Four", wnd: 11, drs: 9, wndMain: 3, drsMain: 0,
-          blk: 4, seq: 3 })
+          blk: 4, seq: 3 }),
+  /* DOORS ONLY. Doors are not glazed at this station (owner, 2026-09-23), so a
+     job with no windows has nothing to glaze and never reaches the list. */
+  mkJob({ id: "R8005", cust: "Customer Five", wnd: 0, drs: 3, blk: 4, seq: 4 })
 ];
 JOBS.blockNames = NAMES;
 
@@ -249,21 +252,32 @@ JOBS.blockNames = NAMES;
   const one = slice[0];
   assert.strictEqual(one.wnd, 6);
   assert.strictEqual(one.drs, 2);
-  assert.strictEqual(one.total, 8, "Total is windows plus doors");
+  assert.strictEqual(one.total, 6, "Total is the windows alone: doors are not glazed here");
   assert.strictEqual(one.section, "In production");
   assert.strictEqual(slice[1].section, "Finished", "a finished job is still fed, with its section on it");
-  assert.strictEqual(Z.glzFeederFields(one).Total, 8);
-  pass("Total is the job's windows plus its doors, and every section is fed");
+  assert.strictEqual(Z.glzFeederFields(one).Total, 6);
+  assert.strictEqual(Z.glzFeederFields(one).Doors, 2,
+    "while the doors are still fed as a fact - they are simply not counted");
+  pass("Total is the job's windows alone, and every section is fed");
 
   assert.ok(!slice.some(r => r.job === "R8002"), "a job with nothing to glaze is not fed at all");
   assert.strictEqual(Z.glzSlice([mkJob({ id: "R8100", wnd: 0, drs: 0 })], NAMES).length, 0);
   pass("a job whose Total would be 0 never reaches the list");
 
+  /* DOORS ONLY (owner, 2026-09-23): windows are the whole count, so a job of
+     nothing but doors has nothing to glaze and is not fed. One already on the
+     list from before that day is marked Active = No by the feeder's own plan. */
+  assert.ok(!slice.some(r => r.job === "R8005"), "a door-only job is not in the slice");
+  assert.strictEqual(Z.glzSlice([mkJob({ id: "R8101", wnd: 0, drs: 4 })], NAMES).length, 0);
+  assert.strictEqual(Z.glzDoorsOf({ drs: 0, drsMain: 4 }), 4,
+    "and the doors are still read off `Production`, because the fact is still fed");
+  pass("a job that is all doors is not fed at all, and its doors are still read as a fact");
+
   /* THE PRODUCTION SHEET AND NOTHING ELSE (owner's standing rule, 2026-09-18) */
   const four = slice.find(r => r.job === "R8004");
   assert.strictEqual(four.wnd, 3, "Windows is the Production sheet's own number, not the merged one");
   assert.strictEqual(four.drs, 0);
-  assert.strictEqual(four.total, 3, "so Total is 3, not the 20 the cross-sheet numbers would give");
+  assert.strictEqual(four.total, 3, "so Total is 3, not the 11 the cross-sheet number would give");
   assert.strictEqual(Z.glzWindowsOf({ wnd: 11, wndMain: 3 }), 3);
   assert.strictEqual(Z.glzDoorsOf({ drs: 9, drsMain: 0 }), 0);
   assert.strictEqual(Z.glzWindowsOf({ wnd: 11 }), 0,
@@ -314,14 +328,14 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(plan.patches.length, 0);
   const add = plan.adds[0];
   assert.strictEqual(add.Title, "R8001");
-  assert.strictEqual(add.Total, 8);
+  assert.strictEqual(add.Total, 6);
   assert.strictEqual(add.FedBy, "the office");
   Z.GLZ_FLOOR_FIELDS.forEach(k => assert.ok(!(k in add), "a new row carries no " + k));
   pass("feedPlan on the glazing definition adds a row per job and names no floor column");
 
   /* a row the floor has worked on: its facts may change, its counter may not */
   const live = [item({ Title: "R8001", Job: "R8001", Customer: "Old name", Section: "In production",
-                       Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8, Comment: "",
+                       Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 6, Comment: "",
                        Glazed: 5, GlazedBy: "the glazer", GlazedAt: "2026-09-21T08:00:00.000Z",
                        DoneBy: "the glazer", DoneAt: "2026-09-21T08:00:00.000Z" }, "900")];
   plan = ST.feedPlan(slice, live, { at: "2026-09-21T09:00:00.000Z", by: "the office", def: Z.GLAZE });
@@ -352,7 +366,7 @@ JOBS.blockNames = NAMES;
   /* ================= 5. the board, and the three colour levels ================= */
   const rows = [
     item({ Title: "R8001", Job: "R8001", Customer: "Customer One", Section: "In production",
-           Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8, Comment: "mind the sill",
+           Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 6, Comment: "mind the sill",
            Glazed: 0 }, "500"),
     item({ Title: "R8003", Job: "R8003", Customer: "Customer Three", Section: "Finished",
            Seq: 2, Active: "Yes", Windows: 4, Doors: 0, Total: 4, Glazed: 4,
@@ -406,19 +420,21 @@ JOBS.blockNames = NAMES;
   pass("a counter above the quantity is clamped on screen, and nothing is written back for it");
 
   /* ================= 6. "N left", the filter and the words ================= */
-  assert.strictEqual(Z.glzLeft(board), 8 + 2, "left is the board's own, summed");
+  assert.strictEqual(Z.glzLeft(board), 6 + 2, "left is the board's own, summed");
   assert.strictEqual(Z.glzLeftWords(10), "10 left");
   assert.strictEqual(Z.glzUnitWords(8), "8 units");
   assert.strictEqual(Z.glzUnitWords(1), "1 unit");
-  assert.strictEqual(Z.glzQtyWords(board[0]), "6 windows · 2 doors");
-  assert.strictEqual(Z.glzQtyWords({ wnd: 1, drs: 0 }), "1 window");
+  assert.strictEqual(Z.glzQtyWords(board[0]), "6 windows",
+    "the card says the windows and never the doors (owner, 2026-09-23)");
+  assert.strictEqual(Z.glzQtyWords({ wnd: 1, drs: 3 }), "1 window");
+  assert.strictEqual(Z.glzQtyWords({ wnd: 0, drs: 3 }), "", "and a door-only job has nothing to say");
   assert.deepStrictEqual(Z.glzFilter(board, "R8004").map(c => c.job), ["R8004"]);
   assert.deepStrictEqual(Z.glzFilter(board, "customer one").map(c => c.job), ["R8001"]);
   assert.strictEqual(Z.glzFilter(board, "").length, 2, "an empty box is every card");
   pass("the header's number is the board's, and the box narrows the cards and never the number");
 
   /* one job's card for the drawer: active rows only */
-  assert.strictEqual(Z.glzJobCard(rows, "R8001").total, 8);
+  assert.strictEqual(Z.glzJobCard(rows, "R8001").total, 6);
   assert.strictEqual(Z.glzJobCard(rows, "R8009"), null,
     "a row that has left the sheet cannot make the drawer read a total no board agrees with");
   assert.strictEqual(Z.glzJobCard(rows, "nosuchjob"), null);
@@ -428,7 +444,7 @@ JOBS.blockNames = NAMES;
   const rec = Z.glzRecord(rows[0]);
   assert.strictEqual(Z.glzApplyTap(rec, 1), 1);
   assert.strictEqual(Z.glzApplyTap(rec, -1), 0, "and never below nought");
-  assert.strictEqual(Z.glzApplyTap(rec, "all"), 8);
+  assert.strictEqual(Z.glzApplyTap(rec, "all"), 6);
   assert.strictEqual(Z.glzApplyTap(rec, "none"), 0);
   assert.strictEqual(Z.glzApplyTap({ total: 8, glazed: 8 }, 1), 8, "and never above the total");
   assert.strictEqual(Z.glzApplyTap({ total: 8, glazed: 3 }, "nonsense"), 3);
@@ -550,7 +566,7 @@ JOBS.blockNames = NAMES;
   assert.deepStrictEqual(Object.keys(patches[0].body).sort(),
     ["DoneAt", "DoneBy", "Glazed", "GlazedAt", "GlazedBy"],
     "the office's edit writes exactly the counter, its By/At and the last-touch pair");
-  assert.strictEqual(patches[0].body.Glazed, 8);
+  assert.strictEqual(patches[0].body.Glazed, 6);
   assert.ok(patches[0].body.DoneBy && patches[0].body.DoneBy.length, "with the office person's name on it");
   assert.strictEqual(writes().filter(w => w.path.indexOf(LOG_ID) >= 0).length, 0,
     "RULE 2: the office writes no line of Station log, on this station or any other");
@@ -564,14 +580,14 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(logged.job, "R8001");
   assert.strictEqual(logged.what, "Glazing: R8001");
   assert.strictEqual(logged.from, "0");
-  assert.strictEqual(logged.to, "8");
+  assert.strictEqual(logged.to, "6");
   assert.strictEqual(LOGGED.length, 1, "exactly one line, in the Dashboard Log sheet");
-  assert.deepStrictEqual(LOGGED[0].slice(1), ["R8001", "Glazing: R8001", "0", "8"]);
+  assert.deepStrictEqual(LOGGED[0].slice(1), ["R8001", "Glazing: R8001", "0", "6"]);
   pass("one Dashboard Log line per office change, naming the job and what moved");
 
   /* the board reads the new number at once, without waiting for a poll */
   const afterEdit = A('glzRecordsNow().byId["500"]');
-  assert.strictEqual(afterEdit.glazed, 8);
+  assert.strictEqual(afterEdit.glazed, 6);
   assert.strictEqual(afterEdit.colour, "green");
   assert.strictEqual(afterEdit.finished, true);
   pass("the office's own copy of the list is in step at once, so the board never reads a stale number");
@@ -658,7 +674,7 @@ JOBS.blockNames = NAMES;
 
   /* the drawer's read-only Glazing line */
   const line = A('glzDrawerLine(ALL.find(j => j.id === "R8001"))');
-  assert.ok(/Glazing/.test(line) && /8 \/ 8/.test(line), "n of Total: " + line);
+  assert.ok(/Glazing/.test(line) && /6 \/ 6/.test(line), "n of Total: " + line);
   assert.ok(/glzopen/.test(line), "with the way to the board");
   assert.ok(!/data-cp|cpline|cpgrp/.test(line), "and nothing that could tick a checkpoint");
   assert.strictEqual(A('glzDrawerLine(ALL.find(j => j.id === "R8002"))'), "",
@@ -768,7 +784,7 @@ JOBS.blockNames = NAMES;
   /* glazing outranks it */
   A("GLZ_OK = true; GRECS = null; GRECS_OF = false;");
   A("GLZ_ITEMS = " + JSON.stringify([item({ Title: "R8001", Job: "R8001", Section: "In production",
-      Active: "Yes", Seq: 0, Windows: 6, Doors: 2, Total: 8, Glazed: 1 }, "800")]) + ";");
+      Active: "Yes", Seq: 0, Windows: 6, Doors: 2, Total: 6, Glazed: 1 }, "800")]) + ";");
   assert.strictEqual(A("effectivePhase(ALL.find(j => j.id === 'R8001'))"), 4,
     "any glazing recorded is at least In glazing");
   assert.strictEqual(A("PHASES[effectivePhase(ALL.find(j => j.id === 'R8001'))]"), "In glazing");
@@ -794,7 +810,7 @@ JOBS.blockNames = NAMES;
   pass("a counter tapped back to nought withdraws the floor's voice and the phase falls back");
 
   /* the sheet, and a person, always win when they are further on */
-  A("GLZ_ITEMS[0].fields.Glazed = 8; GRECS = null; GRECS_OF = false;");
+  A("GLZ_ITEMS[0].fields.Glazed = 6; GRECS = null; GRECS_OF = false;");
   A("ALL.find(j => j.id === 'R8003').done = 1;");
   A("GLZ_ITEMS.push(" + JSON.stringify(item({ Title: "R8003", Job: "R8003", Section: "Finished",
       Active: "Yes", Seq: 2, Windows: 4, Doors: 0, Total: 4, Glazed: 1 }, "803")) +
@@ -829,7 +845,7 @@ JOBS.blockNames = NAMES;
   pass("the whole phase section made not one request: the floor's phase is stored nowhere");
 
   /* the screen's word, and the export's */
-  A("GLZ_ITEMS[0].fields.Glazed = 8; GRECS = null; GRECS_OF = false;");
+  A("GLZ_ITEMS[0].fields.Glazed = 6; GRECS = null; GRECS_OF = false;");
   assert.strictEqual(A("statusWord(ALL.find(j => j.id === 'R8001'))"), "In glazing",
     "the badge on the row and at the head of the drawer is the floor's phase");
   assert.strictEqual(A("statusWord(ALL.find(j => j.id === 'R8001'))"),
@@ -847,14 +863,14 @@ JOBS.blockNames = NAMES;
   const ZDATA = {
     board: Z.glzOfficeBoard([
       item({ Title: "R8001", Job: "R8001", Customer: "Customer One 086 123 4567",
-             Section: "In production", Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8,
-             Glazed: 8, GlazedBy: "the glazer", GlazedAt: "2026-09-21T10:00:00.000Z",
+             Section: "In production", Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 6,
+             Glazed: 6, GlazedBy: "the glazer", GlazedAt: "2026-09-21T10:00:00.000Z",
              DoneBy: "the glazer", DoneAt: "2026-09-21T10:00:00.000Z" }, "1"),
       item({ Title: "R8004", Job: "R8004", Customer: "Customer Four", Section: "In production",
              Seq: 3, Active: "Yes", Windows: 3, Doors: 0, Total: 3, Glazed: 1 }, "2")]),
     log: ST.logRows([
       item({ Title: "R8001", Station: "Glazing", GlassType: "GLAZING", Stage: "glaze",
-             From: 0, To: 8, Who: "the glazer", At: "2026-09-21T10:00:00.000Z" }, "10"),
+             From: 0, To: 6, Who: "the glazer", At: "2026-09-21T10:00:00.000Z" }, "10"),
       item({ Title: "R8004", Station: "Glazing", GlassType: "GLAZING", Stage: "glaze",
              From: 0, To: 1, Who: "the glazer", At: "2026-09-22T11:00:00.000Z" }, "11")], "Glazing"),
     notes: ST.commentRows([
@@ -875,7 +891,7 @@ JOBS.blockNames = NAMES;
   assert.ok(S1.head.some(h => h[0] === "Stage" && h[1] === "Glazing"));
   assert.ok(S1.head.some(h => h[0] === "Contact details" && String(h[1]).indexOf("None") === 0));
   assert.strictEqual(S1.rows.length, 1, "one ISO week in the period");
-  assert.strictEqual(S1.rows[0][2], 9, "units recorded: 8 and 1");
+  assert.strictEqual(S1.rows[0][2], 7, "units recorded: 6 and 1");
   assert.strictEqual(S1.rows[0][3], 2, "two jobs touched");
   assert.strictEqual(S1.rows[0][4], 1, "one of them complete");
   assert.ok(S1.columns.indexOf("Target") < 0,
@@ -884,7 +900,7 @@ JOBS.blockNames = NAMES;
   assert.deepStrictEqual(jobs.columns.slice(0, 6),
     ["Job", "Customer", "Section", "Windows", "Doors", "Total"]);
   assert.strictEqual(jobs.rows.length, 2, "one row per job for glazing");
-  assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Glazed")], 8);
+  assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Glazed")], 6);
   assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Left")], 0);
   assert.strictEqual(jobs.rows[0][jobs.columns.indexOf("Complete")], "Yes");
   assert.strictEqual(jobs.rows[1][jobs.columns.indexOf("Complete")], "No");
@@ -946,7 +962,7 @@ JOBS.blockNames = NAMES;
      "currently saying" has to be brought up to date by hand first - that is
      what the real quietRows() does through renderRows(). */
   A("ROWS_CHIPS = chipsNow();");
-  A("GLZ_ITEMS[0].fields.Glazed = 8; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  A("GLZ_ITEMS[0].fields.Glazed = 6; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
   A("__quiet = 0;");
   A("redrawGlazing();");
   assert.strictEqual(A("__quiet"), 1, "and so does a glazing poll off the board");
@@ -967,7 +983,7 @@ JOBS.blockNames = NAMES;
   /* the office moves it on by hand. The floor's row is untouched - still
      Active = Yes, still Glazed = Total - and must stop being heard. */
   A("ALL.find(j => j.id === 'R8001').blk = 1;");            // Ready to fit
-  assert.strictEqual(A("glzRecordsNow().byJob['R8001'].glazed"), 8,
+  assert.strictEqual(A("glzRecordsNow().byJob['R8001'].glazed"), 6,
     "the floor's row is exactly as it was: nothing was cleared, deleted or reset");
   assert.strictEqual(A("floorPhaseRec(ALL.find(j => j.id === 'R8001'))"), null,
     "but the floor has no opinion about a job that has left production");
@@ -988,7 +1004,7 @@ JOBS.blockNames = NAMES;
   A("PHASES_SET = {};");
   /* a job gone from the sheet altogether is covered by the same one line */
   A("ALL.find(j => j.id === 'R8001').blk = 4; ALL.find(j => j.id === 'R8001').cat = 'past';");
-  A("GLZ_ITEMS[0].fields.Glazed = 8; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
+  A("GLZ_ITEMS[0].fields.Glazed = 6; GLZ_ITEMS = GLZ_ITEMS.slice(); GRECS = null; GRECS_OF = false;");
   assert.strictEqual(A("floorPhaseRec(ALL.find(j => j.id === 'R8001'))"), null,
     "a job that has left the sheet is covered by the same guard, not a second one");
   A("ALL.find(j => j.id === 'R8001').cat = 'active';");
