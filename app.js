@@ -3043,6 +3043,9 @@ async function weldOfficeEdit(id, part, act) {
   if (!rec) return false;
   const k = String(id) + "|" + part;
   if (weldWriting[k]) return false;                       // one at a time per line
+  /* the remake counts are the floor's alone: the office reads them on the
+     board and in the report, and never writes one (2026-09-23) */
+  if (WELDC.weldIsRemake && WELDC.weldIsRemake(part)) return false;
   if (WELDC.weldApplyTap(rec, part, act) == null) return false;   // not a part of this station
   if (WELD_OK !== true) { toast(WELD_WHY || WELD_LIST_MISSING, true); return false; }
   /* THE FLAG GOES UP BEFORE THE FIRST AWAIT (review finding R3, 2026-09-21).
@@ -3181,9 +3184,14 @@ function weldOfficeLineHtml(g, line) {
     '" data-wpart="' + esc(line.part) + '" data-wact="' + esc(act) + '"' +
     (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
   const stamp = line.at ? esc(line.by || "—") + " · " + esc(stWhen(line.at)) : "";
+  /* the floor's remake count, read-only: how many times a frame or sash of
+     this line was welded again. The office never edits it. */
+  const remade = Math.max(0, Number(line.remade) || 0);
   return '<div class="woline c-' + (line.colour || "none") + '">' +
     '<span class="wolab">' + esc(line.label) + '</span>' +
     '<span class="wonum tab">' + line.done + ' / ' + line.total + '</span>' +
+    '<span class="worem tab' + (remade ? " has" : "") + '" title="remade ' + remade +
+      (remade === 1 ? " time" : " times") + '">' + (remade ? "↻ " + remade : "") + '</span>' +
     weldBarHtml(line.done, line.total) +
     '<span class="wobtns">' + b("&minus;", "-1", "wobtn") + b("+", "1", "wobtn") +
       b("All", "all", "wobtn wide") + b("None", "none", "wobtn wide") + '</span>' +
@@ -3332,8 +3340,10 @@ function weldDrawerLine(j) {
   if (WELD_OK !== true) return "";
   const c = WELDC.weldJobCard(WELD_ITEMS || [], j.id);
   if (!c || !c.total) return "";
+  const remade = c.groups.reduce((n, g) => n + (g.remade.frames || 0) + (g.remade.sashes || 0), 0);
   return '<div class="weldline"><span class="kick">Welding</span>' +
     '<span class="weldnum tab">' + c.done + ' / ' + c.total + '</span>' +
+    (remade ? '<span class="weldrem tab" title="frames and sashes welded again">↻ ' + remade + ' remade</span>' : "") +
     '<button class="ghost" id="weldopen">open the welding board</button></div>';
 }
 

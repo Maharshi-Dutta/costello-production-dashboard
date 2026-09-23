@@ -3,7 +3,8 @@
    What this page can do, in full: read four SharePoint lists in the `Floor
    stations` site ("Welding station", "Station people", "Station log", "Station
    comments"), PATCH the FramesDone / SashesDone counters of a Welding station
-   row - with that counter's By and At and the last-touch pair beside them -
+   row - and, since 2026-09-23, its FramesRemade / SashesRemade remake counts -
+   with that part's By and At and the last-touch pair beside them -
    POST one line to the Station log for each counter write that succeeded, and
    POST one note per word somebody types for the office. That is all.
 
@@ -103,8 +104,8 @@ function who() { return PERSON ? PERSON.name : ""; }
 const mayWeld = () => ST.canStage(PERSON, W.WELD_STAGE);
 
 /* ---- the queues -------------------------------------------------------------
-   One entry per list row AND part (frames or sashes) - which is also exactly
-   what one log line is about. A later tap on the same row and part overwrites
+   One entry per list row AND counter (frames, sashes, or either one's remake
+   count) - which is also exactly what one log line is about. A later tap on the same row and part overwrites
    the number already waiting: the floor's latest count is what the office
    should see, not a replay of every button press.
 
@@ -119,7 +120,7 @@ function cleanQueue(raw) {
   const out = {};
   Object.keys(raw || {}).forEach(k => {
     const e = raw[k];
-    if (!e || !e.id || W.WELD_PART_KEYS.indexOf(String(e.part)) < 0) return;
+    if (!e || !e.id || W.WELD_COUNTER_KEYS.indexOf(String(e.part)) < 0) return;
     const v = Number(e.value);
     if (!isFinite(v)) return;
     const from = Number(e.from);
@@ -576,6 +577,18 @@ function stepHtml(rec, line) {
     '" data-part="' + esc(line.part) + '" data-act="' + esc(act) + '"' +
     (dead ? ' disabled aria-disabled="true"' : off) + '>' + t + '</button>';
   const full = line.done >= line.total;
+  /* the remake count, beside All: a record of how many times a frame or sash of
+     this line had to be welded again. Its own counter key, so a tap on it goes
+     through the same queue as any other - and never moves the done count. */
+  const rk = W.WELD_REMAKE_KEY[line.part];
+  const remade = Math.max(0, Number(line.remade) || 0);
+  const rb = (t, act) => '<button class="rbtn" data-id="' + esc(rec.id) + '" data-part="' + esc(rk) +
+    '" data-act="' + act + '"' + (act === "-1" && !remade ? ' disabled aria-disabled="true"' : off) +
+    '>' + t + '</button>';
+  const remakeHtml = '<span class="remake' + (remade ? " has" : "") + '" title="remade ' + remade + '">' +
+    rb("&minus;", "-1") +
+    '<span class="rmkn tab"><span class="rmkl">remade</span>' + remade + '</span>' +
+    rb("+", "1") + '</span>';
   return '<div class="step' + (mine ? "" : " locked") + ' c-' + (line.colour || "none") + '">' +
     '<span class="stepl">' + esc(line.label) +
       (mine ? '<span class="stepleft tab">' + esc(W.weldLeftWords(line.total - line.done)) + '</span>'
@@ -584,7 +597,7 @@ function stepHtml(rec, line) {
       '<span class="stepn tab' + (full ? " full" : "") + '">' + line.done + ' / ' + line.total + '</span>' +
       barHtml(line.done, line.total) + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
-      b(full ? "None" : "All", full ? "none" : "all", "sall") + '</span>' +
+      b(full ? "None" : "All", full ? "none" : "all", "sall") + remakeHtml + '</span>' +
     '</div>';
 }
 

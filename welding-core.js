@@ -60,22 +60,48 @@ const WELD_TOTAL_FIELD = { frames: "Frames", sashes: "Sashes" };
 const WELD_DONE_FIELD = { frames: "FramesDone", sashes: "SashesDone" };
 const WELD_BY_FIELD = { frames: "FramesBy", sashes: "SashesBy" };
 const WELD_AT_FIELD = { frames: "FramesAt", sashes: "SashesAt" };
+
+/* ---- remakes (2026-09-23) --------------------------------------------------
+   A second counter beside each part's All button: how many times a frame or a
+   sash of this group had to be welded again before it was right. It is a
+   RECORD, not progress - it moves no done count, no colour, no "left", and it
+   has no ceiling (a frame can be remade more often than the job has frames).
+   The tablet writes it; the office reads it; the feeder never touches it.
+
+   A remake is queued, sent, logged and re-based through the SAME code as a tap
+   on the done counter, under its own counter key - `frames-remake` and
+   `sashes-remake` - so every table below answers for it. Its By/At pair is the
+   part's own (a remake of a frame is a touch of the Frames line), and its log
+   line's Stage is the counter key, which is what the station report lists. */
+const WELD_REMAKE_KEY = { frames: "frames-remake", sashes: "sashes-remake" };
+const WELD_REMAKE_KEYS = WELD_PART_KEYS.map(k => WELD_REMAKE_KEY[k]);
+/* every counter a tap may move: the two done counts and the two remake counts */
+const WELD_COUNTER_KEYS = WELD_PART_KEYS.concat(WELD_REMAKE_KEYS);
+WELD_DONE_FIELD["frames-remake"] = "FramesRemade";
+WELD_DONE_FIELD["sashes-remake"] = "SashesRemade";
+WELD_BY_FIELD["frames-remake"] = "FramesBy";  WELD_AT_FIELD["frames-remake"] = "FramesAt";
+WELD_BY_FIELD["sashes-remake"] = "SashesBy";  WELD_AT_FIELD["sashes-remake"] = "SashesAt";
+WELD_PART_LABEL["frames-remake"] = "Frames remade";
+WELD_PART_LABEL["sashes-remake"] = "Sashes remade";
 const weldPartLabel = k => WELD_PART_LABEL[String(k).trim().toLowerCase()] || String(k);
+/** The part a counter key belongs to: "frames-remake" is about frames. */
+const weldPartOf = k => String(k).trim().toLowerCase().replace(/-remake$/, "");
+const weldIsRemake = k => /-remake$/.test(String(k).trim().toLowerCase());
 
 /* ---- the columns -----------------------------------------------------------
    The feeder writes Title, the job facts and FedAt/FedBy; the floor writes the
-   eight columns of WELD_FLOOR_FIELDS and nothing else. The office's welding
-   board writes the same eight - the second sanctioned office write of a floor
+   ten columns of WELD_FLOOR_FIELDS and nothing else. The office's welding
+   board writes eight of them, never a remake - the second sanctioned office write of a floor
    counter after the glass clear (CLAUDE.md rule 2, dated 2026-09-16) - and
    never a line of `Station log`.                                            */
 const WELD_FEEDER_FIELDS = ["Job", "Group", "GroupSeq", "Customer", "Comment", "SentToFloor",
                             "Wnd", "Drs", "Frames", "Sashes", "Seq", "Section", "Active"];
-const WELD_FLOOR_FIELDS = ["FramesDone", "SashesDone", "FramesBy", "FramesAt",
-                           "SashesBy", "SashesAt", "DoneBy", "DoneAt"];
+const WELD_FLOOR_FIELDS = ["FramesDone", "SashesDone", "FramesRemade", "SashesRemade",
+                           "FramesBy", "FramesAt", "SashesBy", "SashesAt", "DoneBy", "DoneAt"];
 /* the two floor columns that are numbers; everything else on that list is text.
    floorOnly() uses this to refuse a counter that is not a number and a stamp
    that is not a string, whatever somebody has edited into localStorage. */
-const WELD_COUNTER_FIELDS = ["FramesDone", "SashesDone"];
+const WELD_COUNTER_FIELDS = ["FramesDone", "SashesDone", "FramesRemade", "SashesRemade"];
 /* The ONE exception to "the feeder never writes the floor's columns", and it is
    the same one the glass list has: a row the feeder is CREATING, or a row the
    floor has never tapped (DoneAt empty), starts from what the office's own
@@ -381,19 +407,22 @@ function weldRecord(it) {
                  office edit, so it is the honest answer to "has anybody moved
                  this row" - and the half of last-writer-wins the queue reads */
               doneAt: wTxt(f.DoneAt), doneBy: wTxt(f.DoneBy),
-              by: {}, at: {}, lines: [] };
+              by: {}, at: {}, remade: {}, lines: [] };
   let done = 0, total = 0;
   WELD_PART_KEYS.forEach(k => {
     const t = Math.max(0, wInt(f[WELD_TOTAL_FIELD[k]], 0));
     const d = wClamp(f[WELD_DONE_FIELD[k]], t);
+    const rm = Math.max(0, wInt(f[WELD_DONE_FIELD[WELD_REMAKE_KEY[k]]], 0));
     g[k] = d;
     g[k + "Total"] = t;
+    g[WELD_REMAKE_KEY[k]] = rm;          // under the counter key, for weldApplyTap
+    g.remade[k] = rm;
     g.by[k] = wTxt(f[WELD_BY_FIELD[k]]);
     g.at[k] = wTxt(f[WELD_AT_FIELD[k]]);
     /* a line with nothing to weld is not drawn at all - "Sashes 0 / 0" on a
        door is a row of nothing on a screen read at arm's length */
     if (t > 0) {
-      g.lines.push({ part: k, label: weldPartLabel(k), done: d, total: t,
+      g.lines.push({ part: k, label: weldPartLabel(k), done: d, total: t, remade: rm,
                      by: g.by[k], at: g.at[k], colour: weldColour(d, t) });
       done += d; total += t;
     }
@@ -576,7 +605,16 @@ function weldFloorOnly(fields) {
     reducing it is what brings it back off the Finished group. */
 function weldApplyTap(row, part, delta) {
   const k = wTxt(part).trim().toLowerCase();
-  if (WELD_PART_KEYS.indexOf(k) < 0) return null;
+  if (WELD_COUNTER_KEYS.indexOf(k) < 0) return null;
+  if (weldIsRemake(k)) {
+    /* no ceiling and no "all": a remake count goes up by one, down by one, or
+       back to nought */
+    const now = Math.max(0, wInt(row && row[k], 0));
+    if (delta === "none") return 0;
+    const d = Number(delta);
+    if (delta === "all" || !isFinite(d)) return now;
+    return Math.max(0, Math.round(now + d));
+  }
   const total = Math.max(0, wInt(row && row[k + "Total"], 0));
   const now = wClamp(row && row[k], total);
   if (delta === "all") return total;
@@ -588,7 +626,7 @@ function weldApplyTap(row, part, delta) {
 /** The counter PATCH for one tap, from the floor or from the office. */
 function weldTapFields(part, value, who, at) {
   const k = wTxt(part).trim().toLowerCase();
-  if (WELD_PART_KEYS.indexOf(k) < 0) return null;
+  if (WELD_COUNTER_KEYS.indexOf(k) < 0) return null;
   const when = wTxt(at) || new Date().toISOString();
   const name = wTxt(who);
   const out = {};
@@ -639,7 +677,7 @@ function weldLogWords(job, group, part) {
 function weldRebase(e, fields) {
   const f = fields || {};
   const k = wTxt(e && e.part).trim().toLowerCase();
-  if (WELD_PART_KEYS.indexOf(k) < 0) return { action: "keep" };
+  if (WELD_COUNTER_KEYS.indexOf(k) < 0) return { action: "keep" };
   const now = Number(f[WELD_DONE_FIELD[k]]);
   const was = Number(e && e.from);
   if (!isFinite(now) || !isFinite(was)) return { action: "keep" };
@@ -650,10 +688,10 @@ function weldRebase(e, fields) {
     return { action: "drop" };
   }
   if (now <= was) return { action: "keep" };
+  const moved = Math.round(now + (Number(e.value) - was));
+  if (weldIsRemake(k)) return { action: "rebase", value: Math.max(0, moved), from: Math.round(now) };
   const total = Math.max(0, wInt(f[WELD_TOTAL_FIELD[k]], 0));
-  return { action: "rebase",
-           value: wClamp(Math.round(now + (Number(e.value) - was)), total),
-           from: Math.round(now) };
+  return { action: "rebase", value: wClamp(moved, total), from: Math.round(now) };
 }
 
 /** What one card is currently drawing, for the tablet's repaint diff. Anything
@@ -662,7 +700,7 @@ function weldCardSig(c) {
   return JSON.stringify([c.job, c.customer, c.comment, c.sentToFloor, c.wnd, c.drs,
     c.seq, c.finished, c.colour,
     c.groups.map(g => [g.id, g.group, g.colour,
-                       WELD_PART_KEYS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
+                       WELD_PART_KEYS.map(k => [g[k], g[k + "Total"], g.remade[k], g.by[k], g.at[k]])])]);
 }
 
 /** THE ADAPTER the station report asks this station for (2026-09-21). The
@@ -681,13 +719,13 @@ function weldReportJobs(data, stage) {
     jobs.push({ job: c.job, done: c.done, total: c.total });
     (c.groups || []).forEach(g => {
       rows.push([c.job, c.customer, c.section, g.group,
-                 g.frames, g.framesTotal, g.sashes, g.sashesTotal,
+                 g.frames, g.framesTotal, g.remade.frames, g.sashes, g.sashesTotal, g.remade.sashes,
                  g.total, g.done, g.left, g.doneBy, g.doneAt,
                  g.finished ? "Yes" : "No"]);
     });
   });
-  return { columns: ["Job", "Customer", "Section", "Group", "Frames done", "Frames",
-                     "Sashes done", "Sashes", "Total", "Done", "Left",
+  return { columns: ["Job", "Customer", "Section", "Group", "Frames done", "Frames", "Frames remade",
+                     "Sashes done", "Sashes", "Sashes remade", "Total", "Done", "Left",
                      "Last moved by", "When", "Complete"],
            rows: rows, jobs: jobs };
 }
@@ -709,10 +747,11 @@ const WELD = {
   reportStages: [WELD_STAGE],
   /* THE LINES THIS STATION'S ONE REPORT STAGE IS MADE OF (review, 2026-09-21).
      The tablet logs one `Station log` line per PART - `Stage = frames` and
-     `Stage = sashes`, from weldLogEntry - and never the word "weld". A report
+     `Stage = sashes` (and `frames-remake` / `sashes-remake` for the remake
+     counters), from weldLogEntry - and never the word "weld". A report
      that matched its stage name against the log found nothing, so the welding
      report shipped with no Activity sheet and an empty Days. */
-  reportLogStages: () => WELD_PART_KEYS.slice(),
+  reportLogStages: () => WELD_COUNTER_KEYS.slice(),
   /* this station's log lines carry a PRODUCT GROUP in the shared list's
      GlassType column, so the report's Activity sheet gets a column for it.
      Glass names none and loses the column rather than printing "GLASS" on
@@ -734,6 +773,7 @@ const WELDC = {
   WELD, WELD_LIST, WELD_NAME, WELD_SITE, WELD_STAGE,
   WELD_PARTS, WELD_PART_KEYS, WELD_PART_LABEL, WELD_PART_SUB,
   WELD_TOTAL_FIELD, WELD_DONE_FIELD, WELD_BY_FIELD, WELD_AT_FIELD,
+  WELD_REMAKE_KEY, WELD_REMAKE_KEYS, WELD_COUNTER_KEYS, weldPartOf, weldIsRemake,
   WELD_FIELDS, WELD_FEEDER_FIELDS, WELD_FLOOR_FIELDS, WELD_COUNTER_FIELDS,
   WELD_SEED_FIELDS, WELD_FEEDER_WRITES, WELD_DENY, WELD_GROUP_PARTS, weldPartsFor,
   WELD_CUSTOMER_MAX, WELD_COMMENT_MAX,

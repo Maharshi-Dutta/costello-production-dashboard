@@ -405,10 +405,15 @@
              margin-bottom:6px }
   .wogname { font-size:14px; font-weight:700; text-transform:uppercase }
   .wogcount { font-size:12px; font-weight:600; color:var(--ink-2) }
-  .woline { display:grid; grid-template-columns:62px 62px minmax(70px,1fr) auto minmax(90px,1fr);
+  .woline { display:grid; grid-template-columns:62px 62px 40px minmax(70px,1fr) auto minmax(90px,1fr);
             gap:9px; align-items:center; padding:4px 0; font-size:12.5px }
   .wolab { color:var(--ink-2) }
   .wonum { font-weight:600 }
+  /* the floor's remake count, read-only, its own fixed track so the bar and
+     the steppers sit in the same column on a line with none */
+  .worem { color:var(--ink-4); white-space:nowrap; font-size:12px }
+  .worem.has { color:var(--warm); font-weight:600 }
+  .weldrem { color:var(--ink-3); font-size:12px; margin-left:8px }
   .wowho { font-size:11px; color:var(--ink-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
   .wobtns { display:flex; gap:5px }
   .wobtn { min-width:34px; min-height:34px; border:1px solid var(--line); border-radius:5px;
@@ -441,7 +446,7 @@
        the count and the buttons, and the notes badge joins the hidden set */
     .glzboard .wohead { grid-template-columns:70px 1fr 64px 170px }
     .glzboard .wohead .wonotes-slot { display:none }
-    .woline { grid-template-columns:58px 58px auto; row-gap:4px }
+    .woline { grid-template-columns:58px 58px 36px auto; row-gap:4px }
     .woline .wobar, .woline .wowho { display:none }
   }
   /* the floor log window: filters, the counts they add up to, and the lines */

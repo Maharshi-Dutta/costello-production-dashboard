@@ -564,6 +564,49 @@ JOBS.blockNames = NAMES;
   assert.deepStrictEqual(W.weldFloorOnly({ FramesBy: 7 }), {}, "and a stamp that is not text is not a stamp");
   pass("one tap writes that part's counter, its By/At and the last-touch pair, and can carry nothing else");
 
+  /* ================= 7b. the remake count (2026-09-23) ================= */
+  const rm = W.weldRecord(item({ Title: "R7001|CASEMENT WINDOWS", Job: "R7001",
+    Group: "CASEMENT WINDOWS", Frames: 6, Sashes: 8, FramesDone: 6, SashesDone: 0,
+    FramesRemade: 2 }, "602"));
+  assert.strictEqual(rm.remade.frames, 2);
+  assert.strictEqual(rm.remade.sashes, 0, "a blank column is nought, not NaN");
+  assert.strictEqual(rm.lines[0].remade, 2, "the line carries it for the drawing");
+  assert.strictEqual(rm.frames, 6); assert.strictEqual(rm.colour, "yellow");
+  assert.strictEqual(rm.left, 8, "and it moves no done count, no colour and no left");
+  assert.strictEqual(W.weldApplyTap(rm, "frames-remake", 1), 3);
+  assert.strictEqual(W.weldApplyTap(rm, "frames-remake", -1), 1);
+  assert.strictEqual(W.weldApplyTap(rm, "frames-remake", 99), 101, "no ceiling: it can pass the quantity");
+  assert.strictEqual(W.weldApplyTap(rm, "sashes-remake", -1), 0, "and never below nought");
+  assert.strictEqual(W.weldApplyTap(rm, "frames-remake", "all"), 2, "All means nothing to a remake count");
+  assert.strictEqual(W.weldApplyTap(rm, "frames-remake", "none"), 0);
+  const rtf = W.weldTapFields("sashes-remake", 3, "Person A", "2026-09-23T12:00:00.000Z");
+  assert.deepStrictEqual(rtf, { SashesRemade: 3, SashesBy: "Person A",
+    SashesAt: "2026-09-23T12:00:00.000Z", DoneBy: "Person A", DoneAt: "2026-09-23T12:00:00.000Z" },
+    "a remake tap writes the remake count, that part's By/At and the last-touch pair - never a done count");
+  assert.deepStrictEqual(W.weldFloorOnly(Object.assign({ Frames: 9, Active: "No" }, rtf)), rtf,
+    "and the whitelist lets exactly that through");
+  assert.deepStrictEqual(W.weldFloorOnly({ FramesRemade: "3" }), {}, "a remake count that is not a number is dropped");
+  const rq = { part: "frames-remake", value: 3, from: 2, at: "2026-09-23T12:00:00.000Z" };
+  assert.deepStrictEqual(W.weldRebase(rq, { FramesRemade: 5, Frames: 6 }),
+    { action: "rebase", value: 6, from: 5 }, "re-based on a rise like any counter, and NOT clamped to Frames");
+  assert.deepStrictEqual(W.weldRebase(rq, { FramesRemade: 1, Frames: 6, DoneAt: "2026-09-23T12:30:00.000Z" }),
+    { action: "drop" });
+  assert.ok(W.WELD_FLOOR_FIELDS.indexOf("FramesRemade") >= 0 && W.WELD_COUNTER_FIELDS.indexOf("SashesRemade") >= 0);
+  assert.ok(W.WELD_FEEDER_WRITES.indexOf("FramesRemade") < 0 && W.WELD_SEED_FIELDS.indexOf("FramesRemade") < 0,
+    "the feeder never writes and never seeds a remake count");
+  assert.strictEqual(W.weldPartOf("sashes-remake"), "sashes");
+  assert.ok(W.weldIsRemake("frames-remake") && !W.weldIsRemake("frames"));
+  assert.notStrictEqual(W.weldCardSig({ job: "R1", groups: [rm] }),
+    W.weldCardSig({ job: "R1", groups: [Object.assign({}, rm, { remade: { frames: 3, sashes: 0 } })] }),
+    "a changed remake count redraws the card");
+  const rep = W.weldReportJobs({ board: W.weldOfficeBoard([item({ Title: "R7001|CASEMENT WINDOWS",
+    Job: "R7001", Group: "CASEMENT WINDOWS", Frames: 6, Sashes: 8, FramesRemade: 2, SashesRemade: 1,
+    Section: "In production", Active: "Yes" }, "603")]) });
+  assert.strictEqual(rep.rows[0][rep.columns.indexOf("Frames remade")], 2);
+  assert.strictEqual(rep.rows[0][rep.columns.indexOf("Sashes remade")], 1);
+  assert.ok(W.WELD.reportLogStages().indexOf("frames-remake") >= 0, "and the report's Activity sheet reads remake lines");
+  pass("the remake count: its own counter key, no ceiling, no effect on progress, floor-only, in the report");
+
   /* ================= 8. the rebase, and the office's later word ================= */
   const q = { part: "frames", value: 4, from: 3, at: "2026-09-16T12:00:00.000Z" };
   assert.deepStrictEqual(W.weldRebase(q, { FramesDone: 3, Frames: 6 }), { action: "keep" },
@@ -656,6 +699,21 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(await A('weldOfficeEdit("nosuchrow", "frames", 1)'), false);
   assert.strictEqual(writes().length, 0);
   pass("a click that could not move the number makes no request at all");
+
+  /* the remake count is read on the board and never written by the office */
+  reset();
+  assert.strictEqual(await A('weldOfficeEdit("500", "frames-remake", 1)'), false,
+    "the office cannot move a remake count");
+  assert.strictEqual(writes().length, 0, "and no request goes out for the try");
+  WITEMS.find(x => x.id === "500").fields.FramesRemade = 3;
+  A("WELD_ITEMS = null; WRECS = null; WRECS_OF = false;");
+  await A("readWelding()");
+  A("WELD_OPEN = { R7001: 1 };");
+  const remHtml = A("weldBoardHtml()");
+  assert.ok(/worem tab has[^>]*>↻ 3</.test(remHtml), "the open row shows the floor's 3 remakes on its Frames line");
+  assert.ok(!/data-wpart="frames-remake"/.test(remHtml), "and offers no button for it");
+  A("WELD_OPEN = {};");
+  pass("the office reads the remake count on its board and has no way to write one");
 
   /* ---- the office's board is up to ten seconds old (review finding 4) ----
      A welder taps All (49 of 49) at 14:00:01. This screen last polled at
@@ -779,7 +837,8 @@ JOBS.blockNames = NAMES;
   reset();
   await A("feedWelding()");
   writes().forEach(w => {
-    assert.ok(!("FramesDone" in (w.body || {})) && !("SashesDone" in (w.body || {})),
+    assert.ok(!("FramesDone" in (w.body || {})) && !("SashesDone" in (w.body || {})) &&
+              !("FramesRemade" in (w.body || {})) && !("SashesRemade" in (w.body || {})),
       "the feeder wrote a counter on a row the floor has tapped: " + JSON.stringify(w.body));
     assert.ok(!("DoneBy" in (w.body || {})) && !("DoneAt" in (w.body || {})),
       "and it must never write a By, an At or the last-touch pair");
@@ -816,6 +875,9 @@ JOBS.blockNames = NAMES;
            Who: "Person B", At: "2026-09-16T12:05:00.000Z" }, "2")], "Welding");
   assert.strictEqual(lrows.length, 1, "and the welding board reads its own station's lines only");
   assert.strictEqual(lrows[0].type, "CASEMENT WINDOWS");
+  assert.strictEqual(ST.logFields(W.weldLogEntry({ job: "R7001", group: "CASEMENT WINDOWS",
+    part: "frames-remake", from: 2, to: 3, who: "Person A", at: "2026-09-23T12:00:00.000Z" })).Stage,
+    "frames-remake", "a remake tap's line says which counter it moved");
   pass("a welding log line is the shared list's eight columns, read back by station");
 
   /* ================= 12. people, and one stage ================= */

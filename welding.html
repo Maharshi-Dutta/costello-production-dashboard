@@ -197,6 +197,23 @@
           font-weight:600; white-space:nowrap }
   .sbtn:active, .sall:active { background:var(--line-soft) }
   .sbtn:disabled, .sall:disabled { opacity:.4; cursor:default }
+  /* the remake count beside All (2026-09-23): a small pill with its own − and +,
+     set off from the done buttons by a wider gap so a thumb aiming for All does
+     not land on it. Same 56 px height; 48 px wide, narrower than a done button
+     on purpose - it is tapped a few times a week, not forty times a day. */
+  .remake { display:inline-flex; align-items:center; margin-left:10px; flex:none;
+            border:1px solid var(--line); border-radius:8px; background:var(--surface-2);
+            overflow:hidden }
+  .rbtn { width:48px; height:56px; flex:none; border:0; background:transparent;
+          color:var(--ink-2); font-size:22px; line-height:1 }
+  .rbtn:active { background:var(--line-soft) }
+  .rbtn:disabled { opacity:.35; cursor:default }
+  .rmkn { min-width:44px; text-align:center; font-size:19px; font-weight:700; color:var(--ink-3);
+          line-height:1; padding:0 2px }
+  .rmkl { display:block; font-size:10.5px; font-weight:600; letter-spacing:.04em;
+          text-transform:uppercase; color:var(--ink-4); margin-bottom:2px }
+  .remake.has { border-color:var(--warm) }
+  .remake.has .rmkn { color:var(--ink) }
 
   /* ---- a word for the office (station comments, 2026-09-15) ---- */
   .cmt { margin-top:11px; border-top:1px solid var(--line-soft); padding-top:9px }
