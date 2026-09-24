@@ -540,12 +540,16 @@ function weldFilter(cards, q) {
     (c.job + " " + c.customer + " " + c.groups.map(g => g.group).join(" ")).toLowerCase()
       .indexOf(want) >= 0);
 }
-/** The "Sent to floor" chip: on, it hides a card whose SentToFloor is blank.
-    Off by default, so every "In production" job is shown - the same as glass
-    (owner's decision 3, 2026-09-16). */
-function weldSentFilter(cards, on) {
-  if (!on) return (cards || []).slice();
-  return (cards || []).filter(c => !!wTxt(c.sentToFloor).trim());
+/** The tablet's two tabs (owner, 2026-09-24; replaced the "Sent to floor" chip
+    and the collapsed Finished group). On floor: the tablet's own board, cards
+    not finished. Finished: every other card of the office's board - finished
+    In production jobs AND every job in any other section still on the sheet.
+    Active = No is on neither, as on both boards. Each keeps weldCards' order. */
+function weldTabs(items) {
+  const floor = weldBoard(items).filter(c => !c.finished);
+  const onFloor = {};
+  floor.forEach(c => { onFloor[c.job] = 1; });
+  return { floor: floor, finished: weldOfficeBoard(items).filter(c => !onFloor[c.job]) };
 }
 /** "N left" for the header: frames left plus sashes left over the cards given.
     It is the BOARD's number, never the searched one - somebody looking a job up
@@ -703,7 +707,7 @@ function weldRebase(e, fields) {
 /** What one card is currently drawing, for the tablet's repaint diff. Anything
     not in here cannot make a card redraw. */
 function weldCardSig(c) {
-  return JSON.stringify([c.job, c.customer, c.comment, c.sentToFloor, c.wnd, c.drs,
+  return JSON.stringify([c.job, c.customer, c.comment, c.sentToFloor, c.section, c.wnd, c.drs,
     c.seq, c.finished, c.colour,
     c.groups.map(g => [g.id, g.group, g.colour,
                        WELD_PART_KEYS.map(k => [g[k], g[k + "Total"], g.remade[k], g.by[k], g.at[k]])])]);
@@ -790,7 +794,7 @@ const WELDC = {
   weldSectionOf, weldCommentOf, weldSentOf,
   weldActive, weldInProduction, weldColour, weldRollUp,
   weldRecord, weldRecords, weldCards, weldAtCmp,
-  weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldSentFilter,
+  weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldTabs,
   weldLeft, weldLeftByPart, weldLeftWords, weldQtyWords,
   weldFloorOnly, weldApplyTap, weldTapFields, weldOfficeFields,
   weldLogEntry, weldLogWords, weldRebase, weldCardSig, weldReportJobs,

@@ -40,7 +40,7 @@ const W = WELDC;
 const PERSON_KEY = "cw_wperson";
 const QUEUE_KEY = "cw_weldq";
 const LOGQ_KEY = "cw_weldlogq";
-const SENT_KEY = "cw_weldsent";          // is the "Sent to floor" chip on?
+const TAB_KEY = "cw_weldtab";            // the tab the board is on: "floor" | "finished"
 const RETRY_MS = 5000;
 const PEOPLE_MS = 600000;                // the people list is re-read every ten minutes
 
@@ -53,8 +53,7 @@ let PROBLEM = "";               // "site" | "list" | "people" | "consent" | "rea
 let SOFT = "";                  // a passing failure: the last board stays, with this line above it
 let LASTREAD = 0;
 let QUERY = "";                 // what is in the search box, if anything
-let SENTONLY = false;           // the "Sent to floor" chip, remembered on the device
-let FINOPEN = false;            // the Finished group is expanded
+let TAB = "floor";              // On floor / Finished, remembered on the device
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
@@ -64,8 +63,8 @@ const DELTA_OFF_MS = 300000;
 let DELTA_OFF = 0;
 const deltaOff = () => !!(DELTA_OFF && Date.now() - DELTA_OFF < DELTA_OFF_MS);
 
-try { SENTONLY = localStorage.getItem(SENT_KEY) === "1"; } catch (e) {}
-const saveSent = () => { try { localStorage.setItem(SENT_KEY, SENTONLY ? "1" : "0"); } catch (e) {} };
+try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
+const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
 
 /* ---- who is on the station -------------------------------------------------
    The name is not a login. It decides nothing about permission - the station
@@ -545,16 +544,18 @@ function itemsNow() {
     return { id: it.id, fields: Object.assign({}, it.fields, q) };
   });
 }
-let BOARD_BY_JOB = {};
 let RECS_BY_ID = {};
+/** `board` is the In production board, which the header counts; `tabs` is the
+    two tabs, whose cards are every tappable row - a Finished card in another
+    section takes a remake tap like any other (owner, 2026-09-24). */
 function boardNow() {
-  const board = W.weldBoard(itemsNow());
-  BOARD_BY_JOB = {}; RECS_BY_ID = {};
-  board.forEach(c => {
-    BOARD_BY_JOB[c.job] = c;
+  const items = itemsNow();
+  const tabs = W.weldTabs(items);
+  RECS_BY_ID = {};
+  tabs.floor.concat(tabs.finished).forEach(c => {
     c.groups.forEach(g => { RECS_BY_ID[String(g.id)] = g; });
   });
-  return board;
+  return { board: W.weldBoard(items), tabs: tabs };
 }
 const recordById = id => RECS_BY_ID[String(id)] || null;
 
@@ -622,6 +623,9 @@ function cardInner(c) {
   return '<div class="chead">' +
       '<span class="cond job">' + esc(c.job) + '</span>' +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
+      /* a job off the floor's section, on the Finished tab: say where it is */
+      (c.section && !W.weldInProduction({ Section: c.section })
+        ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
       (c.sentToFloor ? '<span class="csent tab">sent to floor ' + esc(c.sentToFloor) + '</span>' : "") +
     '</div>' +
     (qty || c.comment
@@ -678,7 +682,8 @@ function submitPin() {
    finger is already on its way to, so the cards are kept as nodes keyed by job
    and only the ones boardDiff names are touched. */
 let NODES = {};
-let DOING = null, FINHEAD = null, FIN = null;
+let LIST = null;                // the one column of cards, for the tab it was drawn for
+let LIST_TAB = "";
 let BOARD_PREV = null;
 let QSIG = {};                  // job -> what this tablet owed on it when last drawn
 let PSIG = "";                  // who the cards were drawn for
@@ -721,14 +726,12 @@ function dressCard(el, c) {
   try { box.focus(); if (box.setSelectionRange) box.setSelectionRange(to, to); } catch (e) {}
 }
 function paintBoard(host, board) {
-  if (!DOING) {
+  /* a tab switch starts the column again: its cards are another set */
+  if (!LIST || LIST_TAB !== TAB) {
     host.innerHTML = "";
-    DOING = document.createElement("div"); DOING.className = "grp";
-    FINHEAD = document.createElement("div"); FINHEAD.className = "grouphead";
-    if (FINHEAD.addEventListener)
-      FINHEAD.addEventListener("click", () => { FINOPEN = !FINOPEN; render(); });
-    FIN = document.createElement("div"); FIN.className = "grp fin";
-    host.appendChild(DOING); host.appendChild(FINHEAD); host.appendChild(FIN);
+    LIST = document.createElement("div"); LIST.className = "grp";
+    LIST_TAB = TAB;
+    host.appendChild(LIST);
     NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
   }
   const diff = ST.boardDiff(BOARD_PREV, board, W.weldCardSig);
@@ -761,17 +764,13 @@ function paintBoard(host, board) {
     board.forEach(c => {
       const el = NODES[c.job];
       if (!el) return;
-      (c.finished ? FIN : DOING).appendChild(el);
+      LIST.appendChild(el);
     });
     if (box && document.activeElement !== box) {
       try { box.focus(); if (box.setSelectionRange && at != null) box.setSelectionRange(at, at); }
       catch (e) {}
     }
   }
-  const done = board.filter(c => c.finished).length;
-  FINHEAD.textContent = done ? "Finished · " + done + (FINOPEN ? " ▾" : " ▸") : "";
-  FINHEAD.hidden = !done;
-  FIN.hidden = !done || !FINOPEN;
   BOARD_PREV = board;
 }
 
@@ -785,23 +784,26 @@ function render() {
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
 
   const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
-  /* the search box and the chip belong to the board: there is nothing to
+  /* the search box and the tabs belong to the board: there is nothing to
      narrow on the picker, and a box over an error message only looks broken */
   const sb = $("#search");
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
-  const chip = $("#sentchip");
-  if (chip) {
-    chip.hidden = !boarding;
-    chip.style.display = boarding ? "" : "none";
-    chip.className = "chip" + (SENTONLY ? " on" : "");
-    chip.setAttribute("aria-pressed", SENTONLY ? "true" : "false");
-  }
+  const now = boarding ? boardNow() : null;
+  const tabs = $("#wtabs");
+  if (tabs) { tabs.hidden = !boarding; tabs.style.display = boarding ? "" : "none"; }
+  [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
+    const b = $(s);
+    if (!b) return;
+    b.className = TAB === t ? "on" : "";
+    b.setAttribute("aria-selected", TAB === t ? "true" : "false");
+    b.textContent = label + (now ? " · " + now.tabs[t].length : "");
+  });
 
-  /* the board as it stands, before the box and the chip have narrowed it: the
+  /* the In production board, before the tab and the box have narrowed it: the
      number in the header is read off this and is deliberately NOT narrowed by
      either - somebody looking a job number up must not make the day's work read
      shorter than it is */
-  const live = boarding ? boardNow() : null;
+  const live = now ? now.board : null;
   const gtf = $("#gtotalf"), gts = $("#gtotals");
   const on = boarding && mayWeld();
   const byPart = on ? W.weldLeftByPart(live) : null;
@@ -819,20 +821,21 @@ function render() {
 
   /* Who are you? comes before the board and after any real problem with it */
   if (!boarding) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     if (!PROBLEM && PEOPLE_READ && !PERSON) { host.innerHTML = pickerHtml(); wirePicker(host); return; }
     host.innerHTML = '<div class="msg">' + esc(words()) + againHtml() + '</div>';
     wireAgain();
     return;
   }
 
-  const board = W.weldFilter(W.weldSentFilter(live, SENTONLY), QUERY);
+  const board = W.weldFilter(now.tabs[TAB], QUERY);
   if (!board.length) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
-      (QUERY ? "No job on the board matches “" + esc(QUERY) + "”."
-       : SENTONLY ? "No job on the board has a “sent to floor” date yet."
-       : "Nothing on the board yet.") + '</div>';
+      (QUERY ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") +
+               " matches “" + esc(QUERY) + "”."
+       : TAB === "floor" ? "Nothing on the floor right now."
+       : "No finished jobs yet.") + '</div>';
     return;
   }
   paintBoard(host, board);
@@ -961,12 +964,17 @@ async function start() {
   $("#outbtn").onclick = () => { if (confirm("Sign out of the Welding station?")) CW.signOut(); };
   const sw = $("#switchbtn");
   if (sw) sw.onclick = () => switchPerson();
-  /* the box and the chip are in the header, outside #board, so using them never
+  /* the box and the tabs are in the header, outside #board, so using them never
      rebuilds the node the caret is in */
   const sb = $("#search");
   if (sb) sb.oninput = () => { QUERY = sb.value || ""; touch(); render(); };
-  const chip = $("#sentchip");
-  if (chip) chip.onclick = () => { SENTONLY = !SENTONLY; saveSent(); touch(); render(); };
+  [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
+    const b = $(s);
+    if (b) b.onclick = () => {
+      if (TAB !== t) { TAB = t; saveTab(); try { window.scrollTo(0, 0); } catch (e) {} }
+      touch(); render();
+    };
+  });
   render();
   await readPeople();
   await readList();

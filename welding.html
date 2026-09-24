@@ -89,13 +89,14 @@
             border-radius:24px; min-height:48px; padding:0 16px; font-size:16px;
             font-family:inherit; flex:1 1 auto; min-width:90px; width:auto }
   #search::placeholder { color:#8a867e }
-  /* the "Sent to floor" chip: off by default, so every In production job shows
-     (owner's decision 3, 2026-09-16 - the same as glass). On, it hides a job
-     with no date in that column. Remembered on the device. */
-  #sentchip { background:var(--brand-2); color:#a8a49a; border:1px solid var(--brand-line);
-              border-radius:24px; min-height:48px; padding:0 15px; font-size:14px; font-weight:600;
-              white-space:nowrap; flex:none }
-  #sentchip.on { background:var(--onbrand); color:var(--brand); border-color:var(--onbrand) }
+  /* the two tabs, On floor and Finished, where the "Sent to floor" chip was
+     (owner, 2026-09-24). One segmented pill; the chosen tab is the light one.
+     Remembered on the device (cw_weldtab). */
+  #wtabs { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
+           overflow:hidden; background:var(--brand-2) }
+  #wtabs button { background:transparent; color:#a8a49a; border:0; min-height:48px; padding:0 13px;
+                  font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
+  #wtabs button.on { background:var(--onbrand); color:var(--brand) }
   #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:48px; padding:0 15px; font-size:14px; font-weight:600;
                white-space:nowrap; flex:none }
@@ -112,9 +113,6 @@
   #main { padding:14px 16px 40px; max-width:980px; margin:0 auto }
   #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
   .grp { display:flex; flex-direction:column; gap:12px }
-  .grouphead { font-size:12px; letter-spacing:.14em; text-transform:uppercase; cursor:pointer;
-               font-weight:600; color:var(--ink-4); margin:18px 0 6px; min-height:48px;
-               display:flex; align-items:center }
   .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
   .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
            border-radius:6px; background:var(--surface); color:var(--ink); font-size:15px }
@@ -131,6 +129,9 @@
   /* the date the office sent it down, right-aligned on the head's own line */
   .csent { font-size:14px; font-weight:600; color:var(--ink-3); white-space:nowrap;
            flex:none; margin-left:auto }
+  /* the section of a job that has left In production (Finished tab only) */
+  .csec { font-size:13px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none;
+          border:1px solid var(--line); border-radius:12px; padding:1px 9px }
   .cfacts { display:flex; gap:12px; align-items:baseline; margin-bottom:12px; flex-wrap:nowrap }
   .cqty { font-size:15px; font-weight:600; color:var(--ink-2); white-space:nowrap; flex:none }
   /* the COMMENT, after the rule-3 strip (welding-core's weldStripDigits). No
@@ -170,7 +171,7 @@
      every card, at every width. Everything tapped is 56 px tall and at least
      64 px wide, because it is tapped with a work glove on. */
   .steps { display:flex; flex-direction:column; gap:10px }
-  .step { display:grid; grid-template-columns:116px minmax(80px,1fr) auto;
+  .step { display:grid; grid-template-columns:104px minmax(76px,1fr) auto;
           gap:12px; align-items:center }
   .step.locked { opacity:.5 }
   .stepl { font-size:16px; color:var(--ink-2); min-width:0 }
@@ -197,23 +198,27 @@
           font-weight:600; white-space:nowrap }
   .sbtn:active, .sall:active { background:var(--line-soft) }
   .sbtn:disabled, .sall:disabled { opacity:.4; cursor:default }
-  /* the remake count beside All (2026-09-23): a small pill with its own − and +,
-     set off from the done buttons by a wider gap so a thumb aiming for All does
-     not land on it. Same 56 px height; 48 px wide, narrower than a done button
-     on purpose - it is tapped a few times a week, not forty times a day. */
-  .remake { display:inline-flex; align-items:center; margin-left:10px; flex:none;
+  /* the remake count beside All (2026-09-23; made bigger 2026-09-24 so it reads
+     from across the bay): a pill with its own − and +, set off from the done
+     buttons by a wider gap so a thumb aiming for All does not land on it.
+     EVERY WIDTH IN IT IS FIXED (162 px whole), so the button column is the same
+     on every row whatever the count, and so the row fits a 700 px tablet: the
+     label track (104) + the count's minimum (76) + two 12 px gaps + the done
+     buttons (228) + this pill and its gap leave nothing to scroll sideways.
+     Accent-coloured once there is a remake to see. */
+  .remake { display:inline-flex; align-items:center; margin-left:6px; flex:none; width:162px;
             border:1px solid var(--line); border-radius:8px; background:var(--surface-2);
             overflow:hidden }
-  .rbtn { width:48px; height:56px; flex:none; border:0; background:transparent;
-          color:var(--ink-2); font-size:22px; line-height:1 }
+  .rbtn { width:44px; height:56px; flex:none; border:0; background:transparent;
+          color:var(--ink-2); font-size:24px; line-height:1 }
   .rbtn:active { background:var(--line-soft) }
   .rbtn:disabled { opacity:.35; cursor:default }
-  .rmkn { min-width:44px; text-align:center; font-size:19px; font-weight:700; color:var(--ink-3);
-          line-height:1; padding:0 2px }
-  .rmkl { display:block; font-size:10.5px; font-weight:600; letter-spacing:.04em;
-          text-transform:uppercase; color:var(--ink-4); margin-bottom:2px }
-  .remake.has { border-color:var(--warm) }
-  .remake.has .rmkn { color:var(--ink) }
+  .rmkn { width:72px; flex:none; text-align:center; font-size:27px; font-weight:700; color:var(--ink-3);
+          line-height:1 }
+  .rmkl { display:block; font-size:11.5px; font-weight:700; letter-spacing:.08em;
+          text-transform:uppercase; color:var(--ink-3); margin-bottom:3px }
+  .remake.has { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent) }
+  .remake.has .rmkn, .remake.has .rmkl { color:var(--accent) }
 
   /* ---- a word for the office (station comments, 2026-09-15) ---- */
   .cmt { margin-top:11px; border-top:1px solid var(--line-soft); padding-top:9px }
@@ -280,11 +285,12 @@
        that scrolls horizontally is worse than a header that is three lines. */
     .toprow { flex-wrap:wrap; row-gap:8px }
     #main { padding:12px 12px 32px }
-    .step { grid-template-columns:1fr auto; row-gap:6px }
-    .stepmid { grid-column:1/-1; order:3 }
+    /* one track: label, count, then the buttons - beside the label they
+       squeezed it to nothing once the buttons were wider than the phone */
+    .step { grid-template-columns:1fr; row-gap:6px }
     /* the remake pill drops under the done buttons rather than pushing the
        page sideways */
-    .stepc { flex-wrap:wrap; row-gap:8px }
+    .stepc { flex-wrap:wrap; row-gap:8px; justify-content:flex-start }
     .remake { margin-left:0 }
     .stepl { font-size:15px }
     .job { font-size:25px }
@@ -323,7 +329,9 @@
   </div>
   <div class="toprow">
     <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
-    <button class="chip" id="sentchip" aria-pressed="false" hidden>Sent to floor</button>
+    <span id="wtabs" role="tablist" hidden>
+      <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
+    </span>
     <button id="switchbtn" hidden>Switch person</button>
     <button id="themebtn">Light</button>
     <button id="outbtn">Sign out</button>

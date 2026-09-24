@@ -523,15 +523,38 @@ JOBS.blockNames = NAMES;
     "the two capsules must add back to the one number weldLeft gives");
   pass("weldLeftByPart splits the header's N left into frames and sashes, and a Super door contributes 0 frames");
 
-  assert.deepStrictEqual(W.weldSentFilter(board, false).map(c => c.job), ["R7001", "R7005"]);
-  assert.deepStrictEqual(W.weldSentFilter(board, true).map(c => c.job), ["R7001"],
-    "the chip hides a job with a blank sent-to-floor date");
+  /* the two tabs (2026-09-24): On floor = In production and not finished;
+     Finished = every other Active card - a finished In production job AND a
+     job in any other section, finished or not. Active = No is on neither. */
+  assert.strictEqual(W.weldSentFilter, undefined, "the sent-to-floor chip's filter is gone");
+  const tabRows = rows.concat([
+    item({ Title: "R3708|CASEMENT WINDOWS", Job: "R3708", Group: "CASEMENT WINDOWS", GroupSeq: 0,
+      Customer: "Customer Eight", Frames: 3, Sashes: 3, FramesDone: 1, SashesDone: 0, Seq: 4,
+      Section: "Ready to fit", Active: "Yes" }, "510")]);
+  const tabs = W.weldTabs(tabRows);
+  assert.deepStrictEqual(tabs.floor.map(c => c.job), ["R7001"],
+    "On floor: the unfinished In production job only");
+  assert.deepStrictEqual(tabs.finished.map(c => c.job), ["R7005", "R7006", "R3708"],
+    "Finished: the finished In production job, the unfinished Finished-section job and the " +
+    "unfinished Ready-to-fit job, in the boards' own order; the Active = No R7007 on neither");
+  assert.strictEqual(tabs.finished.find(c => c.job === "R3708").section, "Ready to fit",
+    "a card off the floor carries its section, for the card head");
+  const tabCount = tabs.floor.length + tabs.finished.length;
+  assert.strictEqual(tabCount, W.weldOfficeBoard(tabRows).length,
+    "the two tabs together are exactly the office's board, no card twice and none lost");
+  assert.deepStrictEqual(W.weldLeftByPart(W.weldBoard(tabRows)), W.weldLeftByPart(board),
+    "the header's Frames/Sashes left is still the In production board alone - a job in another section adds nothing");
+  assert.deepStrictEqual(W.weldTabs([]), { floor: [], finished: [] });
+  assert.ok(W.weldCardSig(tabs.finished[2]) !== W.weldCardSig(Object.assign({}, tabs.finished[2], { section: "Ready" })),
+    "a section change redraws the card, since the card head shows it");
+  pass("the tablet's two tabs split the office's board: On floor and Finished, Active = No on neither");
+
   assert.deepStrictEqual(W.weldFilter(board, "7005").map(c => c.job), ["R7005"]);
   assert.deepStrictEqual(W.weldFilter(board, "customer one").map(c => c.job), ["R7001"]);
   assert.deepStrictEqual(W.weldFilter(board, "pvc door").map(c => c.job), ["R7001"],
     "the box finds a group as well as a job and a customer");
   assert.strictEqual(W.weldFilter(board, "").length, 2, "an empty box is every card");
-  pass("the search box and the sent-to-floor chip narrow the board and never become it");
+  pass("the search box narrows the board and never becomes it");
 
   /* ================= 7. the tap ================= */
   const rec = W.weldRecord(item({ Title: "R7001|CASEMENT WINDOWS", Job: "R7001",
@@ -944,7 +967,11 @@ JOBS.blockNames = NAMES;
     "and the board has no two-column break left in it at any width");
   assert.ok(/\.toprow/.test(page) && (page.match(/class="toprow"/g) || []).length === 2,
     "the header is two explicit rows, not one that wraps");
-  assert.ok(page.indexOf("id=\"sentchip\"") > 0, "the sent-to-floor chip is in the header");
+  assert.ok(page.indexOf("id=\"sentchip\"") < 0, "the sent-to-floor chip is gone (owner, 2026-09-24)");
+  assert.ok(page.indexOf("id=\"tabfloor\"") > 0 && page.indexOf("id=\"tabfin\"") > 0,
+    "and the On floor / Finished tabs are in the header where it was");
+  assert.ok(/\.remake \{[^}]*width:162px/.test(page) && /\.rmkn \{ width:72px/.test(page),
+    "the remake pill and its count are fixed widths, so the button column never moves between rows");
   pass("welding.html loads five scripts and cannot reach the workbook through any of them");
 
   /* rule 4: no real person, address or company domain anywhere in what was
