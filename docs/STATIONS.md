@@ -54,7 +54,9 @@ iteration is deployed; the code tolerates them either way. Columns:
 | Total | number | feeder | **glasses on the job = DG + TG** |
 | TuffTotal | number | feeder | tuff units on the job, off the sheet's own TUFF column. **Never added to `Total`** (added 2026-09-10) |
 | Seq | number | feeder | the job's position in the master list, so the floor sees the office's order |
-| Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards |
+| Active | text | feeder | `Yes` while the job is in production and has glass, `No` afterwards (a later section, or off the sheet) |
+| Section | text | feeder | the job's section on the sheet, as the divider row names it (e.g. `Ready to fit`). Since 2026-09-24 every job with glass still on the sheet is fed, in any section; the tablet's Finished tab shows it on the card head |
+| OnSheet | text | feeder | `Yes` while the job is still on the sheet (any section), `No` once it has left it. The tablet never shows an `OnSheet = No` row (added 2026-09-24) |
 | OfficeDone | text | feeder; **also set to `No` by an office clear** | `Yes` when the office has ticked this job's DG and TG off. The job's **glass stages** are then read-only on the tablet and on the office's board; **Tuff is outside the lock** since 2026-09-21 (added 2026-09-10) |
 | FedAt | text | feeder | ISO timestamp of the last feed that changed this item |
 | FedBy | text | feeder | who was signed in to the master dashboard at the time |

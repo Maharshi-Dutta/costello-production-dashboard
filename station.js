@@ -48,7 +48,15 @@ let PROBLEM = "";               // "site" | "list" | "people" | "consent" | "rea
 let SOFT = "";                  // a passing failure: the last board stays, with this line above it
 let LASTREAD = 0;
 let QUERY = "";                 // what is in the search box, if anything
-let FINOPEN = false;            // the Finished group is expanded
+/* the two tabs, On floor and Finished (owner, 2026-09-24; replaced the
+   collapsed Finished group). Remembered on the device. A search may move the
+   board to the other tab; PRETAB is the tab it was on before the typing began,
+   and clearing the box goes back to it. */
+const TAB_KEY = "cw_glasstab";
+let TAB = "floor";
+let PRETAB = null;
+try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
+const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
 let PERSON = null;              // the person who picked their name
 let LAST_TAP = 0;               // when they last touched anything, for the lock
 let PINFOR = null;              // the person whose PIN is being asked for
@@ -151,14 +159,22 @@ function savePerson() {
 }
 /** Every tap pushes the lock back. */
 function touch() { LAST_TAP = Date.now(); savePerson(); }
-function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; touch(); render(); }
-function switchPerson() {
-  PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; LAST_TAP = 0;
-  /* the box belongs to whoever was just holding the tablet: the next person
-     must not be handed a board narrowed to somebody else's search */
+/** The box belongs to whoever was just holding the tablet: the next person must
+    not be handed a board narrowed - or a tab moved - by somebody else's search.
+    Called on a switch (and so on the idle lock, which switches) and on a pick. */
+function clearSearch() {
   QUERY = "";
+  if (PRETAB) { TAB = PRETAB; saveTab(); }
+  PRETAB = null;
   const sb = $("#search");
   if (sb) sb.value = "";
+}
+function pickPerson(p) {
+  PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; clearSearch(); touch(); render();
+}
+function switchPerson() {
+  PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; LAST_TAP = 0;
+  clearSearch();
   /* AND NEITHER IS THE DAY SHEET (review, 2026-09-21). It was left open across
      a change of person, so the next name to be picked was shown the last
      person's half-typed numbers, on a form whose Save would have filed them
@@ -990,7 +1006,10 @@ function tap(id, stage, delta) {
      one's to move, however the click got here. */
   if (!PERSON || !ST.canStage(PERSON, stage)) return;
   if (stage !== PAGE_STAGE && !(tuffHere() && stage === ST.TUFF_STAGE)) return;
-  const row = boardNow().find(g => g.id === id);
+  /* either tab: a Finished card is tapped exactly as it always was, unless the
+     office has locked it (owner's decision 2, 2026-09-24) */
+  const tabs = tabsNow();
+  const row = tabs.floor.concat(tabs.finished).find(g => g.id === id);
   if (!row) return;
   /* the office has marked this job's GLASS finished. Only the office can undo
      that, so there is nothing the floor can do here but see it. Same belt and
@@ -1026,18 +1045,22 @@ function tap(id, stage, delta) {
     job with tuff still to count has not left the cutter's way however much
     glass is cut. The hotmelting page is untouched by it: tuff is not that
     bench's work and never appears on it. */
-function boardNow() {
+/* Since 2026-09-24 the tabs are the primary reading (tabsNow): On floor /
+   Finished (ST.glassTabs), whose cards include the jobs still on the sheet in
+   a later section. boardNow() is the In production cards (Active) among them,
+   which the header counts. */
+function tabsNow() {
   const over = ITEMS.map(it => {
     const q = queuedFor(String(it.id));
     if (!q) return it;
     return { id: it.id, fields: Object.assign({}, it.fields, q) };
   });
-  const board = ST.jobBoard(over);
-  board.forEach(g => {
-    g.finished = ST.stageComplete(g, PAGE_STAGE) && !(tuffHere() && ST.tuffOwed(g));
-  });
-  return board;
+  return ST.glassTabs(over, g =>
+    ST.stageComplete(g, PAGE_STAGE) && !(tuffHere() && ST.tuffOwed(g)));
 }
+const activeOf = tabs => tabs.floor.concat(tabs.finished).filter(g => g.active)
+  .sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
+function boardNow() { return activeOf(tabsNow()); }
 
 /* ---- drawing ---- */
 const agoWords = at => {
@@ -1119,6 +1142,8 @@ function cardInner(g) {
   return '<div class="chead">' +
       '<span class="cond job">' + esc(g.job) + '</span>' +
       '<span class="cust">' + esc(g.customer || "—") + '</span>' +
+      /* a job off In production, on the Finished tab: say where it is */
+      (!g.active && g.section ? '<span class="csec">' + esc(g.section) + '</span>' : "") +
       '<span class="cnum tab">' + esc(ST.glassWords(g.total) +
           (g.tuffTotal > 0 ? " · " + g.tuffTotal + " tuff" : "")) + '</span>' +
     '</div>' +
@@ -1364,7 +1389,8 @@ function submitPin() {
    builds the two groups; nothing after it ever sets the whole board's
    innerHTML again.                                                          */
 let NODES = {};                 // job -> the card element
-let DOING = null, FINHEAD = null, FIN = null;
+let LIST = null;                // the one column of cards, for the tab it was drawn for
+let LIST_TAB = "";
 let BOARD_PREV = null;          // the board these nodes were drawn from
 let QSIG = {};                  // job -> what this tablet owed on it when it was last drawn
 let PSIG = "";                  // who the cards were drawn for, and with which stages
@@ -1426,16 +1452,12 @@ function dressCard(el, g) {
   try { box.focus(); if (box.setSelectionRange) box.setSelectionRange(to, to); } catch (e) {}
 }
 function paintBoard(host, board) {
-  if (!DOING) {
+  /* a tab switch starts the column again: its cards are another set */
+  if (!LIST || LIST_TAB !== TAB) {
     host.innerHTML = "";
-    DOING = document.createElement("div"); DOING.className = "grp";
-    FINHEAD = document.createElement("div"); FINHEAD.className = "grouphead";
-    /* wired here rather than in wireBoard: this node is rebuilt whenever a
-       message has taken the board's place, and it must come back live */
-    if (FINHEAD.addEventListener)
-      FINHEAD.addEventListener("click", () => { FINOPEN = !FINOPEN; render(); });
-    FIN = document.createElement("div"); FIN.className = "grp fin";
-    host.appendChild(DOING); host.appendChild(FINHEAD); host.appendChild(FIN);
+    LIST = document.createElement("div"); LIST.className = "grp";
+    LIST_TAB = TAB;
+    host.appendChild(LIST);
     NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
   }
   const diff = ST.boardDiff(BOARD_PREV, board);
@@ -1478,7 +1500,7 @@ function paintBoard(host, board) {
     board.forEach(g => {
       const el = NODES[g.job];
       if (!el) return;
-      (g.finished ? FIN : DOING).appendChild(el);
+      LIST.appendChild(el);
     });
     if (box && document.activeElement !== box) {
       try {
@@ -1487,10 +1509,6 @@ function paintBoard(host, board) {
       } catch (e) {}
     }
   }
-  const done = board.filter(g => g.finished).length;
-  FINHEAD.textContent = done ? "Finished · " + done + (FINOPEN ? " ▾" : " ▸") : "";
-  FINHEAD.hidden = !done;
-  FIN.hidden = !done || !FINOPEN;
   BOARD_PREV = board;
 }
 
@@ -1528,9 +1546,30 @@ function render() {
   const sb = $("#search");
   const boarding = !!PAGE_STAGE && !PROBLEM && PEOPLE_READ && !!PERSON && READY && !DAYOPEN;
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
-  /* the board as it stands, before the box has narrowed it: the number beside
-     the box is read off this, and the cards below off the filtered copy */
-  const live = boarding ? boardNow() : null;
+  /* the board as it stands, before the tab and the box have narrowed it: the
+     number beside the box is read off the In production cards, and the cards
+     below off the chosen tab, filtered */
+  const now = boarding ? { tabs: tabsNow() } : null;
+  const live = now ? activeOf(now.tabs) : null;
+  const tabsEl = $("#gtabs");
+  if (tabsEl) { tabsEl.hidden = !boarding; tabsEl.style.display = boarding ? "" : "none"; }
+  [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
+    const b = $(s);
+    if (!b) return;
+    b.className = TAB === t ? "on" : "";
+    b.setAttribute("aria-selected", TAB === t ? "true" : "false");
+    b.textContent = label + (now ? " · " + now.tabs[t].length : "");
+  });
+  /* both tabs match the search: a tappable line says how many more are on the
+     other one (owner's decision 3, 2026-09-24) */
+  const pick = now ? ST.tabSearch(now.tabs, TAB, QUERY) : null;
+  const more = $("#more");
+  if (more) {
+    const on = !!(pick && pick.more);
+    more.hidden = !on;
+    more.style.display = on ? "" : "none";
+    more.textContent = on ? pick.more + " more " + (pick.other === "finished" ? "in Finished" : "on floor") : "";
+  }
   /* what is left for the person signed in, one number per stage they hold,
      added down the whole board: the very same numbers the cards show, said the
      same way, so the header and the cards always agree and every tap moves
@@ -1566,7 +1605,7 @@ function render() {
   if (!PAGE_STAGE || PROBLEM || !PEOPLE_READ || !PERSON || !READY) {
     /* a message or the picker takes the board's place, so the card nodes are
        let go: the next good read paints them fresh */
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     /* which tablet this is comes before everything, including a SharePoint
        problem: the answer is about the device and needs no list to give */
     if (!PAGE_STAGE) { host.innerHTML = chooserHtml(); wireChooser(host); return; }
@@ -1579,7 +1618,7 @@ function render() {
   /* the end-of-day sheet takes the board's place, the way the picker does: one
      thing on screen at a time, and the card nodes are let go while it is up */
   if (DAYOPEN && daySheet()) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = daySheetHtml();
     wireDaySheet(host);
     return;
@@ -1588,12 +1627,14 @@ function render() {
 
   /* the search box narrows the board and never becomes it: an empty box is
      every card, and a box nothing matches says so rather than looking broken */
-  const board = ST.boardFilter(live, QUERY);
+  const board = ST.boardFilter(now.tabs[TAB], QUERY);
   if (!board.length) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
-      (QUERY ? "No job on the board matches “" + esc(QUERY) + "”." : "Nothing on the board yet.") +
-      '</div>';
+      (QUERY ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") +
+               " matches “" + esc(QUERY) + "”."
+       : TAB === "floor" ? "Nothing on the floor right now."
+       : "No finished jobs yet.") + '</div>';
     return;
   }
   paintBoard(host, board);
@@ -1751,6 +1792,19 @@ function showGate(on, err) {
   e.textContent = err || "";
 }
 
+/** One keystroke in the search box (see start()). */
+function onSearch(value) {
+  const was = QUERY.trim();
+  QUERY = String(value || "");
+  const q = QUERY.trim();
+  const from = TAB;
+  if (q && !was && PRETAB == null) PRETAB = TAB;
+  if (!q) { if (PRETAB) TAB = PRETAB; PRETAB = null; saveTab(); }
+  else TAB = ST.tabSearch(tabsNow(), TAB, QUERY).tab;
+  if (TAB !== from) { try { window.scrollTo(0, 0); } catch (e) {} }
+  touch(); render();
+}
+
 async function start() {
   showGate(false);
   applyTheme(themeNow());
@@ -1766,7 +1820,25 @@ async function start() {
   /* the box is in the header, outside #board, so typing in it never rebuilds
      the node the caret is in - only the cards under it are redrawn */
   const sb = $("#search");
-  if (sb) sb.oninput = () => { QUERY = sb.value || ""; touch(); render(); };
+  /* SEARCH ACROSS BOTH TABS (owner's decision 3, 2026-09-24): the tab this
+     board was on when the typing began is remembered; while there is a query,
+     a tab with no match gives way to the other tab if that one has one; an
+     emptied box goes back to the remembered tab. Decided on typing only, so a
+     tab the person taps mid-search stays where they put it. */
+  if (sb) sb.oninput = () => onSearch(sb.value);
+  [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
+    const b = $(s);
+    if (b) b.onclick = () => {
+      if (TAB !== t) { TAB = t; if (PRETAB == null) saveTab(); try { window.scrollTo(0, 0); } catch (e) {} }
+      touch(); render();
+    };
+  });
+  const mb = $("#more");
+  if (mb) mb.onclick = () => {
+    TAB = TAB === "floor" ? "finished" : "floor";
+    try { window.scrollTo(0, 0); } catch (e) {}
+    touch(); render();
+  };
   render();
   await readPeople();
   await readList();

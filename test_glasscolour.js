@@ -644,6 +644,22 @@ const officeAt = (h, mi) => "2026-09-10 " + (h < 10 ? "0" : "") + h + ":" + (mi 
   assert.strictEqual(CALLS.length, 0);
   pass("a job never fed to the floor, and a job marked ready, are both left entirely alone");
 
+  /* 2026-09-24: the feeder now also carries jobs in later sections (Active
+     No, OnSheet Yes). A Ready-to-fit job whose office record says its glass
+     is done arrives SEEDED at the total - and an untouched row, however it is
+     seeded, is never painted. Seeding counts is fine; painting is not. */
+  global.__jr = mkJob({ blk: 3 });
+  global.__items = [row({ Active: "No", OnSheet: "Yes", Section: "Ready to fit", OfficeDone: "Yes",
+                          Cut: 8, Hotmelt: 8, Tuff: 0, DoneAt: "" })];
+  A("PENDING = {}; savePending(); ALL = [__jr]; STATION_ITEMS = __items; BLOCKNAMES = ['a','b','c','Ready to fit','In production'];");
+  seedRecord(global.__jr);
+  reset();
+  assert.strictEqual(await glassColourRun(), 0, "an untouched later-section row paints nothing");
+  assert.strictEqual(CALLS.length, 0, "and asks nobody anything");
+  assert.strictEqual(A("glassColourPlan(__jr)"), null);
+  A("BLOCKNAMES = [];");
+  pass("a newly fed later-section row, seeded but untouched, never repaints the sheet");
+
   /* ================= 5b. the office's own yellow survives the round trip ====
      OWNER DECISION, 2026-09-10. Found by the rehearsal against the real file:
      the one yellow glass cell in the whole workbook was being erased to blank

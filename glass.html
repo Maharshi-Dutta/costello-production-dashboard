@@ -83,6 +83,14 @@
      somebody who holds everything. It is therefore allowed to shrink and to
      wrap onto a second line inside its own pill (flex:0 1 auto, no nowrap)
      rather than running off the side of a tablet nobody can scroll back. */
+  /* the two tabs, On floor and Finished, where the collapsed Finished group
+     was (owner, 2026-09-24). One segmented pill; the chosen tab is the light
+     one. Remembered on the device (cw_glasstab). */
+  #gtabs { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
+           overflow:hidden; background:var(--brand-2) }
+  #gtabs button { background:transparent; color:#a8a49a; border:0; min-height:44px; padding:0 14px;
+                  font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
+  #gtabs button.on { background:var(--onbrand); color:var(--brand) }
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
             padding:8px 16px; min-height:40px; flex:0 1 auto; line-height:1.35;
@@ -101,9 +109,12 @@
      with it the whole board, wider than the tablet. The page then scrolled
      sideways, which the owner's rule of 2026-09-17 forbids outright. */
   .grp { display:grid; grid-template-columns:minmax(0,1fr); gap:13px }
-  .grouphead { font-size:11px; letter-spacing:.15em; text-transform:uppercase; cursor:pointer;
-               font-weight:600; color:var(--ink-4); margin:16px 0 8px; min-height:44px;
-               display:flex; align-items:center }
+  /* "N more in Finished" / "N more on floor": both tabs match the search, and
+     this switches to the other one (owner's decision 3, 2026-09-24) */
+  #more { display:block; width:100%; min-height:48px; margin:0 0 12px; padding:0 16px;
+          border:1px dashed var(--line); border-radius:7px; background:var(--surface-2);
+          color:var(--ink-2); font-size:15px; font-weight:600; text-align:left }
+  #more:active { background:var(--line-soft) }
   .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
   .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
            border-radius:6px; background:var(--surface); color:var(--ink); font-size:15px }
@@ -124,6 +135,9 @@
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
   .cnum { font-size:14px; font-weight:600; color:var(--ink-2); white-space:nowrap;
           flex:0 0 auto; margin-left:auto; max-width:100% }
+  /* the section of a job that has left In production (Finished tab only) */
+  .csec { font-size:13px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none;
+          border:1px solid var(--line); border-radius:12px; padding:1px 9px }
 
   .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
   .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
@@ -304,6 +318,9 @@
   <button id="switchbtn" hidden>Switch person</button>
   <button id="daybtn" hidden>End of day</button>
   <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
+  <span id="gtabs" role="tablist" hidden>
+    <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
+  </span>
   <span id="gtotal" hidden></span>
   <span id="upd"></span>
   <button id="themebtn">Light</button>
@@ -312,6 +329,7 @@
 
 <div id="main" hidden>
   <div id="soft" hidden></div>
+  <button id="more" hidden></button>
   <div id="board"></div>
 </div>
 

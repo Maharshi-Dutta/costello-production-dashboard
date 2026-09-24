@@ -88,7 +88,16 @@ const stageLabel = k => (ALL_STAGES.find(s => s[0] === k) || [k, LEGACY_STAGE_LA
    is finished here", which greys the tablet's steppers; it is the office's own
    column and only the office ever writes it, so it belongs in this list and not
    in the floor's. */
-const FEEDER_FIELDS = ["Job", "Customer", "GlassType", "Total", "TuffTotal", "Seq", "Active", "OfficeDone"];
+/* Section and OnSheet joined them on 2026-09-24 (the Finished tab,
+   docs/specs/2026-09-24-finished-tab-glass-glazing-search.md): the feeder now
+   also carries a job in any later section still on the sheet, so the tablet's
+   Finished tab can show it with its section on the card. `Active` keeps its
+   meaning exactly - In production - so the office's board, the drawer, the
+   lock and the colour writer read it as before. */
+const FEEDER_FIELDS = ["Job", "Customer", "GlassType", "Total", "TuffTotal", "Seq", "Active", "OfficeDone",
+                       "Section", "OnSheet"];
+/* what a row whose job has left the sheet is told (feedPlan) */
+const GLASS_GONE = { Active: "No", OnSheet: "No" };
 /* The floor is told a number of glasses, never a kind of glass. The column
    stays on the list (nothing creates or deletes columns) and every row carries
    the same literal in it, so nothing can read a type back off the list even by
@@ -212,13 +221,16 @@ const GLASS = {
   counterFields: ALL_STAGE_KEYS.map(k => STAGE_FIELD[k]),
   seedFields: SEED_FIELDS,
   feederWrites: FEEDER_WRITES,
+  /* what feedPlan writes on a row whose job has left the sheet. A definition
+     without one gets `Active = No` alone, as every station always has. */
+  goneFields: GLASS_GONE,
   feederOf: row => feederFields(row),
   seedOf: row => seedFields(row),
   hashOf: r => {
     const seed = r.seed || {};
     return [r.title, r.job, r.customer, r.total, r.tuffTotal || 0, r.seq,
             !!r.active, !!r.officeDone,
-            seed.cut || 0, seed.hotmelt || 0];
+            seed.cut || 0, seed.hotmelt || 0, r.section || ""];
   }
 };
 /** The definition to use when a caller named none: the glass station, which is
@@ -494,9 +506,12 @@ function officeComplete(counts) {
    been delivered or was never on the floor has no business being sent at all.
    A job that leaves production is not removed from the slice's world -
    feedPlan marks the item it already made as Active = No - so the list settles
-   at the floor's jobs plus a short tail of finished ones. Every row here
-   therefore carries active:true; the field stays because it is what becomes
-   the Active column, and because feedPlan reads it.
+   at the floor's jobs plus a short tail of finished ones.
+
+   WIDENED 2026-09-24 (the Finished tab): a job with glass in ANY section still
+   on the sheet is fed too, with `active` false unless it is In production and
+   its `section` beside it, so the tablet can show it under Finished. The
+   office's board still reads Active = Yes only.
 
    `countsOf` is optional and is how the office's own record reaches the seed:
    a function from the job to its glass counts, or a map of them by job number.
@@ -514,14 +529,18 @@ function glassSlice(jobs, blockNames, countsOf) {
     if (!j || !j.id) return;
     const job = stKey(j.id);
     if (!job) return;
+    /* Since 2026-09-24 every job still ON THE SHEET is fed, in whatever
+       section, so the tablet's Finished tab can show a job that has moved on
+       (Ready to fit, ...). `active` is still In production and nothing else. */
+    if (j.cat === "past") return;           // left the sheet: feedPlan marks its row gone
     const active = inProduction(j, names);
-    if (!active) return;                    // not on the floor: not the floor's business
     const total = glassTotal(j);
     if (!(total > 0)) return;               // no glass, nothing for the glass station to do
     const counts = look(j);
     const row = { title: job, job: job, customer: stTxt(j.cust).trim().slice(0, CUSTOMER_MAX),
                   total: total, tuffTotal: tuffTotal(j), seq: stNum(j.seq, 99999), active: active,
-                  officeDone: officeComplete(counts) };
+                  officeDone: officeComplete(counts),
+                  section: stTxt(names[j.blk] || "").trim() };
     row.seed = officeSeed(row, counts);
     out.push(row);
   });
@@ -534,7 +553,10 @@ function feederFields(row) {
   return { Job: row.job, Customer: row.customer, GlassType: GLASS_TYPE,
            Total: row.total, TuffTotal: Math.max(0, Math.round(stNum(row.tuffTotal, 0))),
            Seq: row.seq, Active: row.active ? "Yes" : "No",
-           OfficeDone: row.officeDone ? "Yes" : "No" };
+           OfficeDone: row.officeDone ? "Yes" : "No",
+           /* every slice row is on the sheet: a job that left it is not in the
+              slice, and feedPlan writes its OnSheet = No (GLASS_GONE) */
+           Section: stTxt(row.section), OnSheet: "Yes" };
 }
 /** The two counters of a slice row's seed, in list shape. */
 function seedFields(row) {
@@ -646,14 +668,21 @@ function feedPlan(slice, items, opts) {
     todo.push({ seq: r.seq, title: r.title, id: stTxt(mine[0].id), fields: diff });
   });
 
-  /* everything the sheet no longer has: marked inactive, never removed */
+  /* everything the sheet no longer has: marked inactive, never removed. The
+     glass station also writes OnSheet = No (def.goneFields); only the fields
+     that differ go out, so a row already saying so is left alone. */
+  const gone = def.goneFields || { Active: "No" };
   Object.keys(byTitle).forEach(t => {
     if (seen[t]) return;
     byTitle[t].forEach(it => {
       const have = it.fields || {};
-      if (stTxt(have.Active).trim().toLowerCase() === "no") { unchanged++; return; }
-      todo.push({ seq: stNum(have.Seq, 99999), title: t, id: stTxt(it.id),
-                  fields: { Active: "No", FedAt: at, FedBy: by } });
+      const diff = {};
+      Object.keys(gone).forEach(k => {
+        if (stTxt(have[k]).trim().toLowerCase() !== stTxt(gone[k]).toLowerCase()) diff[k] = gone[k];
+      });
+      if (!Object.keys(diff).length) { unchanged++; return; }
+      diff.FedAt = at; diff.FedBy = by;
+      todo.push({ seq: stNum(have.Seq, 99999), title: t, id: stTxt(it.id), fields: diff });
     });
   });
 
@@ -764,6 +793,10 @@ function buildJobs(items, keep) {
                    2026-09-11 the colour writer needs a name to put in the
                    record's `Who` when it carries the floor's work up. */
                 doneBy: stTxt(f.DoneBy),
+                /* the section on the sheet and "still on it" (2026-09-24), for
+                   the tablet's Finished tab */
+                section: stTxt(f.Section).trim(),
+                onSheet: stTxt(f.OnSheet).trim().toLowerCase() === "yes",
                 by: {}, at: {}, bars: {} };
     ALL_STAGE_KEYS.forEach(k => {
       const t2 = Math.max(0, Math.round(stNum(g[STAGE_TOTAL_ROW[k]], 0)));
@@ -887,6 +920,37 @@ function boardFilter(board, q) {
 
 /** The floor's board: the jobs that are on the floor now. */
 function jobBoard(items) { return buildJobs(items, isActive); }
+
+/** The glass tablet's two tabs (owner, 2026-09-24). On floor: In production
+    (Active) and not finished at this page. Finished: finished here, or still on
+    the sheet in a later section (OnSheet = Yes, not Active). A row off the
+    sheet is on neither. `finishedHere(g)` is the page's own reading of done
+    (station.js); omitted, the record's own `finished`. Each keeps buildJobs'
+    order, and every card is in exactly one tab. */
+function glassTabs(items, finishedHere) {
+  const out = { floor: [], finished: [] };
+  buildJobs(items, f => isActive(f) || stTxt(f && f.OnSheet).trim().toLowerCase() === "yes")
+    .forEach(g => {
+      if (typeof finishedHere === "function") g.finished = !!finishedHere(g);
+      out[g.active && !g.finished ? "floor" : "finished"].push(g);
+    });
+  return out;
+}
+
+/** Search across both tabs (owner's decision 3, 2026-09-24): which tab to show
+    for a query, and how many matches the other tab holds. The tab you are on
+    wins if it has a match; if only the other does, that one is shown; `more`
+    is the other tab's count when both match, else 0. An empty box changes
+    nothing. `filter(cards, q)` is the tablet's own search (boardFilter here). */
+function tabSearch(tabs, tab, q, filter) {
+  const f = typeof filter === "function" ? filter : boardFilter;
+  const here = tab === "finished" ? "finished" : "floor";
+  const other = here === "floor" ? "finished" : "floor";
+  if (!stTxt(q).trim()) return { tab: here, other: other, more: 0 };
+  const a = f((tabs || {})[here] || [], q).length, b = f((tabs || {})[other] || [], q).length;
+  if (!a && b) return { tab: other, other: here, more: 0 };
+  return { tab: here, other: other, more: a ? b : 0 };
+}
 
 /** One job's record whatever its Active is, or null. The office drawer uses
     this rather than the board: a job that has been delivered is off the
@@ -1454,7 +1518,7 @@ function stationComments(cfg) {
    cannot make a card redraw.                                                */
 function cardSig(g) {
   return JSON.stringify([g.id, g.job, g.customer, g.seq, g.total, g.tuffTotal,
-    g.finished, g.officeDone,
+    g.finished, g.officeDone, g.section || "", !!g.active,
     ALL_STAGE_KEYS.map(k => [g[STAGE_ROW[k]], g.by[k], g.at[k]])]);
 }
 function boardDiff(prev, next, sigOf) {
@@ -2018,6 +2082,7 @@ const ST = {
   inProduction, sectionInProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
+  glassTabs, tabSearch, GLASS_GONE,
   stageLeft, heldStages, jobLefts, boardLefts, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast

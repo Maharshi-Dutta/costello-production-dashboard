@@ -466,7 +466,7 @@ const person = (name, stages, pin, active, station) =>
     { Cut: 4, CutBy: "Person A" }, "floorOnly drops all three glazing columns");
   assert.deepStrictEqual(ST.STATION_FIELDS,
     ["Title", "Job", "Customer", "GlassType", "Total", "TuffTotal", "Seq", "Active",
-     "OfficeDone", "FedAt", "FedBy"].concat(ST.FLOOR_FIELDS));
+     "OfficeDone", "Section", "OnSheet", "FedAt", "FedBy"].concat(ST.FLOOR_FIELDS));
   assert.deepStrictEqual(ST.LOG_FIELDS,
     ["Title", "Station", "GlassType", "Stage", "From", "To", "Who", "At"]);
   assert.deepStrictEqual(ST.PEOPLE_FIELDS, ["Title", "Station", "Stages", "PIN", "Active"]);
@@ -488,7 +488,7 @@ const person = (name, stages, pin, active, station) =>
   assert.deepStrictEqual(ST.SEED_FIELDS, ["Cut", "Hotmelt"]);
   assert.deepStrictEqual(ST.FEEDER_WRITES,
     ["Title", "Job", "Customer", "GlassType", "Total", "TuffTotal", "Seq", "Active",
-     "OfficeDone", "FedAt", "FedBy", "Cut", "Hotmelt"]);
+     "OfficeDone", "Section", "OnSheet", "FedAt", "FedBy", "Cut", "Hotmelt"]);
   ["CutBy", "CutAt", "HotmeltBy", "HotmeltAt", "Glazed", "GlazedBy", "GlazedAt", "DoneBy", "DoneAt",
    "Tuff", "TuffBy", "TuffAt"]
     .forEach(k => assert.ok(ST.FEEDER_WRITES.indexOf(k) < 0,
@@ -593,9 +593,13 @@ const person = (name, stages, pin, active, station) =>
     mkJob({ id: "R5307", cust: "Customer Five", glass: { tg: 1 }, blk: -1, cat: "past", seq: 4 }),
     mkJob({ id: "R5308", cust: "Customer Six", glass: { arch: 4, fancy: 2 }, blk: 4, seq: 5 })
   ];
-  let slice = ST.glassSlice(jobs, NAMES);
-  assert.deepStrictEqual(slice.map(r => r.title), ["R5303", "R5304"],
+  /* since 2026-09-24 a job with glass in any section still on the sheet is
+     fed as well (the tablet's Finished tab); the office-facing checks below
+     keep reading the In production rows only */
+  const fullSlice = ST.glassSlice(jobs, NAMES);
+  assert.deepStrictEqual(fullSlice.map(r => r.title), ["R5303", "R5304", "R5305"],
     "ONE row per job, in sheet order, the job number upper-cased and nothing else in the Title");
+  let slice = fullSlice.filter(r => r.active);
   assert.strictEqual(slice[0].total, 8, "eight glasses: the six TG and the two DG, and no ARCH");
   assert.strictEqual(slice[1].total, 3, "and three: the DG, with TUFF describing those same three");
   assert.strictEqual(slice.filter(r => r.job === "R5306").length, 0, "a job with no glass produces nothing");
@@ -604,15 +608,26 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(slice.every(r => !("type" in r)), "there is no glass type in a slice row at all");
   pass("the slice is one row per job with one total, and nothing for a job with no DG or TG");
 
-  assert.ok(slice.every(r => r.active === true), "every row in the slice is a job on the floor");
-  assert.strictEqual(slice.filter(r => r.job === "R5305").length, 0, "Ready to fit is not fed at all");
-  assert.strictEqual(slice.filter(r => r.job === "R5307").length, 0, "and neither is a job off the sheet");
-  assert.strictEqual(ST.glassSlice([mkJob({ id: "R1", glass: { tg: 2 }, blk: 2 })], NAMES).length, 0,
-    "Collect & supply only is not the floor's work either");
+  assert.deepStrictEqual(fullSlice.map(r => [r.job, r.active, r.section]),
+    [["R5303", true, "In production"], ["R5304", true, "In production"], ["R5305", false, "Ready to fit"]],
+    "Active is In production and nothing else; every row carries its section");
+  assert.strictEqual(fullSlice.filter(r => r.job === "R5307").length, 0, "a job off the sheet is not fed");
+  const csRow = ST.glassSlice([mkJob({ id: "R1", glass: { tg: 2 }, blk: 2 })], NAMES);
+  assert.deepStrictEqual(csRow.map(r => [r.active, r.section]), [[false, "Collect & supply only"]],
+    "Collect & supply only is fed too, inactive");
+  assert.deepStrictEqual(ST.feederFields(fullSlice[2]),
+    { Job: "R5305", Customer: "Customer Three", GlassType: "GLASS", Total: 4, TuffTotal: 0, Seq: 2,
+      Active: "No", OfficeDone: "No", Section: "Ready to fit", OnSheet: "Yes" },
+    "a later-section row: Active No, its section, OnSheet Yes");
+  assert.strictEqual(ST.feederFields(fullSlice[0]).OnSheet, "Yes");
+  assert.strictEqual(ST.feederFields(fullSlice[0]).Section, "In production");
+  assert.notStrictEqual(ST.sliceHash(fullSlice),
+    ST.sliceHash(fullSlice.map(r => Object.assign({}, r, { section: "Ready to fit" }))),
+    "a section change re-feeds");
   assert.strictEqual(ST.inProduction(mkJob({ blk: 4 }), ["a", "b", "c", "d", "IN PRODUCTION (2)"]), true,
     "the section name is matched on its prefix, ignoring case");
   assert.strictEqual(ST.inProduction(mkJob({ blk: 9 }), NAMES), false, "a job in no section is not in production");
-  pass("only jobs In production are fed: no row is ever created for a job the floor will never see");
+  pass("every job with glass still on the sheet is fed, Active = In production, with Section and OnSheet");
 
   const longName = "Customer" + "x".repeat(120);
   const sl2 = ST.glassSlice([mkJob({ id: "R1", cust: longName, glass: { tg: 1 } })], NAMES);
@@ -620,8 +635,8 @@ const person = (name, stages, pin, active, station) =>
   ["eir", "area", "ph3", "off", "notes", "prods", "wnd", "drs", "colour", "cp", "dates"]
     .forEach(k => assert.ok(!(k in sl2[0]), "the slice must not carry " + k));
   assert.deepStrictEqual(Object.keys(sl2[0]).sort(),
-    ["active", "customer", "job", "officeDone", "seed", "seq", "title", "total", "tuffTotal"]);
-  pass("a slice row is nine fields: no phone, eircode, county, product, comment or date among them");
+    ["active", "customer", "job", "officeDone", "section", "seed", "seq", "title", "total", "tuffTotal"]);
+  pass("a slice row is ten fields: no phone, eircode, county, product, comment or date among them");
 
   /* ================= 2b. what the office has already ticked off =================
      OWNER DECISION 4: a job the office finished last week must not arrive on
@@ -700,6 +715,7 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(plan.patches.length, 0);
   assert.deepStrictEqual(plan.adds[0], { Title: "R5303", Job: "R5303", Customer: "Customer One",
     GlassType: "GLASS", Total: 8, TuffTotal: 0, Seq: 0, Active: "Yes", OfficeDone: "No",
+    Section: "In production", OnSheet: "Yes",
     Cut: 0, Hotmelt: 0, FedAt: AT, FedBy: BY });
   assert.ok(!("Tuff" in plan.adds[0]) && !("TuffBy" in plan.adds[0]) && !("TuffAt" in plan.adds[0]),
     "and never the tuff counter: the seeding exception was given for the glass counters");
@@ -734,7 +750,7 @@ const person = (name, stages, pin, active, station) =>
 
   const jobs2 = jobs.slice();
   jobs2[0] = mkJob({ id: "R5303", cust: "Customer One Ltd", glass: { tg: 8, dg: 2 }, blk: 4, seq: 0 });
-  slice = ST.glassSlice(jobs2, NAMES);
+  slice = ST.glassSlice(jobs2, NAMES).filter(r => r.active);
   plan = ST.feedPlan(slice, ITEMS, { at: "2026-09-08T11:00:00.000Z", by: BY });
   assert.strictEqual(plan.adds.length, 0);
   assert.strictEqual(plan.patches.length, 1, "one job changed its name and its count");
@@ -763,6 +779,7 @@ const person = (name, stages, pin, active, station) =>
   /* while a row nobody has tapped is still the office's to say */
   const untouchedItems = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One Ltd",
     GlassType: "GLASS", Total: 10, TuffTotal: 0, Seq: 0, Active: "Yes", OfficeDone: "No",
+    Section: "In production", OnSheet: "Yes",
     Cut: 0, Hotmelt: 0, Glazed: 0 }, "250")];
   plan = ST.feedPlan(touchedSlice, untouchedItems, { at: AT, by: BY });
   assert.deepStrictEqual(plan.patches[0].fields,
@@ -794,6 +811,7 @@ const person = (name, stages, pin, active, station) =>
     "the office's record is yellow all through, which now seeds cutting alone");
   const wasSeeded = [item({ Title: "R5303", Job: "R5303", Customer: "Customer One Ltd",
     GlassType: "GLASS", Total: 10, TuffTotal: 0, Seq: 0, Active: "Yes", OfficeDone: "No",
+    Section: "In production", OnSheet: "Yes",
     Cut: 10, Hotmelt: 10, Glazed: 0, DoneAt: "" }, "251")];
   plan = ST.feedPlan(downSlice, wasSeeded, { at: AT, by: BY });
   assert.strictEqual(plan.patches.length, 0,
@@ -826,17 +844,81 @@ const person = (name, stages, pin, active, station) =>
   const jobs3 = jobs2.filter(j => j.id !== "R5304");
   plan = ST.feedPlan(ST.glassSlice(jobs3, NAMES), ITEMS, { at: AT, by: BY });
   assert.deepStrictEqual(plan.patches.find(p => p.id === "201").fields,
-    { Active: "No", FedAt: AT, FedBy: BY });
+    { Active: "No", OnSheet: "No", FedAt: AT, FedBy: BY },
+    "a job that has left the sheet: Active No AND OnSheet No (2026-09-24)");
   assert.ok(noSeed({ adds: [], patches: plan.patches.filter(p => p.id === "201") }),
     "and even then, not a counter in sight");
   assert.ok(!("delete" in plan) && !("deletes" in plan) && !("removes" in plan),
     "there is no such thing as a delete in a feed plan");
-  pass("a job that leaves production is marked Active = No, and its item is never removed");
+  pass("a job that leaves the sheet is marked Active = No and OnSheet = No, and its item is never removed");
 
   ITEMS.find(x => x.id === "201").fields.Active = "No";
   plan = ST.feedPlan(ST.glassSlice(jobs3, NAMES), ITEMS, { at: AT, by: BY });
+  assert.deepStrictEqual(plan.patches.find(p => p.id === "201").fields,
+    { OnSheet: "No", FedAt: AT, FedBy: BY }, "an old inactive row is only told the field it lacks");
+  ITEMS.find(x => x.id === "201").fields.OnSheet = "No";
+  plan = ST.feedPlan(ST.glassSlice(jobs3, NAMES), ITEMS, { at: AT, by: BY });
   assert.strictEqual(plan.patches.filter(p => p.id === "201").length, 0);
-  pass("an item already marked inactive is not written again on the next run");
+  /* a definition with no goneFields (welding, glazing) is told Active = No alone */
+  const noGone = Object.assign({}, ST.GLASS, { goneFields: undefined });
+  const goneItems = [item({ Title: "R1", Active: "Yes" }, "600"), item({ Title: "R2", Active: "No" }, "601")];
+  plan = ST.feedPlan([], goneItems, { at: AT, by: BY, def: noGone });
+  assert.deepStrictEqual(plan.patches, [{ id: "600", fields: { Active: "No", FedAt: AT, FedBy: BY } }],
+    "another station's leaving row is written exactly as before");
+  pass("an item already marked gone is not written again on the next run");
+
+  /* a job that moves on to Ready to fit stays on the list: Active No, its
+     section, OnSheet Yes - and its counters untouched */
+  const jobsRtf = jobs2.map(j => j.id === "R5304" ? Object.assign({}, j, { blk: 3 }) : j);
+  ITEMS.find(x => x.id === "201").fields.Active = "Yes";
+  ITEMS.find(x => x.id === "201").fields.OnSheet = "Yes";
+  ITEMS.find(x => x.id === "201").fields.Section = "In production";
+  plan = ST.feedPlan(ST.glassSlice(jobsRtf, NAMES), ITEMS, { at: AT, by: BY });
+  assert.deepStrictEqual(plan.patches.find(p => p.id === "201").fields,
+    { Active: "No", Section: "Ready to fit", FedAt: AT, FedBy: BY },
+    "moved to Ready to fit: Active No, the new section, still on the sheet");
+  ITEMS.find(x => x.id === "201").fields.Active = "No";
+  ITEMS.find(x => x.id === "201").fields.Section = "Ready to fit";
+  pass("a job that moves to a later section is kept on the list with its section, Active = No");
+
+  /* ---- the tablet's two tabs (2026-09-24), pure ---- */
+  const tabRow = (id, f) => item(Object.assign({ Title: id, Job: id, Customer: "Customer " + id,
+    GlassType: "GLASS", Total: 4, TuffTotal: 0, Seq: Number(id.slice(1)), Cut: 0, Hotmelt: 0 }, f), id.slice(1));
+  const tabItems = [
+    tabRow("R1", { Active: "Yes", OnSheet: "Yes", Section: "In production" }),                 // floor
+    tabRow("R2", { Active: "Yes", OnSheet: "Yes", Section: "In production", Cut: 4 }),         // cut done
+    tabRow("R3", { Active: "No", OnSheet: "Yes", Section: "Ready to fit" }),                   // later section
+    tabRow("R4", { Active: "No", OnSheet: "No", Section: "Ready to fit" }),                    // off the sheet
+    tabRow("R5", { Active: "No" }),                                                            // old, no OnSheet
+    tabRow("R6", { Active: "Yes" })];                                                          // before the first feed
+  const cutDone = g => ST.stageComplete(g, "cut");
+  const hotDone = g => ST.stageComplete(g, "hotmelt");
+  let tb2 = ST.glassTabs(tabItems, cutDone);
+  assert.deepStrictEqual([tb2.floor.map(g => g.job), tb2.finished.map(g => g.job)],
+    [["R1", "R6"], ["R2", "R3"]],
+    "cutting page: On floor = In production and not cut; Finished = cut, or a later section; off-sheet on neither");
+  assert.deepStrictEqual(tb2.finished.map(g => [g.section, g.onSheet, g.active]),
+    [["In production", true, true], ["Ready to fit", true, false]]);
+  tb2 = ST.glassTabs(tabItems, hotDone);
+  assert.deepStrictEqual([tb2.floor.map(g => g.job), tb2.finished.map(g => g.job)],
+    [["R1", "R2", "R6"], ["R3"]], "hotmelting page: R2 is not hotmelted, so it is On floor there");
+  assert.deepStrictEqual(ST.jobBoard(tabItems).map(g => g.job), ["R1", "R2", "R6"],
+    "the office's board is still Active = Yes alone");
+
+  /* search across both tabs (owner's decision 3) */
+  tb2 = ST.glassTabs(tabItems, cutDone);
+  assert.deepStrictEqual(ST.tabSearch(tb2, "floor", ""), { tab: "floor", other: "finished", more: 0 },
+    "an empty box changes nothing");
+  assert.deepStrictEqual(ST.tabSearch(tb2, "floor", "r3"), { tab: "finished", other: "floor", more: 0 },
+    "no match here and one on Finished: go to Finished");
+  assert.deepStrictEqual(ST.tabSearch(tb2, "finished", "r1"), { tab: "floor", other: "finished", more: 0 },
+    "and the other way round");
+  assert.deepStrictEqual(ST.tabSearch(tb2, "floor", "customer"), { tab: "floor", other: "finished", more: 2 },
+    "both match: stay, and say 2 more in Finished");
+  assert.deepStrictEqual(ST.tabSearch(tb2, "finished", "customer"), { tab: "finished", other: "floor", more: 2 });
+  assert.deepStrictEqual(ST.tabSearch(tb2, "floor", "zzz"), { tab: "floor", other: "finished", more: 0 },
+    "nothing anywhere: stay");
+  pass("the glass tablet's tabs split per stage, and search picks the tab with the match");
 
   const ragged = [{ id: "300", fields: { Title: "R9001" } }, { id: "301" }, null,
                   { id: "302", fields: { Title: "" } }];
@@ -846,7 +928,7 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(plan.adds.length, 0, "the ragged item is still the item for that Title");
   assert.deepStrictEqual(plan.patches[0].fields,
     { Job: "R9001", Customer: "Customer Seven", GlassType: "GLASS", Total: 2, TuffTotal: 0,
-      Seq: 7, Active: "Yes", OfficeDone: "No", FedAt: AT, FedBy: BY },
+      Seq: 7, Active: "Yes", OfficeDone: "No", OnSheet: "Yes", FedAt: AT, FedBy: BY },
     "a blank counter and a seed of nothing agree, so no zeros are written into it");
   pass("an item missing every column but Title is filled in rather than crashing anything");
 
@@ -1784,7 +1866,8 @@ const person = (name, stages, pin, active, station) =>
      planned before it existed. Every write that carries a counter therefore
      re-reads that one row first. */
   ITEMS = [item({ Title: "R4950", Job: "R4950", Customer: "Old name", GlassType: "GLASS",
-                  Total: 6, Seq: 0, Active: "Yes", Cut: 0, Hotmelt: 0, Glazed: 0,
+                  Total: 6, Seq: 0, Active: "Yes", Section: "In production", OnSheet: "Yes",
+                  Cut: 0, Hotmelt: 0, Glazed: 0,
                   FedAt: "2026-09-08T08:00:00.000Z", FedBy: "office" }, "990")];
   forget();
   useJobs([mkJob({ id: "R4950", cust: "New name", glass: { tg: 6 }, blk: 4, seq: 0,
@@ -1871,7 +1954,9 @@ const person = (name, stages, pin, active, station) =>
   reset();
   await feedStation();
   assert.strictEqual(writes().length, 1);
-  assert.deepStrictEqual(Object.keys(writes()[0].body).sort(), ["Active", "FedAt", "FedBy"]);
+  assert.deepStrictEqual(Object.keys(writes()[0].body).sort(), ["Active", "FedAt", "FedBy", "Section"]);
+  assert.strictEqual(writes()[0].body.Section, "Ready to fit", "and the row keeps its place under Finished");
+  assert.strictEqual(ITEMS[0].fields.OnSheet, "Yes", "still on the sheet");
   assert.strictEqual(ITEMS[0].fields.Cut, 6, "the floor's counters are exactly where they were");
   assert.strictEqual(ITEMS[0].fields.CutBy, "Person A", "and so is who put them there");
   pass("a job leaving production is patched Active = No, and the floor's record is not touched");
@@ -3661,11 +3746,47 @@ const person = (name, stages, pin, active, station) =>
   S("QUERY = 'customer ten'; render();");
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5310", "typed a customer name: the same one");
   S("QUERY = 'zzz'; render();");
-  assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0,
+  assert.ok(EL["#board"].innerHTML.indexOf("No job under On floor matches") > 0,
     "and a box nothing matches says so rather than looking broken");
   S("QUERY = ''; render();");
   assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "clearing it brings them back");
   pass("the search box narrows the cards as it is typed, by job number or customer name");
+
+  /* ---- 2026-09-24: the Finished tab, the section badge, search across tabs ---- */
+  ITEMS.push(item({ Title: "R5399", Job: "R5399", Customer: "Customer Ninety", GlassType: "GLASS", Total: 3,
+                    Seq: 9, Active: "No", OnSheet: "Yes", Section: "Ready to fit", Cut: 0, Hotmelt: 0 }, "909"),
+             item({ Title: "R5398", Job: "R5398", Customer: "Customer Gone", GlassType: "GLASS", Total: 3,
+                    Seq: 8, Active: "No", OnSheet: "No", Section: "Ready to fit", Cut: 0, Hotmelt: 0 }, "908"));
+  S("TOKEN = null;"); await S("readList()");
+  S("TAB = 'floor'; PRETAB = null; QUERY = ''; render();");
+  assert.strictEqual(S("Object.keys(NODES).sort().join(',')"), "R5303,R5310", "On floor: the In production jobs");
+  assert.strictEqual(EL["#tabfloor"].textContent, "On floor · 2");
+  assert.strictEqual(EL["#tabfin"].textContent, "Finished · 1", "the later-section job, and not the one off the sheet");
+  assert.strictEqual(EL["#gtotal"].textContent, "Cutting 2 left",
+    "the header counts In production only - R5399's three are not in it");
+  S("onSearch('5399');");
+  assert.strictEqual(S("TAB"), "finished", "typed a Finished job's number on On floor: the tablet goes there");
+  assert.strictEqual(S("Object.keys(NODES).join(',')"), "R5399");
+  assert.ok(S("NODES['R5399'].innerHTML").indexOf('<span class="csec">Ready to fit</span>') > 0,
+    "with its section on the card head");
+  assert.ok(S("NODES['R5399'].innerHTML").indexOf("data-act") > 0, "and its steppers, as today");
+  S("onSearch('');");
+  assert.strictEqual(S("TAB"), "floor", "clearing the box goes back to the tab it was on");
+  S("onSearch('customer');");
+  assert.strictEqual(S("TAB"), "floor", "both tabs match: it stays");
+  assert.strictEqual(EL["#more"].textContent, "1 more in Finished", "and says how many more are on the other");
+  assert.strictEqual(EL["#more"].hidden, false);
+  S("onSearch('5399'); switchPerson();");
+  assert.strictEqual(S("QUERY + '|' + TAB + '|' + PRETAB"), "|floor|null",
+    "a change of person drops the search and puts the tab back");
+  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); LAST_TAP = Date.now(); onSearch('5399');");
+  S("pickPerson(PEOPLE.find(p => p.name === 'Person A'));");
+  assert.strictEqual(S("QUERY + '|' + TAB + '|' + PRETAB"), "|floor|null", "and so does picking a name");
+  S("render();");
+  assert.strictEqual(EL["#more"].hidden, true);
+  ITEMS.splice(2, 2);
+  S("TOKEN = null;"); await S("readList()");
+  pass("the Finished tab carries later-section jobs with their section; search switches tabs and a new person starts clean");
 
   /* THE NUMBERS BESIDE THE BOX: one per stage the person signed in holds, each
      the same number added down the whole board, so what somebody types must
@@ -3685,7 +3806,7 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(EL["#gtotal"].textContent, "Cutting 8 left",
     "and the number is still their whole day's, not the two glasses being looked at");
   S("QUERY = 'zzz'; render();");
-  assert.ok(EL["#board"].innerHTML.indexOf("No job on the board matches") > 0, "nothing matches");
+  assert.ok(EL["#board"].innerHTML.indexOf("No job under On floor matches") > 0, "nothing matches");
   assert.strictEqual(EL["#gtotal"].hidden, false, "the number is still there");
   assert.strictEqual(EL["#gtotal"].textContent, "Cutting 8 left",
     "and still the full one: an empty screen is not an empty day");
@@ -4041,23 +4162,28 @@ const person = (name, stages, pin, active, station) =>
      at the total and the whole card goes gold and drops to the Finished group
      at the bottom. The cutter's finished jobs leave the cutter's way whether or
      not hotmelting has started on them. */
+  /* since 2026-09-24 it moves to the FINISHED TAB rather than a collapsed
+     group at the bottom */
+  S("TAB = 'floor'; PRETAB = null;");
   S("ITEMS[0].fields.Cut = 6; ITEMS[0].fields.Hotmelt = 0; ITEMS[0].fields.Glazed = 0; render();");
-  assert.strictEqual(S("BOARD_PREV[0].finished"), true,
-    "cutting is complete, so this tablet is finished with the job");
+  assert.strictEqual(S("tabsNow().finished.map(g => g.job).join(',')"), "R5303",
+    "cutting is complete, so this tablet is finished with the job: it is on the Finished tab");
+  assert.strictEqual(S("tabsNow().finished[0].finished"), true);
   assert.strictEqual(S("ST.jobBoard(ITEMS)[0].finished"), false,
     "while the record itself still says no - the office needs both stages");
+  assert.strictEqual(S("Object.keys(NODES).join(',')"), "", "and On floor no longer draws it");
+  assert.ok(EL["#board"].innerHTML.indexOf("Nothing on the floor right now.") > 0,
+    "On floor, empty, says so");
+  S("TAB = 'finished'; render();");
+  assert.strictEqual(S("Object.keys(NODES).join(',')"), "R5303", "the Finished tab draws it");
   assert.strictEqual(S("NODES['R5303'].className"), "card done", "the card itself carries the gold class");
-  assert.strictEqual(S("FIN.kids.length"), 1, "and it moved into the Finished group");
-  assert.strictEqual(S("FINHEAD.hidden"), false);
-  assert.ok(/Finished · 1/.test(S("FINHEAD.textContent")), "with a count on the heading");
-  assert.strictEqual(S("FIN.hidden"), true, "which is collapsed until somebody taps it");
-  S("FINOPEN = true; render();");
-  assert.strictEqual(S("FIN.hidden"), false);
-  S("FINOPEN = false;");
   S("ITEMS[0].fields.Cut = 5; render();");
-  assert.strictEqual(S("NODES['R5303'].className"), "card", "one glass short and it is not gold");
+  assert.strictEqual(S("Object.keys(NODES).length"), 0, "one glass short and it is back On floor");
+  assert.ok(EL["#board"].innerHTML.indexOf("No finished jobs yet.") > 0, "and Finished says it is empty");
+  S("TAB = 'floor'; render();");
+  assert.strictEqual(S("NODES['R5303'].className"), "card", "not gold");
   S("ITEMS[0].fields.Cut = 6; ITEMS[0].fields.Hotmelt = 6; render();");
-  pass("a job this page's stage has finished goes gold and drops to a collapsed Finished group");
+  pass("a job this page's stage has finished goes gold and moves to the Finished tab");
 
   /* ---- OWNER, AFTER THE DEMO (2026-09-21): a job that still owes TUFF is not
      shown as finished ----
@@ -4074,10 +4200,9 @@ const person = (name, stages, pin, active, station) =>
            Total: 4, TuffTotal: 0, Seq: 2, Active: "Yes", OfficeDone: "No",
            Cut: 4, Hotmelt: 0, Tuff: 0 }, "991")];
   ITEMS = tuffBoard.slice();
-  S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = ''; FINOPEN = false;");
-  /* let the previous section's card nodes go, so this board is painted fresh
-     and the two groups hold only these two jobs */
-  S("DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = '';");
+  S("QUEUE = {}; LOGQ = {}; TOKEN = null; QUERY = ''; TAB = 'floor'; PRETAB = null;");
+  /* let the previous section's card nodes go, so this board is painted fresh */
+  S("LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = '';");
   S("PERSON = { name: 'Person T', stages: ['cut', 'tuff'], pin: '' }; LAST_TAP = Date.now();");
   await S("readList()");
   assert.strictEqual(S("PAGE_STAGE"), "cut", "this is the cutting tablet");
@@ -4086,23 +4211,25 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(S("boardNow().find(g => g.job === 'R7710').finished"), false,
     "so cutting complete does NOT finish it on this page");
   assert.strictEqual(S("NODES['R7710'].className"), "card", "and it is not drawn gold");
-  assert.strictEqual(S("FIN.kids.length"), 1, "and it is not in the Finished group");
-  assert.strictEqual(S("DOING.kids.map(n => n.getAttribute('data-job')).join(',')"), "R7710",
-    "it is still on the working side of the board");
+  assert.strictEqual(S("LIST.kids.map(n => n.getAttribute('data-job')).join(',')"), "R7710",
+    "it is still On floor, alone");
   /* the job with no tuff at all finishes on cutting alone, exactly as before */
   assert.strictEqual(S("ST.tuffOwed(boardNow().find(g => g.job === 'R7711'))"), false,
     "R7711 has no tuff on it, so it owes none");
   assert.strictEqual(S("boardNow().find(g => g.job === 'R7711').finished"), true);
-  assert.strictEqual(S("NODES['R7711'].className"), "card done",
+  assert.strictEqual(S("tabsNow().finished.map(g => g.job).join(',')"), "R7711",
     "a job with no tuff is finished on cutting alone, as it always was");
-  /* count the tuff and it goes gold and sinks, without another glass tap */
+  /* count the tuff and it goes gold and moves, without another glass tap */
   S("tap('990', 'tuff', 'all');");
   assert.strictEqual(S("boardNow().find(g => g.job === 'R7710').finished"), true,
     "the tuff is counted, so now it is finished on this page");
+  assert.strictEqual(S("tabsNow().finished.map(g => g.job).join(',')"), "R7710,R7711",
+    "and it has moved to the Finished tab beside the other one");
+  assert.strictEqual(EL["#tabfin"].textContent, "Finished · 2", "which now counts two");
+  assert.strictEqual(EL["#tabfloor"].textContent, "On floor · 0");
+  S("TAB = 'finished'; render();");
   assert.strictEqual(S("NODES['R7710'].className"), "card done", "gold");
-  assert.ok(S("FIN.kids.map(n => n.getAttribute('data-job')).indexOf('R7710')") >= 0,
-    "and it has moved into the Finished group beside the other one");
-  assert.ok(/Finished · 2/.test(S("FINHEAD.textContent")), "which now counts two");
+  S("TAB = 'floor'; render();");
   await settle(80);
   S("if (retryT) { clearTimeout(retryT); retryT = null; } QUEUE = {}; LOGQ = {};");
   pass("owner, after the demo: a job with tuff still to count is not finished on the cutting tablet");
@@ -4123,6 +4250,7 @@ const person = (name, stages, pin, active, station) =>
     "the job still owes its four tuff");
   assert.strictEqual(SHT("boardNow().find(g => g.job === 'R7710').finished"), true,
     "but hotmelting is complete, and tuff is not this bench's work: the card is finished here");
+  SHT("TAB = 'finished'; render();");
   assert.strictEqual(SHT("NODES['R7710'].className"), "card done");
   mem.cw_stationstage = "cut";
   pass("and the hotmelting tablet is untouched by it: tuff is not that bench's work");
@@ -4561,11 +4689,15 @@ const person = (name, stages, pin, active, station) =>
      kept writing the lock back on. The clear now carries the unlock itself. */
   Object.assign(ITEMS[0].fields, { Cut: 8, Hotmelt: 8, Glazed: 8, Tuff: 11, OfficeDone: "Yes",
                                    DoneAt: "2026-09-10T14:00:00.000Z", DoneBy: "Person A" });
-  S("TOKEN = null;"); await S("readList()");
+  S("TAB = 'finished'; TOKEN = null;"); await S("readList()");
   assert.ok(S("NODES['R6001'].innerHTML").indexOf("the office has marked this job’s glass finished") > 0,
-    "the job is locked to begin with");
+    "the job is locked to begin with, on the Finished tab");
   Object.assign(ITEMS[0].fields, ST.officeClearFields("the admin", "2026-09-10T15:00:00.000Z"));
   S("TOKEN = null;"); await S("readList()");   // the tablet's own ten-second poll
+  /* owner's decision 2, 2026-09-24: cleared by the office while In production,
+     it goes back to On floor */
+  assert.ok(S("tabsNow().floor.some(g => g.job === 'R6001')"), "back On floor");
+  S("TAB = 'floor'; render();");
   tb = S("NODES['R6001'].innerHTML");
   assert.ok(tb.indexOf("the office has marked this job’s glass finished") < 0,
     "one poll after the clear the card is not saying the job is finished any more");
