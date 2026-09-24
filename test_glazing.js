@@ -356,12 +356,12 @@ JOBS.blockNames = NAMES;
      card clamps to 6 / 6 on screen until the next tap moves it. */
   const oldRule = [
     item({ Title: "R8001", Job: "R8001", Customer: "Customer One …", Section: "In production",
-           Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8,
+           Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8, AstragalTotal: 0,
            Comment: "rang on …, eircode …, will collect Friday",
            Glazed: 8, GlazedBy: "the glazer", GlazedAt: "2026-09-22T08:00:00.000Z",
            DoneBy: "the glazer", DoneAt: "2026-09-22T08:00:00.000Z" }, "901"),
     item({ Title: "R8005", Job: "R8005", Customer: "Customer Five", Section: "In production",
-           Seq: 4, Active: "Yes", Windows: 0, Doors: 3, Total: 3, Comment: "",
+           Seq: 4, Active: "Yes", Windows: 0, Doors: 3, Total: 3, AstragalTotal: 0, Comment: "",
            Glazed: 1, GlazedBy: "the glazer", GlazedAt: "2026-09-22T09:00:00.000Z",
            DoneBy: "the glazer", DoneAt: "2026-09-22T09:00:00.000Z" }, "902")];
   plan = ST.feedPlan(slice, oldRule, { at: "2026-09-23T09:00:00.000Z", by: "the office", def: Z.GLAZE });
@@ -1071,6 +1071,66 @@ JOBS.blockNames = NAMES;
   pass("G3: stationAfterFeed catches its own, so a load's glass colours are never skipped for a render");
 
   /* ================= 17. the gates ================= */
+  /* ---------- ASTRAGAL, the second counter (owner, 2026-09-24) ----------
+     Its own component off `Production` (j.astrMain), no relation to windows or
+     doors: a count, a done count, gold only when every line is full. */
+  {
+    const aj = [
+      mkJob({ id: "R8101", cust: "Customer A", wnd: 5, drs: 0, astrMain: 4, blk: 4, seq: 10 }),
+      /* doors and astragal, no windows: fed, with the astragal line alone */
+      mkJob({ id: "R8102", cust: "Customer B", wnd: 0, drs: 3, astrMain: 2, blk: 4, seq: 11 }),
+      /* doors only: still not fed */
+      mkJob({ id: "R8103", cust: "Customer C", wnd: 0, drs: 2, blk: 4, seq: 12 })];
+    const sl = Z.glzSlice(aj, NAMES);
+    assert.deepStrictEqual(sl.map(r => r.job + ":" + r.total + "/" + r.astr), ["R8101:5/4", "R8102:0/2"],
+      "windows or astragal puts a job on the list; doors alone do not");
+    assert.strictEqual(Z.glzFeederFields(sl[1]).AstragalTotal, 2);
+    assert.strictEqual(Z.glzFeederFields(sl[1]).Total, 0);
+    assert.ok(Z.GLZ_FEEDER_FIELDS.indexOf("AstragalTotal") >= 0 && Z.GLZ_FEEDER_FIELDS.indexOf("Astragal") < 0,
+      "the feeder feeds the astragal total and never the floor's astragal count");
+    pass("astragal: a door-and-astragal job is fed; AstragalTotal is a feeder column");
+
+    const rec = f => Z.glzRecord(item(Object.assign({ Title: "R8101", Job: "R8101", Active: "Yes",
+      Section: "In production", Windows: 5, Total: 5, AstragalTotal: 4 }, f), "950"));
+    assert.strictEqual(rec({ Glazed: 5, Astragal: 3 }).finished, false, "windows full, astragal not: not finished");
+    assert.strictEqual(rec({ Glazed: 5, Astragal: 3 }).colour, "yellow");
+    assert.strictEqual(rec({ Glazed: 0, Astragal: 1 }).colour, "yellow", "astragal alone starts a job");
+    assert.strictEqual(rec({ Glazed: 5, Astragal: 4 }).finished, true, "both full: finished");
+    assert.strictEqual(Z.glzOfficeColour(rec({ Glazed: 5, Astragal: 4 }), false), "gold");
+    assert.strictEqual(Z.glzOfficeColour(rec({ Glazed: 5, Astragal: 0 }), false), "yellow");
+    assert.strictEqual(rec({ Astragal: 9 }).astr, 4, "the astragal count is clamped for display");
+    const only = Z.glzRecord(item({ Title: "R8102", Job: "R8102", Active: "Yes", Section: "In production",
+      Total: 0, AstragalTotal: 2, Astragal: 2 }, "951"));
+    assert.strictEqual(only.finished, true, "an astragal-only job finishes on its astragal");
+    assert.strictEqual(Z.glzHeadWords([rec({ Glazed: 2, Astragal: 1 }), only]),
+      "3 windows left · 3 astragal left");
+    assert.strictEqual(Z.glzQtyWords(rec({})), "5 windows · 4 astragal");
+    pass("astragal: finished and gold only when windows AND astragal are full; header says both");
+
+    const r = rec({ Glazed: 2, Astragal: 1 });
+    assert.strictEqual(Z.glzApplyTap(r, 1, "astragal"), 2);
+    assert.strictEqual(Z.glzApplyTap(r, "all", "astragal"), 4);
+    assert.strictEqual(Z.glzApplyTap(r, 1), 3, "no part is the windows, as before");
+    const ab = Z.glzFloorOnly(Z.glzTapFields(3, "the glazer", "2026-09-24T10:00:00.000Z", "astragal"));
+    assert.deepStrictEqual(Object.keys(ab).sort(), ["Astragal", "DoneAt", "DoneBy"],
+      "an astragal tap writes its count and the last touch, nothing else: " + JSON.stringify(ab));
+    assert.deepStrictEqual(Object.keys(Z.glzFloorOnly(Z.glzTapFields(3, "a", "2026-09-24T10:00:00.000Z"))).sort(),
+      ["DoneAt", "DoneBy", "Glazed", "GlazedAt", "GlazedBy"], "a windows tap is unchanged");
+    assert.deepStrictEqual(Z.glzRebase({ part: "astragal", from: 1, value: 2, at: "2026-09-24T10:00:00.000Z" },
+      { Astragal: 3, AstragalTotal: 4, Glazed: 0 }), { action: "rebase", value: 4, from: 3 },
+      "a queued astragal tap re-bases on the Astragal column, clamped to AstragalTotal");
+    const lg = ST.logFields(Z.glzLogEntry({ job: "R8101", from: 1, to: 2, who: "a", at: "x", part: "astragal" }));
+    assert.strictEqual(lg.Stage, "astragal", "an astragal log line is not a glaze line");
+    assert.strictEqual(ST.logFields(Z.glzLogEntry({ job: "R8101", from: 1, to: 2 })).Stage, "glaze");
+    pass("astragal: taps, the PATCH body, re-base and log line each name the astragal counter");
+
+    const rep = Z.glzReportJobs({ board: [r] });
+    assert.strictEqual(rep.columns.length, rep.rows[0].length, "report header and row agree");
+    assert.strictEqual(rep.rows[0][rep.columns.indexOf("Astragal")], 4);
+    assert.strictEqual(rep.rows[0][rep.columns.indexOf("Astragal done")], 1);
+    pass("astragal: the station report carries the astragal total and done count");
+  }
+
   const zsrc = src("glazing-core.js") + src("glazing.js") + src("glazing.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
    "/workbook", "downloadWorkbook", "parseWorkbook", "ExcelJS"].forEach(bad =>

@@ -523,6 +523,9 @@ function parseWorkbook(wb) {
       for (const k in m.glass) {
         const c = row.getCell(m.glass[k]), v = num(c);
         if (v) j.glass[k] = Math.max(j.glass[k] || 0, v);
+        /* ASTRAGAL off `Production` alone (2026-09-24): the glazing station
+           counts it as its own component, and stations read `Production` only */
+        if (mainHere && v && k === 'astragal') j.astrMain = Math.max(j.astrMain || 0, v);
         if (cpHere) cpBump(j.cp.glass, k, cpOf(fillOf(c)));
       }
 
@@ -635,8 +638,8 @@ function parseWorkbook(wb) {
       wnd: j.wnd || 0, drs: j.drs || 0,
       /* the same two off `Production` and no other sheet, for a station that
          must not inherit another sheet's misalignment (the glazing station is
-         the first: its Total is windows + doors) */
-      wndMain: j.wndMain || 0, drsMain: j.drsMain || 0,
+         the first: its Total is the windows, and ASTRAGAL is its second count) */
+      wndMain: j.wndMain || 0, drsMain: j.drsMain || 0, astrMain: j.astrMain || 0,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
       prods: prods, prodsMain: prodsMain, cp: j.cp,
       /* one entry per DOORS DONE cell that has text in it: { slot, code,

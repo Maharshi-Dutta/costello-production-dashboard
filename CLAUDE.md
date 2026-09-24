@@ -240,9 +240,13 @@ the one that first wrote them down.
      edit glazing from that window"*): on the office's own **Glazing station**
      board, the office may set and clear a job's `Glazed` counter. One click
      writes **exactly five fields** of one `Glazing station` row: `Glazed`,
-     `GlazedBy`, `GlazedAt`, `DoneBy` and `DoneAt`. The proof that it cannot
-     write anything else is the shape of `GLZC.glzOfficeFields(value, who, at)`
-     — a number, a name and a time — filtered again through
+     `GlazedBy`, `GlazedAt`, `DoneBy` and `DoneAt`. Since **2026-09-24** it may
+     also set and clear the job's `Astragal` counter (owner,
+     [`docs/specs/2026-09-24-glazing-astragal.md`](docs/specs/2026-09-24-glazing-astragal.md)): that click writes **exactly
+     three fields**, `Astragal`, `DoneBy` and `DoneAt` (no By/At of its own, by
+     the owner's choice). The proof that it cannot
+     write anything else is the shape of `GLZC.glzOfficeFields(value, who, at, part)`
+     — a number, a name, a time and which of the two counters — filtered again through
      `GLZC.glzFloorOnly` on the way out, which is `ST.floorOnly` with this
      station's definition and the same filter the tablet's own queue runs on.
      Every such change leaves **one `Dashboard Log` line** (`noteChange`,

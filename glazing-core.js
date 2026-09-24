@@ -54,9 +54,12 @@ const GLZ_STAGE = "glaze";
    job already glazed. An untouched row starts at nought. `seedFields` is empty
    and `seedOf` answers {}, which is what feedPlan needs to plan nothing.     */
 const GLZ_FEEDER_FIELDS = ["Job", "Customer", "Section", "Seq", "Active",
-                           "Windows", "Doors", "Total", "Comment"];
-const GLZ_FLOOR_FIELDS = ["Glazed", "GlazedBy", "GlazedAt", "DoneBy", "DoneAt"];
-const GLZ_COUNTER_FIELDS = ["Glazed"];
+                           "Windows", "Doors", "Total", "Comment", "AstragalTotal"];
+/* `Astragal` (2026-09-24) is the second counter: the job's ASTRAGAL units done,
+   out of `AstragalTotal`. The owner asked for the count and nothing else - no
+   By/At of its own; a tap on it moves the last-touch pair like any tap. */
+const GLZ_FLOOR_FIELDS = ["Glazed", "GlazedBy", "GlazedAt", "DoneBy", "DoneAt", "Astragal"];
+const GLZ_COUNTER_FIELDS = ["Glazed", "Astragal"];
 const GLZ_SEED_FIELDS = [];
 const GLZ_FIELDS = ["Title"].concat(GLZ_FEEDER_FIELDS, ["FedAt", "FedBy"], GLZ_FLOOR_FIELDS);
 const GLZ_FEEDER_WRITES = ["Title"].concat(GLZ_FEEDER_FIELDS, ["FedAt", "FedBy"]);
@@ -119,6 +122,9 @@ function glzSectionLive(section) {
    and are deliberately not read here.                                        */
 function glzWindowsOf(j) { return Math.max(0, gInt(j && j.wndMain, 0)); }
 function glzDoorsOf(j) { return Math.max(0, gInt(j && j.drsMain, 0)); }
+/** ASTRAGAL off `Production` (2026-09-24): its own component, no relation to
+    the windows or the doors - the number of astragal units the job needs. */
+function glzAstragalOf(j) { return Math.max(0, gInt(j && j.astrMain, 0)); }
 /** The job's COMMENT, as the parser left it on j.notes, stripped. */
 function glzCommentOf(j) {
   const hit = ((j && j.notes) || []).find(n => n && n.k === "comment");
@@ -142,7 +148,10 @@ function glzSlice(jobs, blockNames) {
        nothing but doors falls out on the next line and the feeder's own plan
        marks whatever row it made before that day Active = No. */
     const total = wnd;
-    if (!(total > 0)) return;                      // nothing to glaze: not fed
+    const astr = glzAstragalOf(j);
+    /* windows OR astragal puts a job on the board: a job of doors and astragal
+       and no windows is fed with the astragal line alone (owner, 2026-09-24) */
+    if (!(total > 0) && !(astr > 0)) return;       // nothing to glaze: not fed
     /* one Title, one row. Title is unique on the list, so a slice carrying a
        job twice would make the feeder POST a row SharePoint then refuses, every
        run, for ever. The first wins and the second is said out loud. */
@@ -156,7 +165,7 @@ function glzSlice(jobs, blockNames) {
     out.push({ title: job, job: job,
                customer: glzStrip(j.cust, GLZ_CUSTOMER_MAX),
                comment: glzCommentOf(j),
-               wnd: wnd, drs: drs, total: total,
+               wnd: wnd, drs: drs, total: total, astr: astr,
                seq: gNum(j.seq, 99999), section: glzSectionOf(j, names), active: true });
   });
   out.sort(glzRowOrder);
@@ -174,14 +183,15 @@ function glzFeederFields(row) {
   return { Job: row.job, Customer: gTxt(row.customer), Section: gTxt(row.section),
            Seq: gNum(row.seq, 99999), Active: row.active ? "Yes" : "No",
            Windows: Math.max(0, gInt(row.wnd, 0)), Doors: Math.max(0, gInt(row.drs, 0)),
-           Total: Math.max(0, gInt(row.total, 0)), Comment: gTxt(row.comment) };
+           Total: Math.max(0, gInt(row.total, 0)), Comment: gTxt(row.comment),
+           AstragalTotal: Math.max(0, gInt(row.astr, 0)) };
 }
 /** No seed, ever: there is no office record of glazing to seed from. */
 function glzSeedFields() { return {}; }
 /** Everything about a slice row that could make the feeder want to write it. */
 function glzHashRow(r) {
   return [r.title, r.job, r.customer, r.comment, r.wnd, r.drs, r.total,
-          r.seq, r.section, !!r.active];
+          r.seq, r.section, !!r.active, r.astr];
 }
 
 /* ---- what the screens draw -------------------------------------------------
@@ -210,10 +220,17 @@ function glzColour(done, total) {
     `glzColour` (green, the tablet's) is deliberately left alone. */
 function glzOfficeColour(c, rowDone) {
   if (rowDone) return "gold";
-  const t = Math.max(0, gInt(c && c.total, 0));
-  const d = gClamp(c && c.glazed, t);
-  if (!(t > 0)) return "";
-  return d >= t ? "gold" : d > 0 ? "yellow" : "";
+  const col = glzCardColour(c);
+  return col === "green" ? "gold" : col;
+}
+/** One card's colour over BOTH counts (2026-09-24): green only when the windows
+    and the astragal are each full, yellow once either has started. */
+function glzCardColour(c) {
+  const t = Math.max(0, gInt(c && c.total, 0)), at = Math.max(0, gInt(c && c.astrTotal, 0));
+  if (!(t > 0) && !(at > 0)) return "";
+  const d = gClamp(c && c.glazed, t), ad = gClamp(c && c.astr, at);
+  if (d >= t && ad >= at) return "green";
+  return (d > 0 || ad > 0) ? "yellow" : "";
 }
 
 /** One list row as the boards read it. */
@@ -221,7 +238,9 @@ function glzRecord(it) {
   const f = (it && it.fields) || {};
   const total = Math.max(0, gInt(f.Total, 0));
   const done = gClamp(f.Glazed, total);
-  return { id: gTxt(it && it.id), title: gTxt(f.Title),
+  const astrTotal = Math.max(0, gInt(f.AstragalTotal, 0));
+  const astr = gClamp(f.Astragal, astrTotal);
+  const rec = { id: gTxt(it && it.id), title: gTxt(f.Title),
            job: gKey(f.Job) || gKey(f.Title),
            customer: gTxt(f.Customer), comment: gTxt(f.Comment),
            wnd: Math.max(0, gInt(f.Windows, 0)), drs: Math.max(0, gInt(f.Doors, 0)),
@@ -232,8 +251,11 @@ function glzRecord(it) {
            /* the first tap writes these and nothing else does but an office
               edit, so they are the honest answer to "has this row moved" */
            doneBy: gTxt(f.DoneBy), doneAt: gTxt(f.DoneAt),
-           colour: glzColour(done, total),
-           finished: total > 0 && done >= total };
+           astrTotal: astrTotal, astr: astr, astrLeft: Math.max(0, astrTotal - astr) };
+  rec.colour = glzCardColour(rec);
+  /* finished = every line full: windows AND astragal (owner, 2026-09-24) */
+  rec.finished = rec.colour === "green";
+  return rec;
 }
 
 /** Every card `keep` wants, de-duplicated by Title with the OLDEST id winning -
@@ -288,8 +310,13 @@ function glzFilter(cards, q) {
 }
 /** "N left" over the cards given. The BOARD's number, never the searched one -
     somebody looking a job up must not make the day's work read smaller. */
-function glzLeft(cards) {
-  return (cards || []).reduce((n, c) => n + Math.max(0, gInt(c.left, 0)), 0);
+function glzLeft(cards, key) {
+  const k = key || "left";
+  return (cards || []).reduce((n, c) => n + Math.max(0, gInt(c[k], 0)), 0);
+}
+/** The tablet header: both counts, windows first (owner, 2026-09-24). */
+function glzHeadWords(cards) {
+  return glzLeft(cards) + " windows left · " + glzLeft(cards, "astrLeft") + " astragal left";
 }
 const glzLeftWords = n => Math.max(0, gInt(n, 0)) + " left";
 /** "6 windows" at the head of the tablet's card. It said "6 units" until
@@ -304,8 +331,17 @@ function glzUnitWords(n) {
     a number the glazer cannot act on would only make the card read wrong. */
 function glzQtyWords(c) {
   const w = Math.max(0, gInt(c && c.wnd, 0));
-  return w > 0 ? w + (w === 1 ? " window" : " windows") : "";
+  const a = Math.max(0, gInt(c && c.astrTotal, 0));
+  return [w > 0 ? w + (w === 1 ? " window" : " windows") : "",
+          a > 0 ? a + " astragal" : ""].filter(Boolean).join(" · ");
 }
+/** Which counter a part names: "astragal" is `Astragal`, anything else the
+    windows' `Glazed` - with the card keys and the total column that go with it. */
+const GLZ_PARTS = {
+  windows: { field: "Glazed", done: "glazed", total: "total", totalField: "Total" },
+  astragal: { field: "Astragal", done: "astr", total: "astrTotal", totalField: "AstragalTotal" }
+};
+const glzPart = part => GLZ_PARTS[part === "astragal" ? "astragal" : "windows"];
 
 /* ---- the writes one tap makes ----------------------------------------------
    Two, in order: the counter, and then - only if that succeeded - the log line.
@@ -322,9 +358,10 @@ function glzQtyWords(c) {
 /** The new value after a tap. delta is a number, "all" or "none". The only rule
     is the clamp: a finished card is still tappable, and reducing it is what
     brings it back off the Finished group. */
-function glzApplyTap(row, delta) {
-  const total = Math.max(0, gInt(row && row.total, 0));
-  const now = gClamp(row && row.glazed, total);
+function glzApplyTap(row, delta, part) {
+  const P = glzPart(part);
+  const total = Math.max(0, gInt(row && row[P.total], 0));
+  const now = gClamp(row && row[P.done], total);
   if (delta === "all") return total;
   if (delta === "none") return 0;
   const d = Number(delta);
@@ -332,11 +369,13 @@ function glzApplyTap(row, delta) {
   return gClamp(now + d, total);
 }
 /** The counter PATCH for one tap, from the floor or from the office. */
-function glzTapFields(value, who, at) {
+function glzTapFields(value, who, at, part) {
   const when = gTxt(at) || new Date().toISOString();
   const name = gTxt(who);
-  return { Glazed: Math.max(0, gInt(value, 0)), GlazedBy: name, GlazedAt: when,
-           DoneBy: name, DoneAt: when };
+  const n = Math.max(0, gInt(value, 0));
+  /* astragal: its count and the last-touch pair, no By/At of its own */
+  if (part === "astragal") return { Astragal: n, DoneBy: name, DoneAt: when };
+  return { Glazed: n, GlazedBy: name, GlazedAt: when, DoneBy: name, DoneAt: when };
 }
 /** The office's edit, said in its own words so the call site reads as what it
     is. Identical body to a tap's, on purpose - see the block comment above. */
@@ -352,14 +391,17 @@ function glzFloorOnly(fields) {
     column is on the shared list already and nothing creates columns. Written by
     the tablet and by nothing else - never by the office. */
 function glzLogEntry(e) {
-  return { job: gKey(e && e.job), station: GLZ_NAME, type: GLZ_NAME.toUpperCase(),
-           stage: GLZ_STAGE,
+  /* an astragal line says so in Stage, so the report's glazing days (which
+     count Stage = glaze) never add astragal units to window units */
+  const astr = !!(e && e.part === "astragal");
+  return { job: gKey(e && e.job), station: GLZ_NAME, type: astr ? "ASTRAGAL" : GLZ_NAME.toUpperCase(),
+           stage: astr ? "astragal" : GLZ_STAGE,
            from: gInt(e && e.from, 0), to: gInt(e && e.to, 0),
            who: gTxt(e && e.who), at: gTxt(e && e.at) };
 }
 /** The `Dashboard Log` words for one office edit. The from/to go in
     noteChange's own columns. */
-const glzLogWords = job => "Glazing: " + gKey(job);
+const glzLogWords = (job, part) => (part === "astragal" ? "Glazing astragal: " : "Glazing: ") + gKey(job);
 
 /* ---- a queued tap meets somebody else's write --------------------------------
    A tap is owed as a NUMBER, and a number only means something against what the
@@ -375,7 +417,8 @@ const glzLogWords = job => "Glazing: " + gKey(job);
        tablet is for.                                                          */
 function glzRebase(e, fields) {
   const f = fields || {};
-  const now = Number(f.Glazed);
+  const P = glzPart(e && e.part);
+  const now = Number(f[P.field]);
   const was = Number(e && e.from);
   if (!isFinite(now) || !isFinite(was)) return { action: "keep" };
   if (now < was) {
@@ -385,7 +428,7 @@ function glzRebase(e, fields) {
     return { action: "drop" };
   }
   if (now <= was) return { action: "keep" };
-  const total = Math.max(0, gInt(f.Total, 0));
+  const total = Math.max(0, gInt(f[P.totalField], 0));
   return { action: "rebase",
            value: gClamp(Math.round(now + (Number(e.value) - was)), total),
            from: Math.round(now) };
@@ -395,7 +438,7 @@ function glzRebase(e, fields) {
     not in here cannot make a card redraw. */
 function glzCardSig(c) {
   return JSON.stringify([c.job, c.customer, c.comment, c.wnd, c.drs, c.total,
-                         c.seq, c.glazed, c.by, c.at, c.finished, c.colour]);
+                         c.seq, c.glazed, c.by, c.at, c.finished, c.colour, c.astr, c.astrTotal]);
 }
 
 /** THE ADAPTER the station report asks this station for. The report itself
@@ -417,14 +460,14 @@ function glzReportJobs(data, stage) {
   cards.forEach(c => {
     jobs.push({ job: c.job, done: c.glazed, total: c.total });
     rows.push([c.job, glzStrip(c.customer, cap), c.section, c.wnd, c.drs,
-               c.total, c.glazed, c.left, c.doneBy, c.doneAt,
+               c.total, c.glazed, c.left, c.astrTotal, c.astr, c.doneBy, c.doneAt,
                c.finished ? "Yes" : "No"]);
   });
   /* `Doors (not glazed)` says in the header what the numbers would otherwise
      make somebody work out: the doors are a fact off the sheet and are not in
      Total, which is the windows (owner, 2026-09-23). */
   return { columns: ["Job", "Customer", "Section", "Windows", "Doors (not glazed)", "Total",
-                     "Glazed", "Left", "Last moved by", "When", "Complete"],
+                     "Glazed", "Left", "Astragal", "Astragal done", "Last moved by", "When", "Complete"],
            rows: rows, jobs: jobs };
 }
 
@@ -464,8 +507,8 @@ const GLZC = {
   GLZ_FIELDS, GLZ_FEEDER_FIELDS, GLZ_FLOOR_FIELDS, GLZ_COUNTER_FIELDS,
   GLZ_SEED_FIELDS, GLZ_FEEDER_WRITES, GLZ_CUSTOMER_MAX, GLZ_COMMENT_MAX,
   glzStrip, glzSlice, glzRowOrder, glzFeederFields, glzSeedFields, glzHashRow,
-  glzWindowsOf, glzDoorsOf, glzCommentOf, glzSectionOf,
-  glzActive, glzInProduction, glzColour, glzOfficeColour,
+  glzWindowsOf, glzDoorsOf, glzAstragalOf, glzCommentOf, glzSectionOf,
+  glzActive, glzInProduction, glzColour, glzOfficeColour, glzCardColour, glzPart, glzHeadWords,
   glzRecord, glzCards, glzBoard, glzOfficeBoard, glzJobCard, glzFilter,
   glzLeft, glzLeftWords, glzUnitWords, glzQtyWords,
   glzApplyTap, glzTapFields, glzOfficeFields, glzFloorOnly,

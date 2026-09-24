@@ -3721,7 +3721,10 @@ function glzNotesReadIfNeeded(then) {
    What it does NOT write: a `Station log` line. That list is the floor's and
    stays the floor's. The change goes into `Dashboard Log` through noteChange,
    exactly as the welding board's does. */
-async function glzOfficeEdit(id, act) {
+async function glzOfficeEdit(id, act, part) {
+  /* `part` "astragal" moves the Astragal counter (2026-09-24); anything else
+     the windows' Glazed, exactly as before */
+  const P = GLZC.glzPart(part);
   if (!glzOn() || !CW.listPatch) return false;
   const rec = (glzRecordsNow().byId || {})[String(id)];
   if (!rec) return false;
@@ -3743,7 +3746,7 @@ async function glzOfficeEdit(id, act) {
     return false;
   }
   const who = feedWho(), at = new Date().toISOString();
-  let from = rec.glazed, value = null, stale = false;
+  let from = rec[P.done], value = null, stale = false;
   try {
     GLZ_SITEID = await glzSiteId();
     if (!GLZ_SITEID) throw new Error(GLZ_SITE_MISSING);
@@ -3757,8 +3760,8 @@ async function glzOfficeEdit(id, act) {
     if (!now || !now.fields) throw new Error(GLZ_LIST_MISSING);
     const fresh = GLZC.glzRecord({ id: rec.id, fields: now.fields });
     stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
-    from = fresh.glazed;
-    value = GLZC.glzApplyTap(fresh, act);
+    from = fresh[P.done];
+    value = GLZC.glzApplyTap(fresh, act, part);
     if (value == null || value === from) {
       /* the floor has already put it where this click was going to */
       delete glzWriting[k];
@@ -3767,7 +3770,7 @@ async function glzOfficeEdit(id, act) {
       if (stale) toast(rec.job + ": updated from the floor first.");
       return false;
     }
-    const body = GLZC.glzFloorOnly(GLZC.glzOfficeFields(value, who, at));
+    const body = GLZC.glzFloorOnly(GLZC.glzOfficeFields(value, who, at, part));
     await CW.listPatch(GLZC.GLZ_LIST, rec.id, body, glzOpts());
     /* the local copy carries the fresh row's own fields as well as the write,
        so the board is not left showing a stale number beside the new one */
@@ -3784,9 +3787,10 @@ async function glzOfficeEdit(id, act) {
   /* the floor had moved the row between the board's last poll and this click,
      so the number this write started from is not the one that was on screen.
      Said out loud, quietly, once. */
-  if (stale) toast(rec.job + ": updated from the floor first — glazing is " + value + " now.");
+  if (stale) toast(rec.job + ": updated from the floor first — " +
+                   (part === "astragal" ? "astragal" : "glazing") + " is " + value + " now.");
   /* one line per change, in the office's own log and nowhere else */
-  noteChange(rec.job, GLZC.glzLogWords(rec.job), String(from), String(value));
+  noteChange(rec.job, GLZC.glzLogWords(rec.job, part), String(from), String(value));
   return true;
 }
 /** Put one row's new fields into this dashboard's copy of the list at once, so
@@ -3849,8 +3853,9 @@ function glzCardsShown() {
     should not look like three features. */
 function glzRowHtml(c) {
   const busy = !!glzWriting[String(c.id)];
-  const b = (t, act) => '<button class="wobtn" data-zid="' + esc(c.id) +
-    '" data-zact="' + esc(act) + '"' + (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
+  const b = (t, act, part) => '<button class="wobtn" data-zid="' + esc(c.id) +
+    '" data-zact="' + esc(act) + '" data-zpart="' + esc(part || "") + '"' +
+    (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
   const notes = glzNotesFor(c.job);
   const j = byId(c.job);
   const live = !!j;
@@ -3862,23 +3867,37 @@ function glzRowHtml(c) {
      keeps its steppers: the office may still take a unit back. */
   const rowDone = !!(j && j.done);
   const col = GLZC.glzOfficeColour(c, rowDone);
-  return '<div class="worow c-' + (col || "none") + ((c.finished || rowDone) ? " done" : "") +
-      '" data-zjob="' + esc(c.job) + '">' +
-    '<div class="wohead' + (live ? " stopen" : "") + '"' +
-        (live ? ' data-zopen="' + esc(c.job) + '"' : "") + '>' +
-      '<span class="cond tab stjob">' + esc(c.job) + '</span>' +
-      '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
-      '<span class="wosect">' + esc(c.section || "—") + '</span>' +
-      '<span class="wototal tab">' + c.glazed + ' / ' + c.total + '</span>' +
-      '<span class="wopart tab">' + esc(GLZC.glzQtyWords(c) || "—") + '</span>' +
+  /* ONE HEAD LINE PER COUNTER THE JOB HAS (2026-09-24): windows, then
+     astragal, each with its own count and steppers. The first line carries the
+     job, the notes and the last touch; a second line is the same eight grid
+     cells, so every column stays lined up (B30), with its name where the
+     customer would be. */
+  const parts = [];
+  if (c.total > 0) parts.push("");
+  if (c.astrTotal > 0) parts.push("astragal");
+  const line = (part, first) => {
+    const P = GLZC.glzPart(part);
+    const n = c[P.total];
+    const what = part ? n + " astragal" : n + (n === 1 ? " window" : " windows");
+    return '<div class="wohead' + (first && live ? " stopen" : "") + '"' +
+        (first && live ? ' data-zopen="' + esc(c.job) + '"' : "") + '>' +
+      '<span class="cond tab stjob">' + (first ? esc(c.job) : "") + '</span>' +
+      '<span class="wocust">' + (first ? esc(c.customer || "—") : "Astragal") + '</span>' +
+      '<span class="wosect">' + (first ? esc(c.section || "—") : "") + '</span>' +
+      '<span class="wototal tab">' + c[P.done] + ' / ' + n + '</span>' +
+      '<span class="wopart tab">' + esc(what) + '</span>' +
       (rowDone ? '<span class="wobtns wodone">done</span>'
-               : '<span class="wobtns">' + b("&minus;", "-1") + b("+", "1") +
-                 b("All", "all") + b("None", "none") + '</span>') +
-      '<span class="wonotes-slot">' + (notes.length ? '<span class="wonotes" title="' +
+               : '<span class="wobtns">' + b("&minus;", "-1", part) + b("+", "1", part) +
+                 b("All", "all", part) + b("None", "none", part) + '</span>') +
+      '<span class="wonotes-slot">' + (first && notes.length ? '<span class="wonotes" title="' +
         esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' +
         notes.length + '</span>' : "") + '</span>' +
-      '<span class="wolast">' + (c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
-    '</div>' +
+      '<span class="wolast">' + (first && c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
+    '</div>';
+  };
+  return '<div class="worow c-' + (col || "none") + ((c.finished || rowDone) ? " done" : "") +
+      '" data-zjob="' + esc(c.job) + '">' +
+    parts.map((p, i) => line(p, i === 0)).join("") +
     (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
     (notes.length ? '<div class="wonotelist">' + notes.map(n =>
       '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
@@ -3932,7 +3951,8 @@ function glzLogPanelHtml() {
   const lines = rows.slice(0, GLZ_LOG_SHOW).map(r =>
     '<div class="stlrow"><span class="stlwho">' + esc(r.who || "—") + '</span>' +
     '<span class="stn">' + esc(r.job) + '</span>' +
-    '<span class="stlwhat">Glazing · ' + r.from + ' → ' + r.to + '</span>' +
+    '<span class="stlwhat">' + (r.stage === "astragal" ? "Astragal" : "Glazing") + ' · ' +
+      r.from + ' → ' + r.to + '</span>' +
     '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>').join("");
   return '<div class="wolog">' + head +
     (counts.people.length ? '<div class="lgcrow"><span class="kick">Per person</span>' +
@@ -3963,7 +3983,7 @@ function wireGlzBoard(host) {
       if (ev && ev.stopPropagation) ev.stopPropagation();
       if (el.disabled) return;
       const act = el.dataset.zact;
-      glzOfficeEdit(el.dataset.zid, act === "all" || act === "none" ? act : Number(act))
+      glzOfficeEdit(el.dataset.zid, act === "all" || act === "none" ? act : Number(act), el.dataset.zpart)
         .catch(e => console.warn("[glazing] " + ((e && e.message) || e)));
     };
   });
@@ -3987,7 +4007,7 @@ function glzDrawerLine(j) {
   glzReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
   if (GLZ_OK !== true) return "";
   const c = GLZC.glzJobCard(GLZ_ITEMS || [], j.id);
-  if (!c || !c.total) return "";
+  if (!c || !(c.total || c.astrTotal)) return "";
   /* the same sentence the board tells (2026-09-22), so the drawer and the board
      never disagree about one job: the gold `Production` row first, then the
      count. Still read-only, still not a checkpoint. */
@@ -3995,7 +4015,8 @@ function glzDrawerLine(j) {
   const col = GLZC.glzOfficeColour(c, rowDone);
   return '<div class="weldline' + (col ? " c-" + col : "") + '">' +
     '<span class="kick">Glazing' + (rowDone ? " · done" : "") + '</span>' +
-    '<span class="weldnum tab">' + c.glazed + ' / ' + c.total + '</span>' +
+    '<span class="weldnum tab">' + [c.total ? c.glazed + ' / ' + c.total + ' windows' : "",
+      c.astrTotal ? c.astr + ' / ' + c.astrTotal + ' astragal' : ""].filter(Boolean).join(" · ") + '</span>' +
     (c.at ? '<span class="stwho">' + esc(c.by || "—") + ' · ' + esc(stWhen(c.at)) + '</span>' : "") +
     '<button class="ghost" id="glzopen">open the glazing board</button></div>';
 }
@@ -4041,7 +4062,8 @@ function floorPhaseRec(j) {
     ? (weldRecordsNow().byJob || {})[id] : null;
   const g = (glzOn() && GLZ_OK === true) ? (glzRecordsNow().byJob || {})[id] : null;
   if (!w && !g) return null;
-  return { welded: w ? w.done : 0, glazed: g ? g.glazed : 0 };
+  /* astragal recorded is glazing started too (2026-09-24) */
+  return { welded: w ? w.done : 0, glazed: g ? g.glazed + g.astr : 0 };
 }
 if (typeof setFloorHook === "function") setFloorHook(floorPhaseRec);
 

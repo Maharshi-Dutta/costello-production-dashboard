@@ -11,9 +11,11 @@
    API path anywhere in this file - no delete, no editing of a job's facts, no
    export, and no link back to the master dashboard.
 
-   ONE NUMBER PER JOB: units glazed, out of the job's WINDOWS - doors are not
+   TWO NUMBERS PER JOB: units glazed, out of the job's WINDOWS - doors are not
    glazed at this station (owner, 2026-09-23), so they are fed as a fact and
-   counted nowhere, and a job of nothing but doors never reaches this page.
+   counted nowhere - and, since 2026-09-24, ASTRAGAL units done, out of the
+   sheet's ASTRAGAL quantity, a line of its own. A job with neither never
+   reaches this page.
    There are no stages here and no product groups, which is why this page is shorter
    than welding's rather than a copy of it: a card is a job, a stepper and a
    note box.
@@ -107,6 +109,11 @@ const mayGlaze = () => ST.canStage(PERSON, GZ.GLZ_STAGE);
 let QUEUE = {};
 let LOGQ = {};
 
+/* One entry per row AND counter (2026-09-24): the windows' entry keeps the
+   bare item id it always had, so a queue saved by the build before this one
+   still reads; the astragal entry is "<id>|a". */
+const partOf = p => (p === "astragal" ? "astragal" : "");
+const qKey = (id, part) => String(id) + (partOf(part) ? "|a" : "");
 function cleanQueue(raw) {
   const out = {};
   Object.keys(raw || {}).forEach(k => {
@@ -115,7 +122,7 @@ function cleanQueue(raw) {
     const v = Number(e.value);
     if (!isFinite(v)) return;
     const from = Number(e.from);
-    out[String(e.id)] = { id: String(e.id), value: Math.round(v),
+    out[qKey(e.id, e.part)] = { id: String(e.id), part: partOf(e.part), value: Math.round(v),
                           who: String(e.who || ""), at: String(e.at || ""),
                           job: String(e.job || ""), title: String(e.title || ""),
                           site: String(e.site || ""),
@@ -132,7 +139,8 @@ function cleanLogQ(raw) {
        eight columns of the log list and nothing else */
     out[String(k)] = { key: String(k), err: 0, fields: ST.logFields(GZ.glzLogEntry({
       job: e.fields.Title, from: e.fields.From, to: e.fields.To,
-      who: e.fields.Who, at: e.fields.At })) };
+      who: e.fields.Who, at: e.fields.At,
+      part: String(e.fields.Stage || "").toLowerCase() === "astragal" ? "astragal" : "" })) };
   });
   return out;
 }
@@ -157,19 +165,26 @@ function saveQueue() {
    The site is stamped on with the item id, because a SharePoint item id only
    means anything in the list it came from; the Title is what finds the row
    again if the lists ever move. */
-function queueTap(rec, value) {
-  const k = String(rec.id);
+function queueTap(rec, value, part) {
+  const k = qKey(rec.id, part);
   const had = QUEUE[k];
-  QUEUE[k] = { id: k, value: value, who: who(), at: new Date().toISOString(),
+  QUEUE[k] = { id: String(rec.id), part: partOf(part), value: value, who: who(), at: new Date().toISOString(),
                job: rec.job, title: rec.title || rec.job, site: SITEID || "",
-               from: had ? had.from : listValue(rec.id), err: 0 };
+               from: had ? had.from : listValue(rec.id, part), err: 0 };
   saveQueue();
 }
-/** The counter this tablet still owes for a row, so the screen shows the tapped
-    number rather than the number the list last answered with. */
-const queuedFor = id => (QUEUE[String(id)] ? { Glazed: QUEUE[String(id)].value } : null);
-const owedFor = id => !!QUEUE[String(id)];
-const badFor = id => !!(QUEUE[String(id)] && QUEUE[String(id)].err);
+/** The counters this tablet still owes for a row, so the screen shows the
+    tapped numbers rather than the numbers the list last answered with. */
+function queuedFor(id) {
+  const w = QUEUE[qKey(id, "")], a = QUEUE[qKey(id, "astragal")];
+  if (!w && !a) return null;
+  const out = {};
+  if (w) out.Glazed = w.value;
+  if (a) out.Astragal = a.value;
+  return out;
+}
+const owedFor = id => !!(QUEUE[qKey(id, "")] || QUEUE[qKey(id, "astragal")]);
+const badFor = id => [qKey(id, ""), qKey(id, "astragal")].some(k => QUEUE[k] && QUEUE[k].err);
 /** A tap that was dropped because somebody said something later, kept until the
     card is redrawn from a list that agrees - never dropped in silence. */
 let LOST = {};
@@ -178,10 +193,10 @@ const lostFor = job => LOST[String(job).trim().toUpperCase()] || null;
 /** What the list last said this counter was - the From of the log line. The
     queue is deliberately not consulted: From means "the number the office could
     see before this write", and that is the list's number. */
-function listValue(id) {
+function listValue(id, part) {
   const it = ITEMS.find(x => String(x.id) === String(id));
   if (!it) return 0;
-  const v = Number((it.fields || {}).Glazed);
+  const v = Number((it.fields || {})[GZ.glzPart(part).field]);
   return isFinite(v) ? Math.round(v) : 0;
 }
 
@@ -264,7 +279,7 @@ async function flushQueue() {
          air would be deleted as though it had been sent. (welding.js learned
          this; docs/HISTORY.md B19.) */
       const want = e.value, when = e.at, whose = e.who, wantFrom = e.from;
-      const body = GZ.glzFloorOnly(GZ.glzTapFields(want, whose, when));
+      const body = GZ.glzFloorOnly(GZ.glzTapFields(want, whose, when, e.part));
       const id = currentId(e);
       if (!id) {
         console.warn("[glazing] dropping a queued tap for " + e.job +
@@ -278,14 +293,14 @@ async function flushQueue() {
         /* the counter is in the list now, so the log line describing it may be
            owed - and only now: a line about a write that never happened would
            be a lie in a list nothing ever deletes from. */
-        queueLog({ id: id, job: e.job, value: want, at: when, who: whose, from: wantFrom });
+        queueLog({ id: id, job: e.job, value: want, at: when, who: whose, from: wantFrom, part: e.part });
         const now = QUEUE[k];
         if (now && now.value === want && now.at === when) delete QUEUE[k];
         else if (now) { now.err = 0; delete tried[k]; }     // moved mid-write: run it again
         /* keep the local copy in step, so a second tap's From is right before
            the next poll has been anywhere near SharePoint */
         const it = ITEMS.find(x => String(x.id) === String(id));
-        if (it) (it.fields = it.fields || {}).Glazed = want;
+        if (it) (it.fields = it.fields || {})[GZ.glzPart(e.part).field] = want;
       } catch (err) {
         if (QUEUE[k]) QUEUE[k].err = 1;
         /* only a 404 is a reason to doubt the cached site: a refusal or a bad
@@ -311,9 +326,9 @@ async function flushQueue() {
 function queueLog(e) {
   const from = Number(e.from) || 0;
   if (from === e.value) return;                 // nothing actually moved
-  const key = e.id + "|" + e.at;
+  const key = e.id + "|" + e.at + (e.part ? "|" + e.part : "");
   LOGQ[key] = { key: key, err: 0, fields: ST.logFields(GZ.glzLogEntry({
-    job: e.job, from: from, to: e.value, who: e.who, at: e.at })) };
+    job: e.job, from: from, to: e.value, who: e.who, at: e.at, part: e.part })) };
   saveQueue();
 }
 async function flushLog() {
@@ -479,7 +494,7 @@ async function pollList() {
 }
 
 /* ---- taps ---- */
-function tap(id, delta) {
+function tap(id, delta, part) {
   /* belt and braces: the stepper is drawn disabled for somebody who holds no
      stage, and tap() refuses it anyway - a disabled button is a drawing, and
      this is the rule */
@@ -488,14 +503,14 @@ function tap(id, delta) {
   if (!rec) return;
   /* somebody is working the screen, whether or not the number could move */
   touch();
-  const value = GZ.glzApplyTap(rec, delta);
-  if (value == null || value === rec.glazed) return;      // already at the clamp
+  const value = GZ.glzApplyTap(rec, delta, part);
+  if (value == null || value === rec[GZ.glzPart(part).done]) return;      // already at the clamp
   /* the apology for a dropped tap goes the moment they tap again: they have
      been told, and they are now saying it a second time */
   delete LOST[String(rec.job).trim().toUpperCase()];
   /* queued first, drawn second: boardNow() lays the queue over the list, so the
      new number is on screen before the write has left the tablet */
-  queueTap(rec, value);
+  queueTap(rec, value, part);
   render();
   flushQueue();
 }
@@ -531,19 +546,24 @@ function barHtml(done, total) {
     move it - on the card itself, where a hand can reach them. Nothing to open,
     nothing to scroll. Every target is at least 56 px, because it is tapped with
     a work glove on. */
-function stepHtml(c) {
+function stepHtml(c, part) {
+  const P = GZ.glzPart(part);
+  const done = c[P.done], total = c[P.total];
   const mine = mayGlaze();
   const off = mine ? "" : ' disabled aria-disabled="true"';
   const b = (t, act, cls) => '<button class="' + cls + '" data-id="' + esc(c.id) +
-    '" data-act="' + esc(act) + '"' + off + '>' + t + '</button>';
-  const full = c.glazed >= c.total;
-  return '<div class="step' + (mine ? "" : " locked") + ' c-' + (c.colour || "none") + '">' +
-    '<span class="stepl">Glazed' +
-      (mine ? '<span class="stepleft tab">' + esc(GZ.glzLeftWords(c.left)) + '</span>'
+    '" data-act="' + esc(act) + '" data-part="' + esc(partOf(part)) + '"' + off + '>' + t + '</button>';
+  const full = done >= total;
+  /* each line its own colour, so a finished windows line reads finished while
+     the astragal beside it is still to do */
+  const col = GZ.glzColour(done, total);
+  return '<div class="step' + (mine ? "" : " locked") + ' c-' + (col || "none") + '">' +
+    '<span class="stepl">' + (partOf(part) ? "Astragal" : "Windows") +
+      (mine ? '<span class="stepleft tab">' + esc(GZ.glzLeftWords(total - done)) + '</span>'
             : ' <span class="nomine">not yours</span>') + '</span>' +
     '<span class="stepmid">' +
-      '<span class="stepn tab' + (full ? " full" : "") + '">' + c.glazed + ' / ' + c.total + '</span>' +
-      barHtml(c.glazed, c.total) + '</span>' +
+      '<span class="stepn tab' + (full ? " full" : "") + '">' + done + ' / ' + total + '</span>' +
+      barHtml(done, total) + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
       b(full ? "None" : "All", full ? "none" : "all", "sall") + '</span>' +
     '</div>';
@@ -559,13 +579,14 @@ function cardInner(c) {
   return '<div class="chead">' +
       '<span class="cond job">' + esc(c.job) + '</span>' +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
-      '<span class="cunits tab">' + esc(GZ.glzUnitWords(c.total)) + '</span>' +
+      '<span class="cunits tab">' + esc(GZ.glzQtyWords(c)) + '</span>' +
     '</div>' +
     (c.comment
       ? '<div class="cfacts">' +
         '<span class="ccmt">“' + esc(c.comment) + '”</span></div>'
       : "") +
-    stepHtml(c) +
+    (c.total > 0 ? stepHtml(c, "") : "") +
+    (c.astrTotal > 0 ? stepHtml(c, "astragal") : "") +
     (lost ? '<div class="unsaved">' + esc(String(lost.value)) +
         ' was not saved — the office changed this job after that tap</div>' : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
@@ -735,7 +756,7 @@ function render() {
   if (gt) {
     gt.hidden = !on;
     gt.style.display = on ? "" : "none";
-    gt.textContent = on ? GZ.glzLeftWords(GZ.glzLeft(live)) : "";
+    gt.textContent = on ? GZ.glzHeadWords(live) : "";
   }
   const upd = $("#upd");
   if (upd) upd.textContent = LASTREAD ? "updated " + STU.stuAgo(LASTREAD) : "";
@@ -810,7 +831,7 @@ function wireBoard(host) {
       if (d.act) {
         ev.stopPropagation();
         if (el.disabled) return;
-        tap(d.id, d.act === "all" || d.act === "none" ? d.act : Number(d.act));
+        tap(d.id, d.act === "all" || d.act === "none" ? d.act : Number(d.act), d.part);
         return;
       }
       if (d.cmt) {
