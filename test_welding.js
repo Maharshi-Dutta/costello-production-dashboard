@@ -545,6 +545,17 @@ JOBS.blockNames = NAMES;
   assert.deepStrictEqual(W.weldLeftByPart(W.weldBoard(tabRows)), W.weldLeftByPart(board),
     "the header's Frames/Sashes left is still the In production board alone - a job in another section adds nothing");
   assert.deepStrictEqual(W.weldTabs([]), { floor: [], finished: [] });
+  /* rows of one job disagreeing on Section (mid-feed): one whole card, one tab */
+  const split = W.weldTabs([
+    item({ Title: "R3710|CASEMENT WINDOWS", Job: "R3710", Group: "CASEMENT WINDOWS", GroupSeq: 0,
+      Frames: 2, Sashes: 2, FramesDone: 0, SashesDone: 0, Seq: 1, Section: "In production", Active: "Yes" }, "520"),
+    item({ Title: "R3710|PVC DOOR", Job: "R3710", Group: "PVC DOOR", GroupSeq: 1,
+      Frames: 1, Sashes: 1, FramesDone: 0, SashesDone: 0, Seq: 1, Section: "Ready to fit", Active: "Yes" }, "521")]);
+  const allSplit = split.floor.concat(split.finished);
+  assert.strictEqual(allSplit.length, 1, "exactly one card for the job");
+  assert.deepStrictEqual(allSplit[0].groups.map(g => g.group), ["CASEMENT WINDOWS", "PVC DOOR"],
+    "with both of its groups on it");
+  assert.strictEqual(split.floor.length, 1, "On floor, since one of its rows is still In production");
   assert.ok(W.weldCardSig(tabs.finished[2]) !== W.weldCardSig(Object.assign({}, tabs.finished[2], { section: "Ready" })),
     "a section change redraws the card, since the card head shows it");
   pass("the tablet's two tabs split the office's board: On floor and Finished, Active = No on neither");

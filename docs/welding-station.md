@@ -101,8 +101,13 @@ is still tappable and comes back the moment it is reduced, by the floor or by
 the office. The header carries **two capsules, "Frames N left" and "Sashes N
 left"** (each part's own left over the whole board, never narrowed by the
 search box, added by `weldLeftByPart`; a group fed only one part, e.g. Super
-door's sashes, contributes 0 to the other without a special case) and a
-**Sent to floor** chip, off by default, remembered on the device.
+door's sashes, contributes 0 to the other without a special case) and two
+**tabs, On floor and Finished**, each with its count (2026-09-24, replacing the
+Sent to floor chip and the collapsed Finished group). On floor is In production
+and not finished; Finished is every other Active card of the office's board -
+finished In production jobs and every job in any other section, whose card head
+names its section (`weldTabs`). The header capsules stay the In production
+board's. The tab is remembered on the device (`cw_weldtab`).
 
 There is **no lock column**. Glass has `OfficeDone`, which greys the tablet;
 welding does not need one, because the office edits the same counters instead.

@@ -544,12 +544,18 @@ function weldFilter(cards, q) {
     and the collapsed Finished group). On floor: the tablet's own board, cards
     not finished. Finished: every other card of the office's board - finished
     In production jobs AND every job in any other section still on the sheet.
-    Active = No is on neither, as on both boards. Each keeps weldCards' order. */
+    Active = No is on neither, as on both boards. Each keeps weldCards' order.
+    ONE pass over the office's board, so every card is whole and in exactly one
+    tab: a job whose rows disagree on Section for a moment mid-feed is On floor
+    if any of its rows is In production (review, 2026-09-24 - two passes had put
+    its other group on neither tab). */
 function weldTabs(items) {
-  const floor = weldBoard(items).filter(c => !c.finished);
-  const onFloor = {};
-  floor.forEach(c => { onFloor[c.job] = 1; });
-  return { floor: floor, finished: weldOfficeBoard(items).filter(c => !onFloor[c.job]) };
+  const out = { floor: [], finished: [] };
+  weldOfficeBoard(items).forEach(c => {
+    const live = c.groups.some(g => weldInProduction({ Section: g.section }));
+    out[live && !c.finished ? "floor" : "finished"].push(c);
+  });
+  return out;
 }
 /** "N left" for the header: frames left plus sashes left over the cards given.
     It is the BOARD's number, never the searched one - somebody looking a job up

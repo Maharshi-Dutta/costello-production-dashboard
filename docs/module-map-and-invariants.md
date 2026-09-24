@@ -103,7 +103,7 @@
 | welding station job facts and floor counters | `Welding station` SharePoint list, in the `Floor stations` site — one row per job **and product group** — 2026-09-16 |
 | a queued/not-yet-sent welding tap | `cw_weldq` (counters) and `cw_weldlogq` (the log lines they owe) — the welding tablet only, deliberately separate from the glass tablet's two so one page can never read the other's queue (2026-09-16) |
 | who is at the welding tablet, and when they last tapped | `cw_wperson` — the welding tablet only |
-| whether the welding tablet's "Sent to floor" chip is on | `cw_weldsent` — the device's own choice, off by default |
+| which tab the welding tablet's board is on, On floor or Finished | `cw_weldtab` — `"floor"` or `"finished"`, the device's own choice, On floor by default (replaced `cw_weldsent` and the "Sent to floor" chip, 2026-09-24) |
 | when the master last fed the `Welding station` list, and the hash of what it sent | `cw_weldfeed` — read by `feedWelding()` to decide whether a run can be skipped |
 | glazing station job facts and the floor's counter | `Glazing station` SharePoint list, in the `Floor stations` site — one row per **job** — 2026-09-21 |
 | a queued/not-yet-sent glazing tap | `cw_glzq` (counters) and `cw_glzlogq` (the log lines they owe) — the glazing tablet only, deliberately separate from the other two tablets' queues so one page can never read another's (2026-09-21) |
