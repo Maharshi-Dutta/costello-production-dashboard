@@ -89,15 +89,23 @@ function savePerson() {
   } catch (e) {}
 }
 function touch() { LAST_TAP = Date.now(); savePerson(); }
-function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; touch(); render(); }
+/** The search box emptied: the tab from before the search comes back. Also run
+    when the person changes, so the next person never inherits a search. */
+function clearSearch() {
+  QUERY = ""; TYPED = false;
+  if (PRESEARCH != null) { TAB = PRESEARCH; PRESEARCH = null; try { window.scrollTo(0, 0); } catch (e) {} }
+  const sb = $("#search");
+  if (sb) sb.value = "";
+}
+function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; clearSearch(); touch(); render(); }
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false;
-  savePerson(); render();
+  clearSearch(); savePerson(); render();
 }
 function lockIfIdle() {
   if (!PERSON) return;
   if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  PERSON = null; savePerson(); render();
+  PERSON = null; clearSearch(); savePerson(); render();
 }
 function who() { return PERSON ? PERSON.name : ""; }
 /* One stage here, so anybody signed in holds it. canStage is still asked -
@@ -992,7 +1000,7 @@ async function start() {
     QUERY = sb.value || "";
     TYPED = true;
     if (QUERY.trim()) { if (PRESEARCH == null) PRESEARCH = TAB; }
-    else if (PRESEARCH != null) { TAB = PRESEARCH; PRESEARCH = null; try { window.scrollTo(0, 0); } catch (e) {} }
+    else clearSearch();
     touch(); render();
   };
   const goTab = t => {
