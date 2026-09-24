@@ -1,6 +1,6 @@
 # Welding tablet: Finished tab, no "Sent to floor" chip, bigger remake count
 
-Status: approved by the owner 2026-09-24, building.
+Status: shipped 2026-09-24, build 20260924-1057 (`7fb9d5b` build → `4292d39` fix pass → `5724f06` build stamp). HISTORY.md A35 and build log C/2026-09-24.
 
 ## Context
 
