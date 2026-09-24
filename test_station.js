@@ -2599,10 +2599,34 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(stationSectionHtml(mkJob({ id: "R9999", glass: {} })), "",
     "a job with no glass has no station section at all");
   assert.ok(/Not fed to the floor yet/.test(stationSectionHtml(mkJob({ id: "R0404", glass: { tg: 1 } }))));
-  html = stationSectionHtml(mkJob({ id: "R5299", glass: { tg: 3 } }));
-  assert.ok(/Finished on the floor/.test(html), "a job off the floor's board keeps its record");
+  /* 2026-09-24: three states once later-section jobs are fed. R5299 is
+     inactive and the floor never stamped it; R5298 is inactive and was
+     touched; both are Ready to fit */
+  const drawerWas = A("STATION_ITEMS");
+  global.__dItems = drawerWas.concat([
+    item({ Title: "R5298", Job: "R5298", Customer: "Customer Seven", GlassType: "GLASS", Total: 3, Seq: 0,
+           Active: "No", OnSheet: "Yes", Section: "Ready to fit", Cut: 3, DoneBy: "Person A",
+           DoneAt: "2026-09-08T10:00:00.000Z" }, "598"),
+    item({ Title: "R5297", Job: "R5297", Customer: "Customer Nine", GlassType: "GLASS", Total: 3, Seq: 0,
+           Active: "No", OnSheet: "Yes", Section: "Ready to fit", Cut: 3, Hotmelt: 3 }, "597")]);
+  A("STATION_ITEMS = __dItems;");
+  html = stationSectionHtml(mkJob({ id: "R5298", glass: { tg: 3 } }));
+  assert.ok(/Finished on the floor/.test(html), "touched and off the board: finished on the floor, as before");
   assert.ok(html.indexOf("Not fed") < 0);
-  pass("a job with no glass, one never fed, and one finished on the floor each read correctly");
+  html = stationSectionHtml(mkJob({ id: "R5297", glass: { tg: 3 } }));
+  assert.ok(html.indexOf("Not on the floor’s board — the job is in Ready to fit.") > 0,
+    "untouched and in a later section: says where it is, and claims nothing of the floor");
+  assert.ok(!/Finished on the floor|Recorded by the floor/.test(html));
+  assert.ok(/Recorded by the floor/.test(stationSectionHtml(mkJob({ id: "R5303", glass: { tg: 6 } }))),
+    "an In production row still says the floor recorded it");
+  /* the home row's chip: an untouched later-section row keeps none, a touched
+     one and an In production one keep theirs */
+  assert.strictEqual(glassChip(mkJob({ id: "R5297", glass: { tg: 3 } })), "",
+    "an untouched Ready-to-fit row has no chip: its counters are only the office's seed");
+  assert.ok(glassChip(mkJob({ id: "R5298", glass: { tg: 3 } })) !== "", "a touched one keeps its chip");
+  assert.ok(glassChip(mkJob({ id: "R5303", glass: { tg: 6 } })) !== "", "and an In production one keeps its chip");
+  A("STATION_ITEMS = " + JSON.stringify(drawerWas) + ";");
+  pass("a job with no glass, one never fed, one finished on the floor and one only in a later section each read correctly");
 
   assert.ok(/Nothing recorded on the floor for this job yet/.test(stationTimelineHtml("R9999")));
   A("STATION_LOG_OK = false; STATION_LOG_WHY = STATION_LOG_MISSING;");
@@ -2965,7 +2989,10 @@ const person = (name, stages, pin, active, station) =>
     item({ Title: "R6004", Job: "R6004", Customer: "Customer Eight", GlassType: "GLASS", Total: 0, Seq: 4,
            Active: "Yes" }, "603"),
     item({ Title: "R6005", Job: "R6005", Customer: "Customer Nine", GlassType: "GLASS", Total: 6, Seq: 5,
-           Active: "No", Cut: 6, Hotmelt: 3, Glazed: 0 }, "604")
+           Active: "No", Cut: 6, Hotmelt: 3, Glazed: 0,
+           /* the floor worked it (2026-09-24: an inactive row keeps its chip only
+              when the floor really touched it) */
+           DoneBy: "Person A", DoneAt: "2026-09-08T10:00:00.000Z" }, "604")
   ];
   /* six jobs on the sheet: five the floor has been fed, and one it has not */
   const chipJobs = ["R6001", "R6002", "R6003", "R6004", "R6005", "R6009"].map((id, i) =>
@@ -4299,9 +4326,13 @@ const person = (name, stages, pin, active, station) =>
      wall is not something anybody can pinch back out */
   assert.ok(/#search \{[^}]*font-size:16px/.test(gs), "the search box is 16px, so iOS does not zoom");
   assert.ok(gs.indexOf('id="gtotal"') > 0, "the signed-in person's own number is in the header too");
-  assert.ok(gs.indexOf('id="search"') < gs.indexOf('id="gtotal"') &&
-            gs.indexOf('id="gtotal"') < gs.indexOf('id="upd"'),
-    "beside the box, before the updated line, so a narrow header wraps them together");
+  /* 2026-09-24: the header is two fixed rows (as welding.html); the number
+     sits on the first, before the updated line, the box on the second */
+  assert.ok(gs.indexOf('id="gtotal"') < gs.indexOf('id="upd"') &&
+            gs.indexOf('id="upd"') < gs.indexOf('id="search"'),
+    "the number before the updated line on row one, the box on row two");
+  assert.strictEqual((gs.match(/<div class="toprow">/g) || []).length, 2, "exactly two header rows");
+  assert.ok(/\.toprow \{[^}]*flex-wrap:nowrap/.test(gs), "neither of which wraps on a tablet");
   assert.ok(/#gtotal \{[^}]*min-height:40px/.test(gs), "it is read, not tapped, so it takes 40px");
   assert.ok(/#gtotal \{[^}]*flex:0 1 auto/.test(gs),
     "so a pill carrying four stages' numbers wraps inside itself rather than running off " +

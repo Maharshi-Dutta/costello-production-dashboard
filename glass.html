@@ -52,15 +52,29 @@
              display:none; background:#2a1a1a; padding:11px 13px; border-radius:5px; border:1px solid #5a2a2a }
 
   /* ---- the bar across the top ---- */
+  /* Two rows, each an unwrapping flex line (2026-09-24, as welding.html). Only
+     #search grows, and only #whois (ellipsis) and #gtotal (wraps inside its
+     own pill) may shrink,
+     so the header is the same two rows at 700 px and at 1100 px and can never
+     become three. A phone (<=520 px) is allowed to wrap - see the rule at the
+     bottom. The theme switch sits on row one (the name gives way to it with
+     an ellipsis) because row two carries End of day on the cutting page, and
+     with three-digit tab counts it did not fit at 700 px otherwise. */
   header.top { position:sticky; top:0; z-index:30; background:var(--brand); color:var(--onbrand);
-               padding:11px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap }
-  .brand { font-family:"Barlow Condensed",sans-serif; font-size:25px; font-weight:700; text-transform:uppercase }
+               padding:9px 16px; display:flex; flex-direction:column; gap:8px }
+  .toprow { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; min-width:0 }
+  .brand { font-family:"Barlow Condensed",sans-serif; font-size:24px; font-weight:700;
+           text-transform:uppercase; white-space:nowrap; flex:none }
   #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
            background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-           padding:8px 16px; min-height:40px; display:flex; align-items:center }
+           padding:7px 14px; min-height:38px; display:flex; align-items:center;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 6 auto }
+  /* the ellipsis needs a block to live in: the pill is a flex box */
+  #whois { display:block; line-height:22px; min-width:80px }
   #whois:empty { display:none }
   #switchbtn, #stagebtn, #daybtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
-               border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600 }
+               border-radius:24px; min-height:44px; padding:0 13px; font-size:14px; font-weight:600;
+               white-space:nowrap; flex:none }
   /* which of the two glass tablets this is. Tapped rarely and by the office,
      so it sits quietly beside the name rather than competing with it. */
   #stagebtn { font-weight:500; color:#a8a49a }
@@ -69,8 +83,8 @@
   /* 16px exactly: anything smaller and iOS zooms the whole page in when the
      box is focused, which on a wall-mounted tablet nobody can zoom back out */
   #search { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
-            border-radius:24px; min-height:44px; padding:0 16px; font-size:16px; width:min(230px,40vw);
-            font-family:inherit }
+            border-radius:24px; min-height:44px; padding:0 16px; font-size:16px;
+            font-family:inherit; flex:1 1 auto; min-width:80px; width:auto }
   #search::placeholder { color:#8a867e }
   /* what the person signed in has left to do over the whole board, beside the
      box - and pointedly not narrowed by it. It is read at a glance and never
@@ -82,22 +96,37 @@
      "Cutting 63 left · Tuff 12 left" - so it can be four numbers long on
      somebody who holds everything. It is therefore allowed to shrink and to
      wrap onto a second line inside its own pill (flex:0 1 auto, no nowrap)
-     rather than running off the side of a tablet nobody can scroll back. */
+     rather than running off the side of a tablet nobody can scroll back.
+     Since 2026-09-24 it sits on the header's first row, before the updated
+     line; the header stays two rows either way. */
   /* the two tabs, On floor and Finished, where the collapsed Finished group
      was (owner, 2026-09-24). One segmented pill; the chosen tab is the light
      one. Remembered on the device (cw_glasstab). */
   #gtabs { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
            overflow:hidden; background:var(--brand-2) }
-  #gtabs button { background:transparent; color:#a8a49a; border:0; min-height:44px; padding:0 14px;
+  #gtabs button { background:transparent; color:#a8a49a; border:0; min-height:44px; padding:0 10px;
                   font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
   #gtabs button.on { background:var(--onbrand); color:var(--brand) }
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-            padding:8px 16px; min-height:40px; flex:0 1 auto; line-height:1.35;
+            padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:.1; line-height:1.35; min-width:0;
             display:flex; align-items:center; justify-content:center }
-  #upd { font-size:12px; color:#a8a49a; margin-left:auto }
+  #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
-                       border-radius:5px; min-height:44px; padding:0 14px; font-size:13px }
+                       border-radius:5px; min-height:44px; padding:0 10px; font-size:13px;
+                       white-space:nowrap; flex:none }
+  /* under 900 px the "updated" line gives its room to the name and the
+     number: the tablet's own failure line (#soft) still says when a read
+     could not be made */
+  @media (max-width:900px){ #upd { display:none } }
+  #themebtn { margin-left:auto }
+  #upd + #themebtn { margin-left:0 }
+  @media (max-width:900px){ #upd + #themebtn { margin-left:auto } }
+  @media (max-width:520px){
+    /* a phone is not the device this page is for: here the rows may wrap
+       rather than push the page sideways */
+    .toprow { flex-wrap:wrap; row-gap:8px }
+  }
 
   /* ---- the board ---- */
   #main { padding:14px; max-width:1180px; margin:0 auto }
@@ -312,19 +341,23 @@
 </div>
 
 <header class="top" hidden id="top">
-  <span class="brand" id="brand">Glass station</span>
-  <button id="stagebtn" hidden></button>
-  <span id="whois"></span>
-  <button id="switchbtn" hidden>Switch person</button>
-  <button id="daybtn" hidden>End of day</button>
-  <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
-  <span id="gtabs" role="tablist" hidden>
-    <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
-  </span>
-  <span id="gtotal" hidden></span>
-  <span id="upd"></span>
-  <button id="themebtn">Light</button>
-  <button id="outbtn">Sign out</button>
+  <div class="toprow">
+    <span class="brand" id="brand">Glass station</span>
+    <button id="stagebtn" hidden></button>
+    <span id="whois"></span>
+    <span id="gtotal" hidden></span>
+    <span id="upd"></span>
+    <button id="themebtn">Light</button>
+  </div>
+  <div class="toprow">
+    <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
+    <span id="gtabs" role="tablist" hidden>
+      <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
+    </span>
+    <button id="switchbtn" hidden>Switch person</button>
+    <button id="daybtn" hidden>End of day</button>
+    <button id="outbtn">Sign out</button>
+  </div>
 </header>
 
 <div id="main" hidden>

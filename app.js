@@ -7003,6 +7003,10 @@ function glassChip(j) {
   if (!ST.glassTotal(j)) return "";
   const g = stationForJob(j.id);
   if (!g || !g.total) return "";
+  /* since 2026-09-24 the feeder also carries jobs in later sections (Active
+     No). One the floor never touched has nothing of the floor's to show - its
+     counters are only the office's seed - so it keeps no chip, as before */
+  if (!g.active && !ST.floorStamp(g)) return "";
   /* the GLASS stages, deliberately, not tuff as well. Tuff counts a different
      quantity, so adding it would make the denominator mean nothing: "8/16" is
      eight glasses through two stages, which is what the chip has always said. */
@@ -7174,9 +7178,14 @@ function stationSectionHtml(j) {
   if (!g) return note("Not fed to the floor yet.");
   /* a job that has left production is off the floor's board but its record is
      still worth reading here - and calling that "not fed yet" would be wrong */
+  /* ... and since 2026-09-24 a job in a later section is fed without ever
+     having been on the floor, so "finished on the floor" is only said of a row
+     the floor really touched; an untouched one says where the job is */
+  const touched = !!ST.floorStamp(g);
   const why = g.active
     ? "Recorded by the floor on the Glass station page" + (g.fedAt ? ", fed " + agoWords(g.fedAt) : "")
-    : "Finished on the floor \u2014 this job is no longer on their board.";
+    : touched ? "Finished on the floor \u2014 this job is no longer on their board."
+    : "Not on the floor\u2019s board \u2014 the job is in " + (g.section || "another section") + ".";
   /* why the floor cannot move it, said here rather than left as a mystery: the
      office's own glass ticks are what locked it, and un-ticking one unlocks it */
   const lock = g.officeDone
