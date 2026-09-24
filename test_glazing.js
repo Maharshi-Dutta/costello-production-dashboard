@@ -1124,6 +1124,17 @@ JOBS.blockNames = NAMES;
     assert.strictEqual(ST.logFields(Z.glzLogEntry({ job: "R8101", from: 1, to: 2 })).Stage, "glaze");
     pass("astragal: taps, the PATCH body, re-base and log line each name the astragal counter");
 
+    /* review 1: the tablet's own later windows write must not drop its astragal tap */
+    const qa = { part: "astragal", from: 3, value: 4, who: "the glazer", at: "2026-09-24T10:00:00.000Z" };
+    assert.strictEqual(Z.glzRebase(qa, { Astragal: 2, AstragalTotal: 4, DoneBy: "the glazer",
+      DoneAt: "2026-09-24T10:00:05.000Z" }).action, "keep", "own later stamp: keep");
+    assert.strictEqual(Z.glzRebase(qa, { Astragal: 2, AstragalTotal: 4, DoneBy: "the office",
+      DoneAt: "2026-09-24T10:00:05.000Z" }).action, "drop", "somebody else's later stamp: drop");
+    /* review 3: Summary's "complete" is every line full */
+    assert.deepStrictEqual(Z.glzReportJobs({ board: [rec({ Glazed: 5, Astragal: 0 }), only] }).jobs
+      .map(j => j.done >= j.total), [false, true]);
+    pass("astragal: review fixes - own stamp keeps a queued tap; report completeness covers both lines");
+
     const rep = Z.glzReportJobs({ board: [r] });
     assert.strictEqual(rep.columns.length, rep.rows[0].length, "report header and row agree");
     assert.strictEqual(rep.rows[0][rep.columns.indexOf("Astragal")], 4);

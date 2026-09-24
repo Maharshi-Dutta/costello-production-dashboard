@@ -425,6 +425,10 @@ function glzRebase(e, fields) {
     const rowAt = Date.parse(gTxt(f.DoneAt));
     const tapAt = Date.parse(gTxt(e && e.at));
     if (!isFinite(rowAt) || !isFinite(tapAt) || rowAt <= tapAt) return { action: "keep" };
+    /* one DoneAt now serves two counters (2026-09-24): a later stamp that is
+       this same person's own tap on the OTHER line is not somebody else
+       saying something later, so it cannot drop this tap (review finding 1) */
+    if (gTxt(f.DoneBy) && gTxt(f.DoneBy) === gTxt(e && e.who)) return { action: "keep" };
     return { action: "drop" };
   }
   if (now <= was) return { action: "keep" };
@@ -458,7 +462,10 @@ function glzReportJobs(data, stage) {
   const cards = (data && data.board) || [];
   const rows = [], jobs = [];
   cards.forEach(c => {
-    jobs.push({ job: c.job, done: c.glazed, total: c.total });
+    /* complete = every line full, the same test as the Complete column - so
+       an astragal-only job can complete and 11/11 windows with astragal owed
+       does not (review finding 3) */
+    jobs.push({ job: c.job, done: c.finished ? 1 : 0, total: 1 });
     rows.push([c.job, glzStrip(c.customer, cap), c.section, c.wnd, c.drs,
                c.total, c.glazed, c.left, c.astrTotal, c.astr, c.doneBy, c.doneAt,
                c.finished ? "Yes" : "No"]);

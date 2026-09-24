@@ -1,6 +1,6 @@
 # Glazing: astragal as its own count (2026-09-24)
 
-Status: built on branch `glazing-astragal`, awaiting the owner's go.
+Status: shipped 2026-09-24, build 20260924-1018 (owner: "review it and if all good push").
 
 ## Owner's words
 
@@ -54,3 +54,21 @@ Status: built on branch `glazing-astragal`, awaiting the owner's go.
 - Browser rig `astr_check.js` (session scratchpad): 12/12.
 - The older rigs still pass: glazing_check 26/26, glz_polish_check 11/12
   (same fixture gap as before).
+
+## Amendments after review
+
+An independent reviewer found no blockers and four minor problems, all fixed in one pass:
+
+1. **`glzRebase` dropped taps it should have kept.** One row's `DoneAt` serves
+   both counters, so the tablet's own later windows write could drop its own
+   queued astragal tap. A later stamp now drops a tap only when `DoneBy` is
+   somebody else.
+2. **A windows tap cleared the astragal warning.** The dropped-tap warning
+   ("not saved") is now keyed by job and line, and it names the line.
+3. **Summary and the Jobs sheet disagreed on "complete".** Summary's "Jobs
+   complete" used windows only. It now uses the same rule as the Complete
+   column: every line full.
+4. **The Floor log's per-person chip mixed units.** The chip added astragal
+   units to window units. It now counts windows glazed only.
+
+Suites: glazing 61, all others unchanged. Browser rig 12/12.

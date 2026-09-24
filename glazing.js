@@ -188,7 +188,10 @@ const badFor = id => [qKey(id, ""), qKey(id, "astragal")].some(k => QUEUE[k] && 
 /** A tap that was dropped because somebody said something later, kept until the
     card is redrawn from a list that agrees - never dropped in silence. */
 let LOST = {};
-const lostFor = job => LOST[String(job).trim().toUpperCase()] || null;
+/* keyed by job AND line (review finding 2), so a tap on the windows does not
+   clear the apology for a dropped astragal tap */
+const lostKey = (job, part) => String(job).trim().toUpperCase() + (partOf(part) ? "|a" : "");
+const lostFor = job => [lostKey(job, ""), lostKey(job, "astragal")].map(k => LOST[k]).filter(Boolean);
 
 /** What the list last said this counter was - the From of the log line. The
     queue is deliberately not consulted: From means "the number the office could
@@ -211,7 +214,7 @@ function rebaseQueue() {
     if (!it) return;
     const r = GZ.glzRebase(e, it.fields || {});
     if (r.action === "drop") {
-      LOST[String(e.job).trim().toUpperCase()] = { job: e.job, value: e.value };
+      LOST[lostKey(e.job, e.part)] = { job: e.job, value: e.value, part: partOf(e.part) };
       console.warn("[glazing] dropping a queued tap for " + e.job + ": " + e.value +
         " was tapped at " + e.at + ", and the row was moved after that (" +
         ((it.fields || {}).DoneAt || "") + ") - tap it again if it is still right");
@@ -507,7 +510,7 @@ function tap(id, delta, part) {
   if (value == null || value === rec[GZ.glzPart(part).done]) return;      // already at the clamp
   /* the apology for a dropped tap goes the moment they tap again: they have
      been told, and they are now saying it a second time */
-  delete LOST[String(rec.job).trim().toUpperCase()];
+  delete LOST[lostKey(rec.job, part)];
   /* queued first, drawn second: boardNow() lays the queue over the list, so the
      new number is on screen before the write has left the tablet */
   queueTap(rec, value, part);
@@ -587,8 +590,8 @@ function cardInner(c) {
       : "") +
     (c.total > 0 ? stepHtml(c, "") : "") +
     (c.astrTotal > 0 ? stepHtml(c, "astragal") : "") +
-    (lost ? '<div class="unsaved">' + esc(String(lost.value)) +
-        ' was not saved — the office changed this job after that tap</div>' : "") +
+    lost.map(l => '<div class="unsaved">' + (l.part ? "Astragal " : "Windows ") + esc(String(l.value)) +
+        ' was not saved — the office changed this job after that tap</div>').join("") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
          : owed ? '<div class="saving">saving…</div>' : "") +
     /* under everything the card counts: a word for the office about this job,
@@ -648,7 +651,7 @@ let WIRED = false;
 function qState(c) {
   const lost = lostFor(c.job);
   return (owedFor(c.id) ? "o" : "") + (badFor(c.id) ? "b" : "") +
-         (lost ? "!" + lost.value : "") +
+         lost.map(l => "!" + l.part + l.value).join("") +
          /* the note channel is not in the list either. The DRAFT is deliberately
             not in the signature - see dressCard. */
          "/" + NOTES.sig(c.job);

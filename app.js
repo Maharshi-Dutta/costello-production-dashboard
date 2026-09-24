@@ -3946,6 +3946,9 @@ function glzLogPanelHtml() {
     '<div class="cphint">' + esc(GLZ_LOG_WHY || GLZ_LOG_MISSING) + '</div></div>';
   const rows = glzLogRowsNow();
   const counts = ST.logCounts(rows);
+  /* per person = windows glazed; astragal units are not added to them
+     (review finding 4) */
+  counts.people = ST.logCounts(rows.filter(r => r.stage !== "astragal")).people;
   const chip = c => '<span class="lgcount">' + esc(c.key) + ' <strong class="tab">' + c.units + '</strong>' +
     ' <span class="lgc2">' + c.lines + ' line' + (c.lines === 1 ? "" : "s") + '</span></span>';
   const lines = rows.slice(0, GLZ_LOG_SHOW).map(r =>
