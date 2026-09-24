@@ -469,6 +469,48 @@ JOBS.blockNames = NAMES;
   assert.strictEqual(Z.glzFilter(board, "").length, 2, "an empty box is every card");
   pass("the header's number is the board's, and the box narrows the cards and never the number");
 
+  /* the two tabs (2026-09-24), as welding's: On floor = In production and not
+     finished; Finished = every other Active card. Active = No on neither. */
+  const tabRows = rows.concat([
+    item({ Title: "R3708", Job: "R3708", Customer: "Customer Eight", Section: "Ready to fit",
+           Seq: 4, Active: "Yes", Windows: 5, Total: 5, Glazed: 1 }, "510"),
+    item({ Title: "R8006", Job: "R8006", Customer: "Customer Six", Section: "In production",
+           Seq: 5, Active: "Yes", Windows: 2, Total: 2, Glazed: 2 }, "511"),
+    /* a stray younger row for R3708 in another section: the oldest wins, one card */
+    item({ Title: "R3708", Job: "R3708", Customer: "Customer Eight", Section: "In production",
+           Seq: 4, Active: "Yes", Windows: 5, Total: 5, Glazed: 0 }, "590")]);
+  const tabs = Z.glzTabs(tabRows);
+  assert.deepStrictEqual(tabs.floor.map(c => c.job), ["R8001", "R8004"],
+    "On floor: the unfinished In production jobs only");
+  assert.deepStrictEqual(tabs.finished.map(c => c.job), ["R8003", "R3708", "R8006"],
+    "Finished: the Finished-section job, the unfinished Ready-to-fit job and the finished " +
+    "In production job, in the boards' order; the Active = No R8009 on neither");
+  assert.strictEqual(tabs.finished.find(c => c.job === "R3708").section, "Ready to fit",
+    "a card off the floor carries its section, for the card head");
+  assert.strictEqual(tabs.floor.length + tabs.finished.length, Z.glzOfficeBoard(tabRows).length,
+    "the two tabs together are exactly the office's board");
+  assert.strictEqual(Z.glzHeadWords(Z.glzBoard(tabRows.slice(0, -1))), Z.glzHeadWords(board),
+    "the header is still the In production board alone - a Ready-to-fit job adds nothing");
+  assert.deepStrictEqual(Z.glzTabs([]), { floor: [], finished: [] });
+  assert.ok(Z.glzCardSig(tabs.finished[1]) !== Z.glzCardSig(Object.assign({}, tabs.finished[1], { section: "Ready" })),
+    "a section change redraws the card, since the card head shows it");
+  pass("the tablet's two tabs split the office's board: On floor and Finished, Active = No on neither");
+
+  /* search across both tabs (decision 3) */
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "3708", "floor"), { tab: "finished", other: 0 },
+    "no match on the floor and one in Finished: the tablet shows Finished");
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "3708", "finished"), { tab: "finished", other: 0 });
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "R80", "floor"), { tab: "floor", other: 2 },
+    "matches in both: stay, with 2 more in Finished");
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "R80", "finished"), { tab: "finished", other: 2 },
+    "and the other way round, 2 more on floor");
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "nobody", "finished"), { tab: "finished", other: 0 },
+    "no match anywhere: stay where you are");
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "  ", "finished"), { tab: "finished", other: 0 },
+    "an empty box changes nothing");
+  assert.deepStrictEqual(Z.glzSearchTab(tabs, "customer one", "bogus"), { tab: "floor", other: 0 });
+  pass("the search helper picks the tab that shows the job and counts the other tab's matches");
+
   /* one job's card for the drawer: active rows only */
   assert.strictEqual(Z.glzJobCard(rows, "R8001").total, 6);
   assert.strictEqual(Z.glzJobCard(rows, "R8009"), null,

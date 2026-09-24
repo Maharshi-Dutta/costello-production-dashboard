@@ -112,6 +112,13 @@
      component - so it gets the whole content width and the cards stack. */
   #main { padding:14px 16px 40px; max-width:980px; margin:0 auto }
   #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
+  /* a search with matches in the other tab too: "N more in Finished", tapped to
+     go there (owner, 2026-09-24) */
+  #more { display:block; width:100%; min-height:48px; margin:0 0 10px; padding:0 16px;
+          border:1px dashed var(--line); border-radius:7px; background:var(--surface-2);
+          color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
+  #more:active { background:var(--line-soft) }
+  #more[hidden] { display:none }
   .grp { display:flex; flex-direction:column; gap:12px }
   .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
   .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
@@ -340,6 +347,7 @@
 
 <div id="main" hidden>
   <div id="soft" hidden></div>
+  <button id="more" hidden></button>
   <div id="board"></div>
 </div>
 

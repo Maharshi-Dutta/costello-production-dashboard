@@ -54,6 +54,8 @@ let SOFT = "";                  // a passing failure: the last board stays, with
 let LASTREAD = 0;
 let QUERY = "";                 // what is in the search box, if anything
 let TAB = "floor";              // On floor / Finished, remembered on the device
+let PRESEARCH = null;           // the tab before the search box was typed in
+let TYPED = false;              // the box changed since the last board draw
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
@@ -789,6 +791,24 @@ function render() {
   const sb = $("#search");
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
   const now = boarding ? boardNow() : null;
+  /* a search looks in both tabs (owner, 2026-09-24): no match here and one in
+     the other tab shows the other tab; matches in both leave a "N more" line */
+  /* the switch is made only when the box has just changed, so a tab tapped
+     during a search, or a poll moving a job, never gets overruled */
+  let more = 0;
+  if (now && QUERY.trim()) {
+    if (TYPED) {
+      const s = W.weldSearchTab(now.tabs, QUERY, TAB);
+      if (s.tab !== TAB) { TAB = s.tab; try { window.scrollTo(0, 0); } catch (e) {} }
+    }
+    more = W.weldFilter(now.tabs[TAB === "floor" ? "finished" : "floor"], QUERY).length;
+  }
+  if (now) TYPED = false;
+  const mb = $("#more");
+  if (mb) {
+    mb.hidden = !more; mb.style.display = more ? "" : "none";
+    mb.textContent = more ? more + " more " + (TAB === "floor" ? "in Finished" : "on floor") + " ›" : "";
+  }
   const tabs = $("#wtabs");
   if (tabs) { tabs.hidden = !boarding; tabs.style.display = boarding ? "" : "none"; }
   [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
@@ -832,7 +852,7 @@ function render() {
   if (!board.length) {
     LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
-      (QUERY ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") +
+      (QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") +
                " matches “" + esc(QUERY) + "”."
        : TAB === "floor" ? "Nothing on the floor right now."
        : "No finished jobs yet.") + '</div>';
@@ -967,14 +987,28 @@ async function start() {
   /* the box and the tabs are in the header, outside #board, so using them never
      rebuilds the node the caret is in */
   const sb = $("#search");
-  if (sb) sb.oninput = () => { QUERY = sb.value || ""; touch(); render(); };
+  /* the tab chosen before typing started comes back when the box is cleared */
+  if (sb) sb.oninput = () => {
+    QUERY = sb.value || "";
+    TYPED = true;
+    if (QUERY.trim()) { if (PRESEARCH == null) PRESEARCH = TAB; }
+    else if (PRESEARCH != null) { TAB = PRESEARCH; PRESEARCH = null; try { window.scrollTo(0, 0); } catch (e) {} }
+    touch(); render();
+  };
+  const goTab = t => {
+    if (TAB !== t) {
+      TAB = t;
+      if (PRESEARCH == null) saveTab();           // a search's tab is not remembered
+      try { window.scrollTo(0, 0); } catch (e) {}
+    }
+    touch(); render();
+  };
   [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
     const b = $(s);
-    if (b) b.onclick = () => {
-      if (TAB !== t) { TAB = t; saveTab(); try { window.scrollTo(0, 0); } catch (e) {} }
-      touch(); render();
-    };
+    if (b) b.onclick = () => goTab(t);
   });
+  const mb = $("#more");
+  if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
   render();
   await readPeople();
   await readList();

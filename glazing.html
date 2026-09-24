@@ -89,6 +89,14 @@
             border-radius:24px; min-height:48px; padding:0 16px; font-size:16px;
             font-family:inherit; flex:1 1 auto; min-width:90px; width:auto }
   #search::placeholder { color:#8a867e }
+  /* the two tabs, On floor and Finished, as on the welding tablet (owner,
+     2026-09-24). One segmented pill; the chosen tab is the light one.
+     Remembered on the device (cw_glztab). */
+  #wtabs { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
+           overflow:hidden; background:var(--brand-2) }
+  #wtabs button { background:transparent; color:#a8a49a; border:0; min-height:48px; padding:0 13px;
+                  font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
+  #wtabs button.on { background:var(--onbrand); color:var(--brand) }
   #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:48px; padding:0 15px; font-size:14px; font-weight:600;
                white-space:nowrap; flex:none }
@@ -106,9 +114,13 @@
   #main { padding:14px 16px 40px; max-width:980px; margin:0 auto }
   #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
   .grp { display:grid; grid-template-columns:minmax(0,1fr); gap:12px }
-  .grouphead { font-size:12px; letter-spacing:.14em; text-transform:uppercase; cursor:pointer;
-               font-weight:600; color:var(--ink-4); margin:18px 0 6px; min-height:48px;
-               display:flex; align-items:center }
+  /* a search with matches in the other tab too: "N more in Finished", tapped to
+     go there (owner, 2026-09-24) */
+  #more { display:block; width:100%; min-height:48px; margin:0 0 10px; padding:0 16px;
+          border:1px dashed var(--line); border-radius:7px; background:var(--surface-2);
+          color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
+  #more:active { background:var(--line-soft) }
+  #more[hidden] { display:none }
   .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
   .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
            border-radius:6px; background:var(--surface); color:var(--ink); font-size:15px }
@@ -123,6 +135,9 @@
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
   .cunits { font-size:15px; font-weight:700; color:var(--ink-2); white-space:nowrap;
             flex:none; margin-left:auto }
+  /* the section of a job that has left In production (Finished tab only) */
+  .csec { font-size:13px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none;
+          border:1px solid var(--line); border-radius:12px; padding:1px 9px }
   .cfacts { display:flex; gap:12px; align-items:baseline; margin-bottom:12px; flex-wrap:nowrap; min-width:0 }
   .cqty { font-size:14.5px; color:var(--ink-3); white-space:nowrap; flex:none }
   /* the COMMENT, after the rule-3 strip. No phone number and no eircode ever
@@ -258,6 +273,9 @@
   </div>
   <div class="toprow">
     <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
+    <span id="wtabs" role="tablist" hidden>
+      <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
+    </span>
     <button id="switchbtn" hidden>Switch person</button>
     <button id="themebtn">Light</button>
     <button id="outbtn">Sign out</button>
@@ -266,6 +284,7 @@
 
 <div id="main" hidden>
   <div id="soft" hidden></div>
+  <button id="more" hidden></button>
   <div id="board"></div>
 </div>
 

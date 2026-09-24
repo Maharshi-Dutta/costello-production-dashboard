@@ -560,6 +560,21 @@ JOBS.blockNames = NAMES;
     "a section change redraws the card, since the card head shows it");
   pass("the tablet's two tabs split the office's board: On floor and Finished, Active = No on neither");
 
+  /* search across both tabs (owner, 2026-09-24, decision 3) */
+  assert.deepStrictEqual(W.weldSearchTab(tabs, "3708", "floor"), { tab: "finished", other: 0 },
+    "no match on the floor and one in Finished: the tablet shows Finished");
+  assert.deepStrictEqual(W.weldSearchTab(tabs, "R700", "floor"), { tab: "floor", other: 2 },
+    "matches in both: stay, with 2 more in Finished");
+  assert.deepStrictEqual(W.weldSearchTab(tabs, "R700", "finished"), { tab: "finished", other: 1 },
+    "and the other way round, 1 more on floor");
+  assert.deepStrictEqual(W.weldSearchTab(tabs, "7001", "finished"), { tab: "floor", other: 0 },
+    "no match in Finished and one on the floor: the tablet shows On floor");
+  assert.deepStrictEqual(W.weldSearchTab(tabs, "nobody", "finished"), { tab: "finished", other: 0 },
+    "no match anywhere: stay where you are");
+  assert.deepStrictEqual(W.weldSearchTab(tabs, " ", "finished"), { tab: "finished", other: 0 },
+    "an empty box changes nothing");
+  pass("the search helper picks the tab that shows the job and counts the other tab's matches");
+
   assert.deepStrictEqual(W.weldFilter(board, "7005").map(c => c.job), ["R7005"]);
   assert.deepStrictEqual(W.weldFilter(board, "customer one").map(c => c.job), ["R7001"]);
   assert.deepStrictEqual(W.weldFilter(board, "pvc door").map(c => c.job), ["R7001"],

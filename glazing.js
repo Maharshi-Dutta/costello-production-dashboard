@@ -49,7 +49,12 @@ let PROBLEM = "";               // "site" | "list" | "people" | "consent" | "rea
 let SOFT = "";                  // a passing failure: the last board stays, a line above it
 let LASTREAD = 0;
 let QUERY = "";
-let FINOPEN = false;            // the Finished group is expanded
+let TAB = "floor";              // On floor / Finished, remembered on the device
+let PRESEARCH = null;           // the tab before the search box was typed in
+let TYPED = false;              // the box changed since the last board draw
+const TAB_KEY = "cw_glztab";
+try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
+const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
@@ -528,11 +533,15 @@ function itemsNow() {
   });
 }
 let RECS_BY_ID = {};
+/** `board` is the In production board, which the header counts; `tabs` is the
+    two tabs, whose cards are every tappable row - a Finished card in another
+    section takes a tap like any other, as on the welding tablet. */
 function boardNow() {
-  const board = GZ.glzBoard(itemsNow());
+  const items = itemsNow();
+  const tabs = GZ.glzTabs(items);
   RECS_BY_ID = {};
-  board.forEach(c => { RECS_BY_ID[String(c.id)] = c; });
-  return board;
+  tabs.floor.concat(tabs.finished).forEach(c => { RECS_BY_ID[String(c.id)] = c; });
+  return { board: GZ.glzBoard(items), tabs: tabs };
 }
 const recordById = id => RECS_BY_ID[String(id)] || null;
 
@@ -582,6 +591,9 @@ function cardInner(c) {
   return '<div class="chead">' +
       '<span class="cond job">' + esc(c.job) + '</span>' +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
+      /* a job off the floor's section, on the Finished tab: say where it is */
+      (c.section && !GZ.glzInProduction({ Section: c.section })
+        ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
       '<span class="cunits tab">' + esc(GZ.glzQtyWords(c)) + '</span>' +
     '</div>' +
     (c.comment
@@ -638,7 +650,8 @@ function submitPin() {
    finger is already on its way to, so the cards are kept as nodes keyed by job
    and only the ones ST.boardDiff names are touched. */
 let NODES = {};
-let DOING = null, FINHEAD = null, FIN = null;
+let LIST = null;                // the one column of cards, for the tab it was drawn for
+let LIST_TAB = "";
 let BOARD_PREV = null;
 let QSIG = {};                  // job -> what this tablet owed on it when last drawn
 let PSIG = "";                  // who the cards were drawn for
@@ -681,14 +694,12 @@ function dressCard(el, c) {
   try { box.focus(); if (box.setSelectionRange) box.setSelectionRange(to, to); } catch (e) {}
 }
 function paintBoard(host, board) {
-  if (!DOING) {
+  /* a tab switch starts the column again: its cards are another set */
+  if (!LIST || LIST_TAB !== TAB) {
     host.innerHTML = "";
-    DOING = document.createElement("div"); DOING.className = "grp";
-    FINHEAD = document.createElement("div"); FINHEAD.className = "grouphead";
-    if (FINHEAD.addEventListener)
-      FINHEAD.addEventListener("click", () => { FINOPEN = !FINOPEN; render(); });
-    FIN = document.createElement("div"); FIN.className = "grp fin";
-    host.appendChild(DOING); host.appendChild(FINHEAD); host.appendChild(FIN);
+    LIST = document.createElement("div"); LIST.className = "grp";
+    LIST_TAB = TAB;
+    host.appendChild(LIST);
     NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
   }
   const diff = ST.boardDiff(BOARD_PREV, board, GZ.glzCardSig);
@@ -721,17 +732,13 @@ function paintBoard(host, board) {
     board.forEach(c => {
       const el = NODES[c.job];
       if (!el) return;
-      (c.finished ? FIN : DOING).appendChild(el);
+      LIST.appendChild(el);
     });
     if (box && document.activeElement !== box) {
       try { box.focus(); if (box.setSelectionRange && at != null) box.setSelectionRange(at, at); }
       catch (e) {}
     }
   }
-  const done = board.filter(c => c.finished).length;
-  FINHEAD.textContent = done ? "Finished · " + done + (FINOPEN ? " ▾" : " ▸") : "";
-  FINHEAD.hidden = !done;
-  FIN.hidden = !done || !FINOPEN;
   BOARD_PREV = board;
 }
 
@@ -749,11 +756,40 @@ function render() {
      picker, and a box over an error message only looks broken */
   const sb = $("#search");
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
+  const now = boarding ? boardNow() : null;
+  /* a search looks in both tabs (owner, 2026-09-24): no match here and one in
+     the other tab shows the other tab; matches in both leave a "N more" line.
+     The switch is made only when the box has just changed, so a tab tapped
+     during a search, or a poll moving a job, never gets overruled. */
+  let more = 0;
+  if (now && QUERY.trim()) {
+    if (TYPED) {
+      const s = GZ.glzSearchTab(now.tabs, QUERY, TAB);
+      if (s.tab !== TAB) { TAB = s.tab; try { window.scrollTo(0, 0); } catch (e) {} }
+    }
+    more = GZ.glzFilter(now.tabs[TAB === "floor" ? "finished" : "floor"], QUERY).length;
+  }
+  if (now) TYPED = false;
+  const mb = $("#more");
+  if (mb) {
+    mb.hidden = !more; mb.style.display = more ? "" : "none";
+    mb.textContent = more ? more + " more " + (TAB === "floor" ? "in Finished" : "on floor") + " ›" : "";
+  }
+  const tabs = $("#wtabs");
+  if (tabs) { tabs.hidden = !boarding; tabs.style.display = boarding ? "" : "none"; }
+  [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
+    const b = $(s);
+    if (!b) return;
+    b.className = TAB === t ? "on" : "";
+    b.setAttribute("aria-selected", TAB === t ? "true" : "false");
+    b.textContent = label + (now ? " · " + now.tabs[t].length : "");
+  });
 
-  /* the board as it stands, before the box has narrowed it: the number in the
-     header is read off this and is deliberately NOT narrowed - somebody looking
-     a job number up must not make the day's work read shorter than it is */
-  const live = boarding ? boardNow() : null;
+  /* the In production board, before the tab and the box have narrowed it: the
+     number in the header is read off this and is deliberately NOT narrowed -
+     somebody looking a job number up must not make the day's work read shorter
+     than it is */
+  const live = now ? now.board : null;
   const gt = $("#gtotal");
   const on = boarding && mayGlaze();
   if (gt) {
@@ -768,19 +804,21 @@ function render() {
 
   /* Who are you? comes before the board and after any real problem with it */
   if (!boarding) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     if (!PROBLEM && PEOPLE_READ && !PERSON) { host.innerHTML = pickerHtml(); wirePicker(host); return; }
     host.innerHTML = '<div class="msg">' + esc(words()) + againHtml() + '</div>';
     wireAgain();
     return;
   }
 
-  const board = GZ.glzFilter(live, QUERY);
+  const board = GZ.glzFilter(now.tabs[TAB], QUERY);
   if (!board.length) {
-    DOING = null; FIN = null; FINHEAD = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
-      (QUERY ? "No job on the board matches “" + esc(QUERY) + "”."
-             : "Nothing on the board yet.") + '</div>';
+      (QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") +
+                      " matches “" + esc(QUERY) + "”."
+       : TAB === "floor" ? "Nothing on the floor right now."
+       : "No finished jobs yet.") + '</div>';
     return;
   }
   paintBoard(host, board);
@@ -909,10 +947,31 @@ async function start() {
   $("#outbtn").onclick = () => { if (confirm("Sign out of the Glazing station?")) CW.signOut(); };
   const sw = $("#switchbtn");
   if (sw) sw.onclick = () => switchPerson();
-  /* the box is in the header, outside #board, so using it never rebuilds the
-     node the caret is in */
+  /* the box and the tabs are in the header, outside #board, so using them never
+     rebuilds the node the caret is in. The tab chosen before typing started
+     comes back when the box is cleared. */
   const sb = $("#search");
-  if (sb) sb.oninput = () => { QUERY = sb.value || ""; touch(); render(); };
+  if (sb) sb.oninput = () => {
+    QUERY = sb.value || "";
+    TYPED = true;
+    if (QUERY.trim()) { if (PRESEARCH == null) PRESEARCH = TAB; }
+    else if (PRESEARCH != null) { TAB = PRESEARCH; PRESEARCH = null; try { window.scrollTo(0, 0); } catch (e) {} }
+    touch(); render();
+  };
+  const goTab = t => {
+    if (TAB !== t) {
+      TAB = t;
+      if (PRESEARCH == null) saveTab();           // a search's tab is not remembered
+      try { window.scrollTo(0, 0); } catch (e) {}
+    }
+    touch(); render();
+  };
+  [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
+    const b = $(s);
+    if (b) b.onclick = () => goTab(t);
+  });
+  const mb = $("#more");
+  if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
   render();
   await readPeople();
   await readList();

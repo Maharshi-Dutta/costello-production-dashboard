@@ -308,6 +308,31 @@ function glzFilter(cards, q) {
   if (!want) return (cards || []).slice();
   return (cards || []).filter(c => (c.job + " " + c.customer).toLowerCase().indexOf(want) >= 0);
 }
+/** The tablet's two tabs (owner, 2026-09-24; replaced the collapsed Finished
+    group), as welding's weldTabs. ONE pass over the office's board: On floor =
+    In production and not finished; Finished = every other Active card - a
+    finished In production job AND every job in any other section still on the
+    sheet. Active = No is on neither. Each keeps glzCards' order. */
+function glzTabs(items) {
+  const out = { floor: [], finished: [] };
+  glzOfficeBoard(items).forEach(c => {
+    out[glzSectionLive(c.section) && !c.finished ? "floor" : "finished"].push(c);
+  });
+  return out;
+}
+/** Which tab a search shows (owner, 2026-09-24, decision 3). The tab you are on
+    keeps the screen while it has a match; with none there and a match in the
+    other tab, the other tab is shown. `other` is how many matches the tab NOT
+    shown holds, for the tappable "N more" line. An empty box changes nothing. */
+function glzSearchTab(tabs, q, current) {
+  const cur = current === "finished" ? "finished" : "floor";
+  const alt = cur === "floor" ? "finished" : "floor";
+  if (!gTxt(q).trim()) return { tab: cur, other: 0 };
+  const here = glzFilter(tabs && tabs[cur], q).length;
+  const there = glzFilter(tabs && tabs[alt], q).length;
+  if (!here && there) return { tab: alt, other: 0 };
+  return { tab: cur, other: there };
+}
 /** "N left" over the cards given. The BOARD's number, never the searched one -
     somebody looking a job up must not make the day's work read smaller. */
 function glzLeft(cards, key) {
@@ -441,7 +466,7 @@ function glzRebase(e, fields) {
 /** What one card is currently drawing, for the tablet's repaint diff. Anything
     not in here cannot make a card redraw. */
 function glzCardSig(c) {
-  return JSON.stringify([c.job, c.customer, c.comment, c.wnd, c.drs, c.total,
+  return JSON.stringify([c.job, c.customer, c.comment, c.section, c.wnd, c.drs, c.total,
                          c.seq, c.glazed, c.by, c.at, c.finished, c.colour, c.astr, c.astrTotal]);
 }
 
@@ -516,7 +541,7 @@ const GLZC = {
   glzStrip, glzSlice, glzRowOrder, glzFeederFields, glzSeedFields, glzHashRow,
   glzWindowsOf, glzDoorsOf, glzAstragalOf, glzCommentOf, glzSectionOf,
   glzActive, glzInProduction, glzColour, glzOfficeColour, glzCardColour, glzPart, glzHeadWords,
-  glzRecord, glzCards, glzBoard, glzOfficeBoard, glzJobCard, glzFilter,
+  glzRecord, glzCards, glzBoard, glzOfficeBoard, glzJobCard, glzFilter, glzTabs, glzSearchTab,
   glzLeft, glzLeftWords, glzUnitWords, glzQtyWords,
   glzApplyTap, glzTapFields, glzOfficeFields, glzFloorOnly,
   glzLogEntry, glzLogWords, glzRebase, glzCardSig, glzReportJobs,

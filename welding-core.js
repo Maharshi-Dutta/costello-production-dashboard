@@ -557,6 +557,19 @@ function weldTabs(items) {
   });
   return out;
 }
+/** Which tab a search shows (owner, 2026-09-24, decision 3). The tab you are on
+    keeps the screen while it has a match; with none there and a match in the
+    other tab, the other tab is shown. `other` is how many matches the tab NOT
+    shown holds, for the tappable "N more" line. An empty box changes nothing. */
+function weldSearchTab(tabs, q, current) {
+  const cur = current === "finished" ? "finished" : "floor";
+  const alt = cur === "floor" ? "finished" : "floor";
+  if (!wTxt(q).trim()) return { tab: cur, other: 0 };
+  const here = weldFilter(tabs && tabs[cur], q).length;
+  const there = weldFilter(tabs && tabs[alt], q).length;
+  if (!here && there) return { tab: alt, other: 0 };
+  return { tab: cur, other: there };
+}
 /** "N left" for the header: frames left plus sashes left over the cards given.
     It is the BOARD's number, never the searched one - somebody looking a job up
     must not make the day's work read smaller than it is. */
@@ -800,7 +813,7 @@ const WELDC = {
   weldSectionOf, weldCommentOf, weldSentOf,
   weldActive, weldInProduction, weldColour, weldRollUp,
   weldRecord, weldRecords, weldCards, weldAtCmp,
-  weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldTabs,
+  weldBoard, weldOfficeBoard, weldJobCard, weldFilter, weldTabs, weldSearchTab,
   weldLeft, weldLeftByPart, weldLeftWords, weldQtyWords,
   weldFloorOnly, weldApplyTap, weldTapFields, weldOfficeFields,
   weldLogEntry, weldLogWords, weldRebase, weldCardSig, weldReportJobs,
