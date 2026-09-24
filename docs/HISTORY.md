@@ -62,6 +62,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A34 | 2026-09-23 | **A remake counter on the welding tablet, beside All on every Frames and Sashes line.** How many times a frame or sash of that group had to be welded again. A record, not progress: it moves no done count, no colour, no "left", no report unit; no ceiling. Written by the tablet only; the office reads it (board line, drawer, report Jobs sheet) and never writes it. | Owner, 2026-09-23: "like if she needed to remake the frame or the sashes she will add a count like I had to remake that frame 3 times before it was completed". Office view read-only by the owner's answer. Built directly by the session at the owner's word, one Sonnet reviewer pass. |
 | A33 | 2026-09-23 | **The glazing unit is a window, not windows plus doors.** A job's glazed total is its window count alone; a door-only job leaves the glazing station entirely (no card, no board row); card and board words say "windows" only. | Owner: "if a job has 11 windows and 2 doors the glazing should be 11 and the Total count should also be just all jobs (windows each job)." Doors are not glazed at this station. |
 | A35 | 2026-09-24 | **The welding tablet's "Sent to floor" chip goes; two tabs (On floor / Finished) replace it.** Any job on the `Production` sheet has been sent to the floor, date or not. On floor = Active, Section "In production", not finished. Finished = every other Active card — finished In production jobs and every job in a later section still on the sheet (e.g. Ready to fit) — which the tablet had never shown before. Finished cards stay fully tappable; a remake works on any job and keeps it in Finished. | Owner, 2026-09-24: the welder needs to reach jobs like R3708 in Ready to fit, mainly to record a remake on a job that came back with a fault; the chip was redundant once every sheet job counts as sent. Glass and glazing tablets: "not now." |
+| A36 | 2026-09-24 | **The glass and glazing tablets get the same On floor / Finished tabs as welding**, and all three tablets gain search that reaches across both tabs: typing auto-switches to the other tab when only it matches, shows "N more in …" when both match, and restores the pre-search tab on clearing. Glass's `Active` on `Glass station` keeps meaning "In production" only — the board, drawer, `OfficeDone` lock and colour writer all keep reading it that way; the tablet's own Finished tab covers the rest via new `Section`/`OnSheet` columns. No remake and no "Sent to floor" button on glass or glazing. | Owner, 2026-09-24, approving the brief that followed the welding Finished tab: bring the same tabs to the other two tablets in one push, with the search behaviour spelled out as four rules (switch on single-tab match, "N more" line on both, no save of a search-driven tab, restore on clear). |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -538,6 +539,24 @@ whose content differs row to row; only a fixed track keeps two rows agreeing.
 
 ---
 
+### B31. Widening a feed changes what `Active = No` means to its readers
+
+**Not a bug this time — a rule written down after checking it held.** The
+2026-09-24 glass Finished tab widened `glassSlice` to feed every job with
+glass still on the sheet, not only In production ones; a job leaving the
+sheet entirely now needs `OnSheet = No` as well as `Active = No`, because
+`Active = No` on its own no longer means "gone" — it can also mean "on the
+sheet, just not In production." Before shipping, every reader of `Active` on
+`Glass station` (the office board's `jobBoard`, the job drawer, the
+`OfficeDone` lock, `glassColourPlan`) was grepped and re-checked against the
+new meaning rather than assumed unaffected.
+**Lesson:** widening what a feed sends changes what its old fields mean to
+every reader, not just the new ones — grep every reader of a feed's fields
+before shipping a wider feed, even when the field's name and type don't
+change.
+
+---
+
 ## C. Build log
 
 In order. Each line is one shipped commit.
@@ -694,6 +713,14 @@ zero counters lowered.
 | Commit | What it added |
 |---|---|
 | `7fb9d5b` → `4292d39` (fix pass) → `5724f06`, build 20260924-1057 | **Welding tablet Finished tab**, branch `welding-finished-tab` (`docs/specs/2026-09-24-welding-finished-tab.md`, A35). The "Sent to floor" chip removed — any job on the `Production` sheet has been sent to the floor. Two tabs replace it: **On floor** (Active, Section "In production", not finished) and **Finished** (every other Active card: finished In production jobs, plus every job in a later section still on the sheet, e.g. R3708 in Ready to fit, which the tablet had never shown). Tab remembered in `cw_weldtab` (replaces `cw_weldsent`); the collapsed Finished group at the bottom of the list removed. Card head shows the section name when a job is not In production. Finished cards stay fully tappable; a remake works on any job and a remake never moves a job out of Finished. Remake pill restyled bigger (27px number, REMADE label, accent colour when N>0); step grid label column narrowed 116→104px to keep the wider pill inside 700px. Header Frames/Sashes left counts unchanged (still `weldBoard`, In production only). New core fn `weldTabs(items)` → `{floor, finished}`, one pass over `weldOfficeBoard`'s items; `weldSentFilter` removed. Independent review: no blockers, one real minor (a two-pass split could have dropped a group from both tabs when a job's own rows disagreed on Section mid-feed — fixed to one pass, plus a test) and stale doc lines, fixed in one pass. Suites: welding 64 (was 63), pages 4/4, rest unchanged; browser rig `tabs_check.js` 31/31 (tab switch, a Ready-to-fit job under Finished, remake + tap on it, no sideways scroll at 700/900/1100px). No workbook write, no new list column, glass and glazing tablets untouched (owner: "not now" on a Finished tab there). |
+
+---
+
+### 2026-09-24 — glass and glazing tablets: Finished tab, search across all three tablets
+
+| Commit | What it added |
+|---|---|
+| `6eaf031` brief → `daee2b6` (Part A build) → `036e7d9` (Part A fix pass) → `ec67cad` (Part B build) → `58f0c22` (Part B fix pass) → `b73a120` build stamp, build 20260924-1248 | **Finished tab on glass and glazing, search across all three tablets**, branch `finished-tab-glass-glazing` (`docs/specs/2026-09-24-finished-tab-glass-glazing-search.md`, A36), following the welding Finished tab shipped the same day. **Part A** — glazing: `glzTabs(items)` → `{floor, finished}`, mirroring `weldTabs`; section badge on a non-In-production card; tab key `cw_glztab`. Search, all three tablets: typing filters both tabs; when only the other tab matches, the tablet switches to it and shows the job; when both match, a tappable "N more in …" line appears instead of switching; clearing the search restores the tab that was showing before typing started; a search-driven switch is never saved. Independent review found one minor — a search could leak across a person switch — fixed by calling `clearSearch` on `pickPerson`/`switchPerson`/the idle lock. **Part B** — glass: two new Single-line-text columns on `Glass station` (workbook's site, ProductionProgress), `Section` and `OnSheet`, **added by script before the push** (scratchpad `f16e47b2…/add_glass_section_columns.py`, modes `check`/`rehearse` on throwaway list `GlassColsTest`/`create`; rehearsed, created, verified PRESENT). `glassSlice` now feeds every job with glass still on the sheet, not only In production ones (`Section`/`OnSheet` on every row); `Active` keeps meaning In production only (B31); a job leaving the sheet gets `Active = No` **and** `OnSheet = No` (`GLASS_GONE`/`def.goneFields`) — welding and glazing untouched. Seed rule unchanged: a newly fed later-section row is seeded from the office record only if untouched, and an untouched row never repaints (new glasscolour test). Tablet: `glassTabs` per stage, key `cw_glasstab`; header restructured to welding's two `.toprow` rows; "updated just now" hidden at ≤900px. Office `app.js` drawer gains a third state alongside the usual two: **touched+active** ("Recorded by the floor…"), **touched+inactive** ("Finished on the floor…"), and **untouched+inactive** ("Not on the floor's board — the job is in `<section>`."); the home-row glass chip now shows only when a job is active or floor-touched (review blocker — it had shown on every fed row once the feed widened). Reviews: Part A one minor, fixed; Part B two blockers before ship — the tablet header ran to three rows at 800px, and `app.js` had assumed `g.active` meant "was ever on the floor" rather than "In production now" — both fixed in the Part B fix pass. Suites: pages 4/4, station 273 (was 270), glasscolour 73 (was 72), welding 65 (was 64), glazing 63 (was 56), rest unchanged; browser rigs `tabs_check.js` 32/32, `search_check.js` 46/46, `glass_tabs_check.js` 50/50. No workbook write; rule-2 grep clean. Expected first feed against the local workbook copy (approximate): ~47 new rows in later sections (Ready to fit 20, Collect & supply 16, customer won't take 11), 43 of them arriving `OfficeDone = Yes`; every existing row PATCHed once with `Section`/`OnSheet`. Built by two implementers in parallel on disjoint files in one working tree. |
 
 ---
 

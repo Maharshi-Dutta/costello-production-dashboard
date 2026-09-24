@@ -1,6 +1,6 @@
 # Finished tab on the glass and glazing tablets; search across both tabs
 
-Status: approved by the owner 2026-09-24, building.
+Status: shipped 2026-09-24, build 20260924-1248.
 
 Follows `2026-09-24-welding-finished-tab.md` (shipped, build 20260924-1057).
 
