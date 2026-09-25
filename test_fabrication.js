@@ -70,7 +70,10 @@ const pass = m => { n++; console.log("  ok  " + m); };
    "sidelights", "pvc door", "super door", "bifold", "pvc smart", "alu clad windows"]
     .forEach(h => assert.ok(F.fbAllowed(h), h + " is on the owner's list"));
   /* the parser's headers the owner's names do not match - reported, not guessed */
-  ["arch angles", "th w", "composite"].forEach(h => assert.ok(!F.fbAllowed(h), h + " matches no owner name"));
+  /* owner 2026-09-25: the sheet's own headers are fed */
+  ["arch angles", "th w", "composite"].forEach(h => assert.ok(F.fbAllowed(h), h + " is fed"));
+  assert.ok(F.fbIsDoorGroup("composite"), "composite is a door group (door labels)");
+  assert.ok(!F.fbAllowed("composite pvc door") && !F.fbAllowed("arch angles th w"), "the owner's merged names are not headers");
   assert.ok(F.fbAllowed("ALUCLAD TILT & TURN") && F.fbAllowed("  Casement   Windows "), "the & and spacing do not matter");
   assert.ok(F.fbIsDoorGroup("pvc door") && !F.fbIsDoorGroup("casement windows"));
   pass("allow-list matched through fbKey; unmatched headers are left out");
@@ -90,8 +93,10 @@ const pass = m => { n++; console.log("  ok  " + m); };
   ];
   const slice = F.fbSlice(jobs, names);
   const t = slice.map(r => r.title);
-  assert.deepStrictEqual(t, ["R9002|7000 CASEMENT", "R9001|CASEMENT WINDOWS", "R9001|PVC DOOR"],
-    "office order; composite and a zero group not fed; the past job not fed; bifold (prods only) not fed");
+  assert.deepStrictEqual(t, ["R9002|7000 CASEMENT", "R9001|CASEMENT WINDOWS", "R9001|PVC DOOR", "R9001|COMPOSITE"],
+    "office order; composite fed (owner 2026-09-25); a zero group not fed; the past job not fed; bifold (prods only) not fed");
+  assert.strictEqual(slice[3].sashes, 2, "composite: the CD sash count");
+  assert.strictEqual(slice[3].doors, "2 CD, 1 DD", "composite is a door group: door labels");
   const cw = slice[1], pd = slice[2], t7 = slice[0];
   assert.deepStrictEqual([cw.frames, cw.sashes, cw.transoms], [4, 6, 2], "counts from prodsMain, never prods");
   assert.strictEqual(t7.transoms, 3, "a group with only T is fed");
@@ -112,7 +117,7 @@ const pass = m => { n++; console.log("  ok  " + m); };
     assert.ok(F.FB_FEEDER_WRITES.indexOf(k) >= 0, "the feeder wrote " + k)));
   const gone = plan.patches.find(p => p.id === "6");
   assert.deepStrictEqual([gone.fields.Active, gone.fields.OnSheet], ["No", "No"], "a row off the sheet: both flags off");
-  assert.strictEqual(plan.adds.length, 2);
+  assert.strictEqual(plan.adds.length, 3);
   pass("the feeder writes job facts only, and marks a gone row inactive rather than deleting it");
 
   /* ================= 4. cards, colours, tabs ================= */

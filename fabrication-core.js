@@ -55,16 +55,15 @@ const FB_FEEDER_WRITES = ["Title"].concat(FB_FEEDER_FIELDS, ["FedAt", "FedBy"]);
 const FB_GONE = { Active: "No", OnSheet: "No" };
 
 /* ---- which product groups (owner, 2026-09-25) -----------------------------
-   An ALLOW-list, matched through fbKey. The owner's names, as given. Two of
-   them match no header of the 2026-09 workbook copy and are kept as written
-   until the owner says which headers they mean - see the brief's report:
-   "ARCH & ANGLESTH W" (the sheet has "ARCH ANGLES" and "TH W") and
-   "COMPOSITE PVC DOOR" (the sheet has "COMPOSITE"). An unmatched name feeds
-   nothing; it is one edit here once confirmed. */
+   An ALLOW-list, matched through fbKey, using the sheet's own headers. The
+   owner's "Arch & AnglesTH W" is two headers on the sheet, ARCH ANGLES and
+   TH W, and "Composite PVC door" is the header COMPOSITE (sashes only: a CD's
+   sash; its frame is on PVC DOOR). Owner's answer 2026-09-25: add all three,
+   as the sheet names them. */
 const FB_WINDOW_GROUPS = ["CASEMENT WINDOWS", "POLARIS 85MM CASEMENT", "4000 CASEMENT", "7000 CASEMENT",
   "POLARIS 85 TILT & TURN", "4000 TILT & TURN", "7000 TILT & TURN", "PVC FRENCH WDS",
-  "ARCH & ANGLESTH W", "ALU CLAD WINDOWS", "ALUCLAD TILT & TURN"];
-const FB_DOOR_GROUPS = ["SIDELIGHTS", "SUPER DOOR", "BIFOLD", "PVC SMART", "COMPOSITE PVC DOOR", "PVC DOOR"];
+  "ARCH ANGLES", "TH W", "ALU CLAD WINDOWS", "ALUCLAD TILT & TURN"];
+const FB_DOOR_GROUPS = ["SIDELIGHTS", "SUPER DOOR", "BIFOLD", "PVC SMART", "COMPOSITE", "PVC DOOR"];
 
 const FB_CUSTOMER_MAX = 70;
 const FB_COMMENT_MAX = 140;

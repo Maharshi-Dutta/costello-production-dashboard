@@ -67,8 +67,8 @@ Part B only the lines assigned to them.
 
 Windows: CASEMENT WINDOWS, POLARIS 85MM CASEMENT, 4000 CASEMENT, 7000
 CASEMENT, POLARIS 85 TILT & TURN, 4000 TILT & TURN, 7000 TILT & TURN, PVC
-FRENCH WDS, ARCH & ANGLESTH W, ALU CLAD WINDOWS, ALUCLAD TILT & TURN.
-Doors: SIDELIGHTS, SUPER DOOR, BIFOLD, PVC SMART, COMPOSITE PVC DOOR, PVC DOOR.
+FRENCH WDS, ARCH ANGLES, TH W (the owner's "Arch & AnglesTH W"), ALU CLAD WINDOWS, ALUCLAD TILT & TURN.
+Doors: SIDELIGHTS, SUPER DOOR, BIFOLD, PVC SMART, COMPOSITE (the owner's "Composite PVC door"), PVC DOOR. Sheet headers confirmed by the owner 2026-09-25.
 
 Implement as an **allow-list** (`FAB_GROUPS`) compared through the same key
 normaliser welding uses (`wKey`-style: upper case, whitespace collapsed).
