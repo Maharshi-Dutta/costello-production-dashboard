@@ -150,8 +150,8 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(F.fbEligible(pa, "CASEMENT WINDOWS") && F.fbEligible(pa, "pvc door"));
   assert.ok(!F.fbEligible(pa, "SIDELIGHTS") && !F.fbEligible(people[1], "CASEMENT WINDOWS") && !F.fbEligible(null, "PVC DOOR"));
   const tsrc = src("fabrication.js");
-  assert.ok(/if \(!mayTap\(rec, part\)\) \{[\s\S]{0,300}return;[\s\S]{0,300}queueTap/.test(tsrc),
-    "tap() refuses a line the gate refuses before queueing");
+  assert.ok(/!mayTap\(rec, part\) \? "assign"[\s\S]{0,200}if \(why\) \{[\s\S]{0,200}return;[\s\S]{0,300}queueTap/.test(tsrc),
+    "tap() refuses a line the gate refuses before queueing (section 13 runs it)");
   assert.ok(/const mayTap = \(rec, part\) => F\.fbCanTap\(/.test(tsrc), "and the gate is the core's fbCanTap");
   pass("eligibility: a person moves only the groups named in Stages; the tablet's tap() enforces it");
 
@@ -347,6 +347,16 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(!F.fbCanTap(pa, "CASEMENT WINDOWS", "sashes", idx, true, "R9001"), "eligible but unassigned: locked");
   assert.ok(F.fbCanTap(pa, "CASEMENT WINDOWS", "sashes", {}, false, "R9001"), "no assignments list: Part A's gate");
   assert.ok(!F.fbCanTap(pa, "SIDELIGHTS", "frames", {}, false, "R9001"), "and never an ineligible group");
+  /* P1: the gate fails closed while the list's state is unknown */
+  assert.ok(!F.fbCanTap(pa, "CASEMENT WINDOWS", "frames", idx, null, "R9001"), "unknown (never read): locked, even holding it");
+  assert.ok(!F.fbCanTap(pa, "CASEMENT WINDOWS", "sashes", {}, undefined, "R9001"), "and undefined is unknown too");
+  /* P2: All / None only for somebody holding the whole line */
+  assert.ok(!F.fbActAllowed(pa, idx, true, "R9001", "CASEMENT WINDOWS", "frames", 10, "all"), "3 of 10: no All");
+  assert.ok(!F.fbActAllowed(pa, idx, true, "R9001", "CASEMENT WINDOWS", "frames", 10, "none"), "and no None");
+  assert.ok(F.fbActAllowed(pa, idx, true, "R9001", "CASEMENT WINDOWS", "frames", 10, 1), "+ is fine");
+  assert.ok(F.fbActAllowed(pa, idx, true, "R9001", "CASEMENT WINDOWS", "frames", 3, "all"), "3 of 3: All is fine");
+  assert.ok(F.fbActAllowed(pa, {}, false, "R9001", "CASEMENT WINDOWS", "frames", 10, "all"), "no list: Part A, All allowed");
+  assert.deepStrictEqual(F.fbUnapproveFields(4, "o", "T"), { Status: "Requested", Qty: 4, DecidedBy: "o", DecidedAt: "T" });
   assert.ok(F.fbRequested(idx, pB, "R9001", "CASEMENT WINDOWS", "frames"));
   assert.strictEqual(F.fbMine(idx, pa, "R9001", "CASEMENT WINDOWS", "frames"), 3, "yours: 3");
   const rq = F.fbRequestFields("r9001", "casement windows", "Transoms", "Person A", 2, "T");
@@ -394,6 +404,13 @@ const pass = m => { n++; console.log("  ok  " + m); };
   F.fbUnseen(nts, store["Person A"]).forEach(n => { store["Person A"][n.key] = 1; });
   assert.strictEqual(F.fbUnseen(nts, store["Person A"]).length, 0, "seen once tapped");
   assert.strictEqual(F.fbNotices(arows, ncards, pB, idx).length, 0, "nothing for somebody holding nothing");
+  /* P7: keys no longer current are pruned, and a prune that removes nothing says so */
+  const before = Object.keys(store["Person A"]).length;
+  assert.ok(F.fbPruneSeen(store["Person A"], nts), "the three baseline keys of the old rows go");
+  assert.ok(before > Object.keys(store["Person A"]).length && Object.keys(store["Person A"]).length === nts.length);
+  assert.ok(!F.fbPruneSeen(store["Person A"], nts), "nothing to prune: no change, so no save");
+  assert.ok(/if \(F\.fbPruneSeen\(seen, all\) \|\| fresh\) saveSeen\(\);/.test(src("fabrication.js")),
+    "the tablet saves cw_fabseen only when it changed");
   const fsrcN = src("fabrication.js");
   assert.ok(/cw_fabseen/.test(fsrcN) && /AudioContext/.test(fsrcN) && !/\.mp3|\.wav|\.ogg/.test(fsrcN),
     "seen per person in cw_fabseen; a WebAudio beep, no audio file");
@@ -410,6 +427,11 @@ const pass = m => { n++; console.log("  ok  " + m); };
     const it = { id: String(NEXT++), fields: Object.assign({}, fields) }; if (name === "Fabrication assignments") AITEMS.push(it); return it; };
   CW.listPatch = async (name, id, fields) => { PATCHES.push({ name: name, id: String(id), fields: fields });
     const hit = AITEMS.find(x => x.id === String(id)); if (name === "Fabrication assignments" && hit) Object.assign(hit.fields, fields); return {}; };
+  const SERVER = {};                                  // row id -> fields the list has that this screen has not seen
+  CW.listItem = async (name, id) => {
+    const it = A("FABR_ITEMS").find(x => String(x.id) === String(id));
+    return it ? { id: it.id, fields: Object.assign({}, it.fields, SERVER[id] || {}) } : null;
+  };
   global.__TOASTS = TOASTS;
   A("toast = function (m, bad) { __TOASTS.push(String(m)); };");
   global.__R2 = [row, { id: "2", fields: Object.assign({}, row.fields, { Title: "R9001|PVC DOOR", Group: "PVC DOOR",
@@ -452,6 +474,61 @@ const pass = m => { n++; console.log("  ok  " + m); };
      "Fabrication urgent", "Fabrication urgent"], "one Dashboard Log line per office write, and none for a refusal");
   assert.ok(ADDS.concat(PATCHES).every(w => w.name === "Fabrication assignments" || w.name === "Fabrication station"),
     "the office never writes Station people or Station log");
+
+  /* P4: urgent is toggled from the row as it is NOW, not the board's copy */
+  SERVER["1"] = { Urgent: "job,frames" };            // another screen set these since this one polled
+  A("FABR_ITEMS = FABR_ITEMS.map(it => it.id === '1' ? { id: '1', fields: Object.assign({}, it.fields, { Urgent: '' }) } : it);");
+  await A("fabrUrgent('group', 'R9001', '1')");
+  assert.strictEqual(PATCHES[PATCHES.length - 1].fields.Urgent, "job,group,frames",
+    "P4: the other screen's words survive; a stale cache would have written just 'group'");
+  delete SERVER["1"];
+
+  /* P3: two office screens give the same line away at the same moment */
+  AITEMS.length = 0; LOGS.length = 0; TOASTS.length = 0;
+  const addPlain = CW.listAdd;
+  CW.listAdd = async (name, fields) => {
+    const made = await addPlain(name, fields);
+    /* the other screen's write lands in between: 3 of 4 already given */
+    AITEMS.push({ id: "77", fields: F.fbAssignFields("R9001", "CASEMENT WINDOWS", "frames", "Person C", 3, "the colleague", "T") });
+    return made;
+  };
+  await A("fabrAssign('1', 'frames', 'Person A', 2)");
+  const myAdd = ADDS[ADDS.length - 1];
+  const undo = PATCHES[PATCHES.length - 1];
+  assert.deepStrictEqual([undo.name, undo.fields.Status], ["Fabrication assignments", "Removed"],
+    "P3: the over-the-total assignment this screen wrote is taken back");
+  assert.strictEqual(undo.id, AITEMS.find(x => x.fields.Title === myAdd.fields.Title).id, "only its own row");
+  assert.strictEqual(AITEMS.find(x => x.id === "77").fields.Status, "Assigned", "the other screen's row is left");
+  assert.ok(TOASTS.some(t => /Someone else assigned this line at the same moment — not saved/.test(t)));
+  assert.deepStrictEqual(LOGS.map(l => l.what.split(":")[0]), ["Fabrication assign", "Fabrication assign undone"]);
+  CW.listAdd = addPlain;
+  /* ... and the same for an approval: it goes back to Requested */
+  AITEMS.length = 0; LOGS.length = 0;
+  AITEMS.push({ id: "60", fields: F.fbRequestFields("R9001", "CASEMENT WINDOWS", "frames", "Person B", 2, "T") });
+  const patchPlain = CW.listPatch;
+  let raced = false;
+  CW.listPatch = async (name, id, fields) => {
+    const r = await patchPlain(name, id, fields);
+    if (!raced && fields.Status === "Assigned") {
+      raced = true;
+      AITEMS.push({ id: "78", fields: F.fbAssignFields("R9001", "CASEMENT WINDOWS", "frames", "Person C", 3, "c", "T") });
+    }
+    return r;
+  };
+  await A("fabrApprove('60', 2)");
+  assert.deepStrictEqual([AITEMS.find(x => x.id === "60").fields.Status, AITEMS.find(x => x.id === "60").fields.Qty],
+    ["Requested", 2], "P3: the approval is put back to Requested with the quantity it asked for");
+  assert.deepStrictEqual(LOGS.map(l => l.what.split(":")[0]), ["Fabrication approve", "Fabrication approve undone"]);
+  CW.listPatch = patchPlain;
+  /* no race: nothing is undone */
+  AITEMS.length = 0; LOGS.length = 0;
+  await A("fabrAssign('1', 'frames', 'Person A', 2)");
+  assert.deepStrictEqual(LOGS.map(l => l.what.split(":")[0]), ["Fabrication assign"], "no race, no undo");
+  pass("P3 split race undone on this screen's own row only; P4 urgent from the fresh row");
+
+  /* P6: the people are re-read on the five-minute cadence */
+  assert.ok(/FABR_PEOPLE && Date\.now\(\) - fabrPeopleAt > 300000 && \(await readFabricationPeople\(\)\)/.test(src("app.js")),
+    "P6: fabrPoll re-reads Station people every five minutes");
   /* the list missing: the board says so, quietly */
   ASSIGN_THERE = false;
   await A("readFabricationAssign()");
@@ -459,6 +536,107 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(A("fabrBoardHtml()").indexOf("“Fabrication assignments” list is not in") >= 0, "the explained state");
   assert.ok(A("fabrBoardHtml()").indexOf("fareqs") < 0);
   pass("Part B office: assign, split refused, approve, remove, refuse, urgent, one log line each, missing list explained");
+
+  /* ================= 13. the tablet page itself (P1, P2, P5) =================
+     fabrication.js in a context of its own (it shares top-level names with
+     app.js, as every page does), with station-core, station-ui and the core,
+     a fake CW that records writes, and stub elements. */
+  const TW = [];
+  const tel = () => { let h = ""; const e = { style: {}, dataset: {}, hidden: false, textContent: "", value: "",
+    className: "", kids: [], appendChild(c) { e.kids.push(c); return c; }, remove() {}, setAttribute() {},
+    getAttribute() { return null; }, addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
+    focus() {} }; Object.defineProperty(e, "innerHTML", { get: () => h, set: v => { h = String(v); } }); return e; };
+  const TEL = {};
+  const tmem = {};
+  const tctx = vm.createContext({
+    console: { log() {}, warn() {} }, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    Date, JSON, Math, Object, Array, String, Number, Promise, isFinite, RegExp, Error,
+    localStorage: { getItem: k => (k in tmem ? tmem[k] : null), setItem: (k, v) => { tmem[k] = String(v); }, removeItem: k => { delete tmem[k]; } },
+    document: { documentElement: tel(), activeElement: null, createElement: () => tel(),
+                querySelector: s => (TEL[s] = TEL[s] || tel()), querySelectorAll: () => [] },
+    CW: { initAuth: async () => null, signIn: async () => null,
+          listPatch: async (name, id, fields) => { TW.push({ what: "patch:" + name, id: id, fields: fields }); return {}; },
+          listAdd: async (name, fields) => { TW.push({ what: "add:" + name, fields: fields }); return { id: "x" }; },
+          listItems: async () => [], listDelta: async () => { throw new Error("no"); }, isDeltaRestart: () => true,
+          stationSite: async () => "s", stationSiteMoves: () => 0, isMissing: () => false }
+  });
+  tctx.window = tctx;
+  ["station-core.js", "station-ui.js", "fabrication-core.js", "fabrication.js"].forEach(f =>
+    vm.runInContext(src(f), tctx, { filename: f }));
+  const T = code => vm.runInContext(code, tctx);
+  await new Promise(r => setTimeout(r, 5));
+  T("PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person A', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows' } }]);" +
+    "PERSON = PEOPLE[0]; PEOPLE_READ = true; READY = true; SITEID = 's'; LAST_TAP = Date.now();" +
+    "ITEMS = [{ id: '1', fields: { Title: 'R9001|CASEMENT WINDOWS', Job: 'R9001', Group: 'CASEMENT WINDOWS', Frames: 10, " +
+    "  FramesDone: 1, Sashes: 2, Active: 'Yes', OnSheet: 'Yes', Section: 'In production' } }]; boardNow();");
+  const setAssign = (state, rows) => T("ASSIGN_OK = " + JSON.stringify(state) + "; ASSIGN_ROWS = FABC.fbAssignRows(" +
+    JSON.stringify(rows || []) + "); IDX = FABC.fbAssignIndex(ASSIGN_ROWS);");
+  const give = qty => [{ id: "9", fields: { Job: "R9001", Group: "CASEMENT WINDOWS", Part: "frames", Person: "Person A",
+                                            Qty: qty, Status: "Assigned" } }];
+  /* P1: three states */
+  setAssign(null, give(10));
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), false, "P1 unknown: locked even though it is held");
+  assert.strictEqual(T("lineState(recordById('1'), 'frames').words"), "checking assignments…");
+  T("tap('1', 'frames', 1)");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 0, "P1 unknown: a tap queues nothing");
+  assert.strictEqual(T("HINT['R9001'].why"), "checking");
+  setAssign(false);
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), true, "P1 positively missing: Part A, eligible may tap");
+  setAssign(true, []);
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), false, "P1 read, nothing held: locked");
+  setAssign(true, give(2));
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), true, "P1 read, held: may tap");
+  /* after one good read, a failed read keeps the last good index */
+  tctx.CW.listItems = async () => { throw new Error("503 Service Unavailable"); };
+  await T("readAssign()");
+  assert.strictEqual(T("ASSIGN_OK"), true, "a later failed read keeps the last good state");
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), true, "and the last good index");
+  /* and a first read that fails leaves it unknown, i.e. locked */
+  setAssign(null);
+  await T("readAssign()");
+  assert.strictEqual(T("ASSIGN_OK"), null, "a first read that fails is not 'missing': still unknown");
+  pass("P1 the tablet gate: unknown locks, missing is Part A, read uses the index, a blip keeps the last good read");
+
+  /* P2: holding 2 of 10, All and None are refused with the hint; + works */
+  setAssign(true, give(2));
+  T("QUEUE = {}; HINT = {}; tap('1', 'frames', 'all')");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 0, "P2: All refused for a part of the line");
+  assert.strictEqual(T("HINT['R9001'].why"), "whole");
+  T("tap('1', 'frames', 'none')");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 0, "P2: None refused too");
+  assert.ok(/All\/None only when the whole line is yours/.test(T("cardInner(boardNow().tabs.floor[0])")));
+  assert.ok(/class="sall dead"/.test(T("stepHtml(recordById('1'), recordById('1').lines[0])")), "All is drawn dead");
+  T("tap('1', 'frames', 1)");
+  assert.strictEqual(T("QUEUE['1|frames'].value"), 2, "P2: + still moves the line");
+  setAssign(true, give(10));
+  T("QUEUE = {}; tap('1', 'frames', 'all')");
+  assert.strictEqual(T("QUEUE['1|frames'].value"), 10, "P2: holding the whole line, All is allowed");
+  pass("P2: All/None only when the whole line is the tapper's; − and + always");
+
+  /* P5: a queued tap is dropped at flush once the tapper no longer holds the line.
+     Let the flushes the P2 taps started finish first. */
+  const settle = () => new Promise(r => setTimeout(r, 30));
+  await settle();
+  setAssign(true, give(2));
+  T("ITEMS[0].fields.FramesDone = 1; READY = false; QUEUE = {}; LOST = {}; boardNow(); tap('1', 'frames', 1); READY = true;");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 1);
+  setAssign(true, []);                                // the office removed the assignment
+  TW.length = 0;
+  await T("flushQueue()"); await settle();
+  assert.strictEqual(TW.filter(w => /patch:Fabrication station/.test(w.what)).length, 0, "P5: not sent");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 0, "and not kept");
+  assert.ok(/no longer assigned to Person A/.test(T("cardInner(boardNow().tabs.floor[0])")), "and said so on the card");
+  /* unknown gate at flush: held, neither sent nor dropped */
+  setAssign(true, give(2));
+  T("ITEMS[0].fields.FramesDone = 1; READY = false; QUEUE = {}; LOST = {}; boardNow(); tap('1', 'frames', 1); READY = true;");
+  setAssign(null, give(2));
+  await T("flushQueue()"); await settle();
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 1, "P5: an unknown gate holds the tap");
+  setAssign(true, give(2));
+  TW.length = 0;
+  await T("flushQueue()"); await settle();
+  assert.strictEqual(TW.filter(w => /patch:Fabrication station/.test(w.what)).length, 1, "and sends it once known and held");
+  pass("P5: a tap queued before the assignment was removed is dropped at flush and said so");
 
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");

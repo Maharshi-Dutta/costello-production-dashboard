@@ -147,6 +147,18 @@ function listValue(id, part) {
   const v = Number((it.fields || {})[F.FB_DONE_FIELD[part]]);
   return isFinite(v) ? Math.round(v) : 0;
 }
+/** A queued tap that will not be sent, kept on its card until the next tap:
+    "moved" (the office changed the row after it) or "assign" (the line is no
+    longer the tapper's). Never dropped in silence. */
+function loseTap(e, why) {
+  const job = String(e.job).trim().toUpperCase();
+  const note = LOST[job] || { job: job, parts: [] };
+  note.parts = note.parts.filter(p => !(p.part === e.part && p.group === e.group))
+                 .concat([{ part: e.part, group: e.group, value: e.value, why: why, who: e.who }]);
+  LOST[job] = note;
+  console.warn("[fabrication] dropping a queued tap for " + e.job + " " + e.group + " " + e.part + ": " +
+               (why === "assign" ? "that line is no longer assigned to " + e.who : "the row was moved after it was tapped"));
+}
 function rebaseQueue() {
   let moved = false;
   Object.keys(QUEUE).forEach(k => {
@@ -155,13 +167,7 @@ function rebaseQueue() {
     if (!it) return;
     const r = F.fbRebase(e, it.fields || {});
     if (r.action === "drop") {
-      const job = String(e.job).trim().toUpperCase();
-      const note = LOST[job] || { job: job, parts: [] };
-      note.parts = note.parts.filter(p => !(p.part === e.part && p.group === e.group))
-                     .concat([{ part: e.part, group: e.group, value: e.value }]);
-      LOST[job] = note;
-      console.warn("[fabrication] dropping a queued tap for " + e.job + " " + e.group + " " + e.part +
-                   ": the row was moved after it was tapped");
+      loseTap(e, "moved");
       delete QUEUE[k];
       moved = true;
       return;
@@ -206,6 +212,16 @@ async function flushQueue() {
       /* captured before the await: e IS QUEUE[k], so a tap landing mid-write
          must be compared against what this pass actually sent (welding B19) */
       const want = e.value, when = e.at, whose = e.who, wantFrom = e.from;
+      /* THE GATE AGAIN, AT THE MOMENT OF SENDING (review P5). A tap queued
+         while the person held the line is not theirs to send once the office
+         has taken the assignment away. Unknown gate: hold it for now. */
+      if (ASSIGN_OK === null) continue;
+      const tapper = PEOPLE.find(p => p.name === whose) || null;
+      if (!F.fbCanTap(tapper, e.group, e.part, IDX, ASSIGN_OK, e.job)) {
+        loseTap(e, "assign");
+        delete QUEUE[k]; saveQueue();
+        continue;
+      }
       const body = F.fbFloorOnly(F.fbTapFields(e.part, want, whose, when));
       const id = currentId(e);
       if (!id) { delete QUEUE[k]; saveQueue(); continue; }
@@ -366,9 +382,10 @@ function tap(id, part, delta) {
   /* THE GATE. The button is drawn greyed, and this is the rule: a line of a
      group this person does not do - or, once assignments exist, a part they do
      not hold an Assigned row on - is never queued. It says why. */
-  if (!mayTap(rec, part)) {
-    HINT[rec.job] = { group: rec.group, at: Date.now(),
-                      why: mayDo(rec.group) ? "assign" : "group" };
+  const why = !mayDo(rec.group) ? "group" : ASSIGN_OK === null ? "checking"
+    : !mayTap(rec, part) ? "assign" : !mayAct(rec, part, delta) ? "whole" : "";
+  if (why) {
+    HINT[rec.job] = { group: rec.group, at: Date.now(), why: why };
     render();
     setTimeout(render, HINT_MS + 50);
     return;
@@ -417,7 +434,10 @@ async function readAssign() {
   }
 }
 const listOn = () => ASSIGN_OK === true;
-const mayTap = (rec, part) => F.fbCanTap(PERSON, rec.group, part, IDX, listOn(), rec.job);
+/* three states, failing closed: see fbCanTap (review P1) */
+const mayTap = (rec, part) => F.fbCanTap(PERSON, rec.group, part, IDX, ASSIGN_OK, rec.job);
+const mayAct = (rec, part, act) =>
+  F.fbActAllowed(PERSON, IDX, ASSIGN_OK, rec.job, rec.group, part, rec[part + "Total"], act);
 let TAKING = {};
 async function take(id, part) {
   const rec = recordById(id);
@@ -458,8 +478,10 @@ function beep() {
 function noticesNow(cards) {
   if (!PERSON || !listOn()) { UNSEEN = []; return; }
   const all = F.fbNotices(ASSIGN_ROWS, cards, PERSON, IDX);
+  const fresh = !SEEN[PERSON.name];
   const seen = F.fbSeenFor(SEEN, PERSON.name, all);
-  saveSeen();
+  /* saved only when it changed, and pruned to what is still current (P7) */
+  if (F.fbPruneSeen(seen, all) || fresh) saveSeen();
   UNSEEN = F.fbUnseen(all, seen);
   if (UNSEEN.some(n => !BEEPED[n.key])) beep();
   UNSEEN.forEach(n => { BEEPED[n.key] = 1; });
@@ -490,7 +512,8 @@ const URG = '<span class="urg" title="urgent" aria-label="urgent">!</span>';
 /** What the label says under a line's name, and whether it offers Take. */
 function lineState(rec, part) {
   if (!mayDo(rec.group)) return { can: false, words: "not your line" };
-  if (!listOn()) return { can: true, words: "" };
+  if (ASSIGN_OK === false) return { can: true, words: "" };           // no list: Part A
+  if (ASSIGN_OK !== true) return { can: false, words: "checking assignments…" };
   const mine = F.fbMine(IDX, PERSON, rec.job, rec.group, part);
   if (mine > 0) return { can: true, words: "yours: " + mine };
   if (F.fbRequested(IDX, PERSON, rec.job, rec.group, part)) return { can: false, words: "requested — waiting" };
@@ -500,9 +523,12 @@ function lineState(rec, part) {
 function stepHtml(rec, line) {
   const st = lineState(rec, line.part), mine = st.can;
   const lock = mine ? "" : ' aria-disabled="true"';
-  const b = (t, act, cls) => '<button class="' + cls + '" data-id="' + esc(rec.id) +
-    '" data-part="' + esc(line.part) + '" data-act="' + esc(act) + '"' + lock + '>' + t + '</button>';
+  const b = (t, act, cls, dead) => '<button class="' + cls + (dead ? " dead" : "") + '" data-id="' + esc(rec.id) +
+    '" data-part="' + esc(line.part) + '" data-act="' + esc(act) + '"' +
+    (dead && !lock ? ' aria-disabled="true"' : lock) + '>' + t + '</button>';
   const full = line.done >= line.total;
+  /* All / None set the whole line: only for somebody holding all of it (P2) */
+  const wholeOk = mayAct(rec, line.part, "all");
   const urgent = (rec.urgentOf || {})[line.part];
   return '<div class="step' + (mine ? "" : " locked") + ' c-' + (line.colour || "none") + '">' +
     '<span class="stepl">' + (urgent ? URG : "") + esc(line.label) +
@@ -513,7 +539,7 @@ function stepHtml(rec, line) {
     '<span class="stepmid"><span class="stepn tab' + (full ? " full" : "") + '">' + line.done + ' / ' +
       line.total + '</span>' + barHtml(line.done, line.total) + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
-      b(full ? "None" : "All", full ? "none" : "all", "sall") + '</span>' +
+      b(full ? "None" : "All", full ? "none" : "all", "sall", !wholeOk) + '</span>' +
   '</div>';
 }
 function groupHtml(rec) {
@@ -540,9 +566,12 @@ function cardInner(c) {
     '<div class="wgroups">' + c.groups.map(groupHtml).join("") + '</div>' +
     (hint ? '<div class="hint">' + (hint.why === "assign"
       ? "Not assigned to you yet — tap Take on the line, and the office approves it."
+      : hint.why === "checking" ? "Checking assignments… try again in a moment."
+      : hint.why === "whole" ? "All/None only when the whole line is yours — use − and +."
       : "Not your line — " + esc(hint.group) + " is not one of your product groups.") + '</div>' : "") +
-    (lost ? '<div class="unsaved">' + esc(lost.parts.map(p => p.group + " " + p.part + " " + p.value).join(", ")) +
-        ' was not saved — the office changed this job after that tap</div>' : "") +
+    (lost ? lost.parts.map(p => '<div class="unsaved">' + esc(p.group + " " + p.part + " " + p.value) +
+        (p.why === "assign" ? " was not saved — that line is no longer assigned to " + esc(p.who || "you")
+                            : " was not saved — the office changed this job after that tap") + '</div>').join("") : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
          : owed ? '<div class="saving">saving…</div>' : "") +
     NOTES.html(c.job);

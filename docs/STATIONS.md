@@ -1126,6 +1126,29 @@ an `Assigned` row on that part. **If this list is missing** both screens say so
 quietly and the tablet behaves exactly as Part A (eligible = may tap); the
 office picks the list up within five minutes of it appearing.
 
+**The gate fails closed** (review P1, 2026-09-25). The tablet knows one of
+three things about the assignments list: *not known yet* (no successful read
+this session — every line is locked and says "checking assignments…"),
+*missing* (SharePoint says the list is not there — Part A), or *read* (the
+assignment gate). After one good read, a later failed read keeps the last good
+index; a failed first read stays *not known*, never *missing*.
+
+**Progress is per line, not per person.** Each part of each group has ONE
+counter (`FramesDone` etc.); assignments say who may move it and how much of it
+is theirs, but the counter is shared. So with assignments on, **All** and
+**None** — which set the whole line — are allowed only to somebody whose
+Assigned quantity on that part is the whole part; everybody else uses − and +
+(clamped to 0…total), and a refused All/None says "All/None only when the
+whole line is yours". A tap queued while the person held the line and sent
+after the office removed the assignment is dropped and said so on the card.
+
+**Two office screens at once.** The list has no compare-and-set, so after an
+Assign or an Approve the office re-reads the part; if the Assigned total is now
+over the sheet total, that screen takes back only the row it just wrote (a new
+assignment → Removed, an approval → Requested again), logs the undo, and says
+"Someone else assigned this line at the same moment — not saved". If two
+screens each undo, both have to assign again.
+
 **Notifications** (tablet, page open only — nothing arrives while the page is
 closed): a new or changed assignment for the person signed in, or an urgent
 flag on a line they hold, shows a banner, a short beep (WebAudio; silent if the

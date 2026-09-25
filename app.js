@@ -4144,6 +4144,7 @@ async function readFabricationAssign() {
 async function readFabricationPeople() {
   if (!fabrOn() || !FABR_SITEID) return null;
   try {
+    fabrPeopleAt = Date.now();
     const items = await CW.listItems(ST.PEOPLE_LIST, { siteId: FABR_SITEID, fields: ST.PEOPLE_FIELDS_OFFICE });
     FABR_PEOPLE = items == null ? [] : FABC.fbPeople(items);
     return FABR_PEOPLE;
@@ -4275,6 +4276,9 @@ async function fabrPoll() {
       fabrAssignLook = Date.now();
       if (await readFabricationAssign()) moved = true;
     }
+    /* the people (who may be assigned what) on the same five-minute cadence
+       (review P6): a Stages edit reaches the Assign picker without a reload */
+    if (FABR_PEOPLE && Date.now() - fabrPeopleAt > 300000 && (await readFabricationPeople())) moved = true;
     FABR_ERR = "";
     if (moved) redrawFabrication();
     /* a counter moved: the sheet's colours follow. Not awaited - the poll must be
@@ -4308,7 +4312,7 @@ const FABR_READS = {
   assign: { ok: () => FABR_ASSIGN_OK, read: () => readFabricationAssign() },
   people: { ok: () => (FABR_PEOPLE ? true : null), read: () => readFabricationPeople() }
 };
-let fabrAssignLook = 0;
+let fabrAssignLook = 0, fabrPeopleAt = 0;
 function fabrReadIfNeeded(which, then) {
   const R = FABR_READS[which];
   if (!fabrOn() || R.ok() !== null) return;
@@ -4455,10 +4459,29 @@ async function fabrAssign(gid, part, person, qty) {
     await readFabricationAssign();
     const chk = FABC.fbSplitCheck(fabrAssignNow().idx, g.job, g.group, part, g[part + "Total"], qty);
     if (!chk.ok) { toast(chk.msg, true); return; }
-    await CW.listAdd(FABC.FB_ASSIGN_LIST,
+    const made = await CW.listAdd(FABC.FB_ASSIGN_LIST,
       FABC.fbAssignFields(g.job, g.group, part, person, qty, feedWho(), new Date().toISOString()), fabrAssignOpts());
     noteChange(g.job, "Fabrication assign: " + g.job + " " + g.group + " " + part, "", person + " " + Math.round(qty));
+    await fabrRaceCheck(g.job, g.group, part, g[part + "Total"], made && made.id,
+      () => FABC.fbDecideFields("removed", feedWho(), new Date().toISOString()), "assign");
   });
+}
+/** THE SPLIT RACE (review P3). The list has no compare-and-set, so two office
+    screens can each pass the split check and both write. After this screen's
+    own write the part is read again; if the Assigned sum is now over the
+    sheet total, this screen takes back ONLY the row it just wrote (a new
+    assignment -> Removed, an approval -> back to Requested), leaves one
+    `Dashboard Log` line for the undo, and says so. */
+async function fabrRaceCheck(job, group, part, total, myId, undo, what) {
+  if (!myId) return false;
+  await readFabricationAssign();
+  const sum = FABC.fbAssignedSum(fabrAssignNow().idx, job, group, part);
+  if (sum <= Math.max(0, Number(total) || 0)) return false;
+  await CW.listPatch(FABC.FB_ASSIGN_LIST, myId, undo(), fabrAssignOpts());
+  noteChange(job, "Fabrication " + what + " undone: " + job + " " + group + " " + part,
+             "assigned " + sum + " of " + total, "not saved (assigned elsewhere at the same moment)");
+  toast("Someone else assigned this line at the same moment — not saved.", true);
+  return true;
 }
 async function fabrApprove(aid, qty) {
   return fabrOfficeAct("approve", async () => {
@@ -4473,6 +4496,8 @@ async function fabrApprove(aid, qty) {
                        fabrAssignOpts());
     noteChange(r.job, "Fabrication approve: " + r.job + " " + r.group + " " + r.part,
                "requested " + r.person + " " + r.qty, "assigned " + r.person + " " + Math.round(qty));
+    await fabrRaceCheck(r.job, r.group, r.part, g ? g[r.part + "Total"] : 0, r.id,
+      () => FABC.fbUnapproveFields(r.qty, feedWho(), new Date().toISOString()), "approve");
   });
 }
 async function fabrDecide(aid, status) {
@@ -4495,11 +4520,21 @@ async function fabrUrgent(scope, job, gid, part) {
   const word = scope === "job" ? "job" : scope === "group" ? "group" : part;
   const rows = scope === "job" ? c.groups : c.groups.filter(g => String(g.id) === String(gid));
   if (!rows.length) return false;
-  const on = !rows.some(g => FABC.fbUrgentOf(g.urgent)[word]);
+  let on = false;
   return fabrOfficeAct("urgent", async () => {
     FABR_SITEID = await fabrSiteId();
+    /* FROM THE ROWS AS THEY ARE NOW, not the board's copy (review P4): another
+       office screen may have set or cleared a word since the last poll, and a
+       toggle computed from a stale Urgent would write its words back over it */
+    const fresh = {};
     for (const g of rows) {
-      const body = { Urgent: FABC.fbUrgentToggle(g.urgent, word, on) };
+      const it = await CW.listItem(FABC.FB_LIST, g.id, fabrOpts());
+      if (!it || !it.fields) throw new Error(FABR_LIST_MISSING);
+      fresh[g.id] = String(it.fields.Urgent == null ? "" : it.fields.Urgent);
+    }
+    on = !rows.some(g => FABC.fbUrgentOf(fresh[g.id])[word]);
+    for (const g of rows) {
+      const body = { Urgent: FABC.fbUrgentToggle(fresh[g.id], word, on) };
       await CW.listPatch(FABC.FB_LIST, g.id, body, fabrOpts());
       FABR_ITEMS = (FABR_ITEMS || []).map(it => String(it.id) === String(g.id)
         ? { id: it.id, fields: Object.assign({}, it.fields || {}, body) } : it);

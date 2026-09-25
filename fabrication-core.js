@@ -482,13 +482,25 @@ function fbSplitCheck(idx, job, group, part, total, qty, exceptId) {
     msg: "Only " + free + " of " + t + " " + fbPartKey(part) + " are unassigned, so " + q + " cannot be given." };
   return { ok: true, free: free, msg: "" };
 }
-/** THE TABLET GATE (Part B). Eligible for the group, and - once the
-    assignments list exists - holding an Assigned row on that part. With no
-    assignments list (`listOk` false) it is Part A's gate: eligible may tap. */
-function fbCanTap(person, group, part, idx, listOk, job) {
+/** THE TABLET GATE (Part B). `state` is what is known about the assignments
+    list, and the gate FAILS CLOSED (review P1, 2026-09-25):
+      true  - read at least once: eligible AND holding an Assigned row;
+      false - positively missing (the list is not there): Part A's gate,
+              eligible may tap;
+      null  - not known yet (never read successfully): nothing may be tapped. */
+function fbCanTap(person, group, part, idx, state, job) {
   if (!fbEligible(person, group)) return false;
-  if (!listOk) return true;
+  if (state === false) return true;
+  if (state !== true) return false;
   return fbMine(idx, person, job, group, part) > 0;
+}
+/** One counter per PART, not per person (review P2): with assignments on, All
+    and None - which set the whole line - are allowed only to somebody holding
+    all of it. − and + are always within the clamp. */
+function fbActAllowed(person, idx, state, job, group, part, total, act) {
+  if (act !== "all" && act !== "none") return true;
+  if (state !== true) return true;                     // Part A, or locked anyway
+  return fbMine(idx, person, job, group, part) >= Math.max(0, fbInt(total, 0));
 }
 
 /* ---- the bodies (the only shapes either side can send) ---- */
@@ -510,6 +522,10 @@ function fbAssignFields(job, group, part, person, qty, who, at) {
 }
 /** The office approving a request, with the quantity it confirms. */
 const fbApproveFields = (qty, who, at) => ({ Status: FB_STATUS.assigned, Qty: Math.max(0, fbInt(qty, 0)),
+  DecidedBy: fbTxt(who), DecidedAt: fbTxt(at) || new Date().toISOString() });
+/** Put an approval back (review P3: two office screens gave the same line
+    away at once): the row is a request again, with the quantity it asked for. */
+const fbUnapproveFields = (qty, who, at) => ({ Status: FB_STATUS.requested, Qty: Math.max(0, fbInt(qty, 0)),
   DecidedBy: fbTxt(who), DecidedAt: fbTxt(at) || new Date().toISOString() });
 /** Refuse a request, or remove an assignment. Nothing else changes. */
 const fbDecideFields = (status, who, at) => ({ Status: status === "refused" ? FB_STATUS.refused : FB_STATUS.removed,
@@ -579,6 +595,16 @@ function fbSeenFor(store, name, notices) {
   return s[name];
 }
 const fbUnseen = (notices, seen) => (notices || []).filter(n => !(seen || {})[n.key]);
+/** Drop every seen key that is no longer a current notice (its row changed
+    state, or the job left the board), so the store does not grow for ever
+    (review P7). Answers whether anything was dropped. */
+function fbPruneSeen(seen, notices) {
+  const live = {};
+  (notices || []).forEach(n => { live[n.key] = 1; });
+  let changed = false;
+  Object.keys(seen || {}).forEach(k => { if (!live[k]) { delete seen[k]; changed = true; } });
+  return changed;
+}
 
 /* ---- the station definition (docs/STATIONS.md, "Adding a station") -------- */
 const FAB = {
@@ -609,7 +635,8 @@ const FABC = {
   fbCellWord, fbCellWant, fbReportJobs,
   FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,
   fbAssignRows, fbAssignIndex, fbLineOf, fbAssignedSum, fbMine, fbRequested, fbSplitCheck, fbCanTap,
-  fbRequestFields, fbAssignFields, fbApproveFields, fbDecideFields,
+  fbActAllowed, fbRequestFields, fbAssignFields, fbApproveFields, fbUnapproveFields, fbDecideFields,
+  fbPruneSeen,
   fbUrgentOf, fbUrgentToggle, fbCardUrgent, fbUrgentFirst, fbNotices, fbSeenFor, fbUnseen
 };
 if (typeof window !== "undefined") window.FABC = FABC;
