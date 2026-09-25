@@ -1093,6 +1093,12 @@ function cpRepaintPlan(jobs, cap) {
       const col = cpColumn(it.key, PRODMAP);
       if (!col) continue;
       if (paintedOf(j.id, it.key) === want) continue;       // the sheet has it
+      /* A BLANK RECORD OVER A FABRICATION COLOUR (review M1, 2026-09-25). The
+         fabrication painter only paints where the office's record is blank, so
+         lavender or purple on a cell whose record says "" IS the sheet agreeing
+         with the record - whitening it would undo the fourth sanctioned fill.
+         Read off the download, which is only ever used here to spare a paint. */
+      if (want === "" && fabrOwnColour(j, col)) continue;
       /* THERE USED TO BE A SECOND SHORTCUT HERE, and it was B3's own failure
          class coming back through another door (review finding F1). It said:
          if the DOWNLOAD already shows what the record says, the sheet must be
@@ -4508,6 +4514,16 @@ const FABR_FAIL = {};                  // job -> { at, why }
 let FABR_COLOUR_ERR = "", fabrPainting = false, fabrPaintT = null;
 const fabrColourWord = w => w === "process" ? "lavender" : w === "done" ? "purple" : w === "" ? "white" : "another colour";
 
+/** Does the downloaded sheet show one of fabrication's two colours in this
+    cell of this job's row? For cpRepaintPlan (review M1). Independent of
+    fabrication-core.js being on the page. */
+function fabrOwnColour(j, col) {
+  const ws = LASTWB && LASTWB.getWorksheet ? LASTWB.getWorksheet(GLASS_PROD_SHEET) : null;
+  const row = j && j.src && j.src.Production;
+  if (!ws || !row || !col || typeof fillOf !== "function") return false;
+  const h = String(fillOf(ws.getRow(row).getCell(col)) || "").toUpperCase();
+  return h === "D9D2E9" || h === "B4A7D6";
+}
 function fabrCellNow(j, item, col) {
   const mem = FABR_PAINTED[j.id + "|" + item];
   if (mem && Date.now() - mem.at < FABR_TRUST_MS) return mem.word;
@@ -4527,37 +4543,81 @@ function fabrColourPlan(j) {
     if (!g.doneAt) return;                       // nobody has touched this row
     const p = (j.prodsMain || []).find(x => x && FABC.fbKey(x.n) === g.group);
     if (!p) return;
+    const cols = PRODMAP.prod[p.n] || {};
+    /* the group's header cell: its first column (the label sits there) */
+    const gcol = Math.min.apply(null, ["f", "s", "t"].map(s => cols[s]).filter(Boolean));
     FABC.FB_PARTS.forEach(part => {
       const sub = FABC.FB_PART_SUB[part];
-      const col = (PRODMAP.prod[p.n] || {})[sub];
+      const col = cols[sub];
       if (!col) return;
+      /* M4: the sheet's own count gates the paint, not only the list's */
+      if (!(Number(p[sub]) > 0)) return;
       const item = "prod:" + p.n + ":" + sub;
       const cell = fabrCellNow(j, item, col);
       const want = FABC.fbCellWant(g[part], g[part + "Total"], cpStatus(j, item), cell);
       if (want == null) return;
-      out.push({ item: item, col: col, want: want, from: cell, label: g.group + " " + sub.toUpperCase() });
+      out.push({ item: item, col: col, gcol: gcol, pn: p.n, sub: sub, want: want, from: cell,
+                 done: g[part], total: g[part + "Total"], label: g.group + " " + sub.toUpperCase() });
     });
   });
   return out.length ? out : null;
 }
+/** Paint one job. THE PLAN IS A PROPOSAL, NOT A DECISION (review B1,
+    2026-09-25): it was made from a checkpoint record up to 10 s old and a
+    download ~36 s old, and a lavender cell landed over a fresh office yellow is
+    never healed (neither the adopter nor the repaint owns lavender). So, inside
+    the sheet lock and right before writing, the live fill of every planned cell
+    and its two header cells are read through the Excel API, and each cell is
+    decided again from the record as it stands NOW and the live colour:
+      - a cell with an office write in the air (cpPending) is left;
+      - a live colour this station does not own is left - somebody owns it;
+      - a header that no longer names this group / sub is left (a moved column);
+      - a live colour already equal to the want is not written, and not logged.
+    A read that fails paints nothing for this job this pass. Only a screen that
+    actually writes leaves the `Dashboard Log` line. */
 async function fabrColourWrite(job, plan) {
+  const j = byId(job);
+  const wrote = [];
   try {
+    if (!j) return 0;
     await CW.serialised(GLASS_PROD_SHEET, async () => {
       const row = await CW.rowForJob(GLASS_PROD_SHEET, job);      // re-found right before writing
       const f = await CW.findFile();
       const S = f.base + "/worksheets('" + GLASS_PROD_SHEET + "')";
-      await CW.batchWrite(plan.map(p => ({
-        method: "PATCH",
-        url: S + "/range(address='" + CW.A1(p.col) + row + "')/format/fill",
-        body: { color: FABC.FB_WORD_HEX[p.want] }
+      const at = (c, r) => S + "/range(address='" + CW.A1(c) + r + "')";
+      const hdr = (PRODMAP && PRODMAP.hdr) || [];
+      const n = plan.length;
+      const urls = plan.map(p => at(p.col, row) + "/format/fill")
+        .concat(plan.map(p => at(p.col, hdr[1]) + "?$select=values"))
+        .concat(plan.map(p => at(p.gcol, hdr[0]) + "?$select=values"));
+      const bodies = hdr[0] && hdr[1] ? await CW.batchGet(urls, 3) : null;   // throws: nothing painted
+      if (!bodies) return;
+      const text = b => { const v = (((b || {}).values || [])[0] || [])[0]; return norm(v == null ? "" : v); };
+      const now = Date.now();
+      plan.forEach((p, i) => {
+        const fill = bodies[i];
+        if (!fill || !("color" in fill)) return;                     // no answer: leave it
+        const live = FABC.fbCellWord(fill.color);
+        FABR_PAINTED[job + "|" + p.item] = { word: live, at: now };   // what the cell really is
+        if (cpPending(job + "|" + p.item)) return;
+        if (live === "other") return;
+        if (text(bodies[n + i]) !== p.sub || text(bodies[2 * n + i]) !== p.pn) return;
+        const want = FABC.fbCellWant(p.done, p.total, cpStatus(j, p.item), live);
+        if (want == null || want === live) return;
+        wrote.push(Object.assign({}, p, { want: want, from: live }));
+      });
+      if (!wrote.length) return;
+      await CW.batchWrite(wrote.map(p => ({
+        method: "PATCH", url: at(p.col, row) + "/format/fill", body: { color: FABC.FB_WORD_HEX[p.want] }
       })));
     });
-    const at = Date.now();
-    plan.forEach(p => { FABR_PAINTED[job + "|" + p.item] = { word: p.want, at: at }; });
     delete FABR_FAIL[job];
-    noteChange(job, FABR_PAINT_LOG, plan.map(p => p.label + " " + fabrColourWord(p.from)).join(", "),
-               plan.map(p => p.label + " " + fabrColourWord(p.want)).join(", "));
-    return plan.length;
+    if (!wrote.length) return 0;
+    const t = Date.now();
+    wrote.forEach(p => { FABR_PAINTED[job + "|" + p.item] = { word: p.want, at: t }; });
+    noteChange(job, FABR_PAINT_LOG, wrote.map(p => p.label + " " + fabrColourWord(p.from)).join(", "),
+               wrote.map(p => p.label + " " + fabrColourWord(p.want)).join(", "));
+    return wrote.length;
   } catch (e) {
     const why = (e && e.message) || String(e);
     FABR_FAIL[job] = { at: Date.now(), why: why };
@@ -4597,9 +4657,11 @@ async function fabrColourRun() {
   }
   fabrPainting = true;
   try {
-    const r = await stationSend(todo.map(x => () => cpChain(x.id, () => fabrColourWrite(x.id, x.plan))));
+    let painted = 0;
+    const r = await stationSend(todo.map(x => () =>
+      cpChain(x.id, async () => { painted += await fabrColourWrite(x.id, x.plan); })));
     if (todo.length < all.length || r.failed) fabrPaintAgain();
-    if (r.sent) scheduleReconcile();             // read the file back once it has caught up
+    if (painted) scheduleReconcile();            // read the file back once it has caught up
   } finally {
     fabrPainting = false;
     setFabrFoot();

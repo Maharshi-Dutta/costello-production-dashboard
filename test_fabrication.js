@@ -190,11 +190,27 @@ const pass = m => { n++; console.log("  ok  " + m); };
   pass("the painter's rule: never over the office, never over a foreign colour, white only over its own");
 
   /* ================= 8. the painter end to end, in the office's code ========= */
-  const WRITES = [], LOGS = [];
+  /* The workbook, twice over: FILLS is the DOWNLOAD (what the plan sees), LIVE
+     is the cell as the Excel API reads it right now (what the write re-checks),
+     HDRV the header cells. A write lands in LIVE. */
+  const WRITES = [], LOGS = [], LIVE = {}, COLS = { P: 16, Q: 17, R: 18 };
+  const HDRV = { P2: "CASEMENT WINDOWS", P3: "F", Q3: "S", R3: "T" };
+  let GETFAIL = false, HOOK = null;
   CW.serialised = async (s, fn) => fn();
-  CW.rowForJob = async () => 7;
+  CW.rowForJob = async () => { if (HOOK) HOOK(); return 7; };
   CW.findFile = async () => ({ base: "/x/workbook", siteId: "s" });
-  CW.batchWrite = async reqs => { reqs.forEach(r => WRITES.push(r)); };
+  CW.batchGet = async urls => {
+    if (GETFAIL) throw new Error("batch refused");
+    return urls.map(u => {
+      const a = /address='([A-Z]+)(\d+)'/.exec(u);
+      if (/format\/fill/.test(u)) return { color: "#" + (LIVE[COLS[a[1]]] || "FFFFFF") };
+      return { values: [[HDRV[a[1] + a[2]] || ""]] };
+    });
+  };
+  CW.batchWrite = async reqs => reqs.forEach(r => {
+    WRITES.push(r);
+    LIVE[COLS[/address='([A-Z]+)/.exec(r.url)[1]]] = r.body.color.slice(1);
+  });
   global.__LOGS = LOGS;
   A("noteChange = function (job, what, from, to) { __LOGS.push({ job: job, what: what, from: from, to: to }); };" +
     "scheduleReconcile = function () {};");
@@ -210,7 +226,7 @@ const pass = m => { n++; console.log("  ok  " + m); };
     Active: "Yes", OnSheet: "Yes", DoneAt: "2026-09-25T10:00:00Z", DoneBy: "Person A" } };
   global.__ROWS = [row];
   A("CP_LIST_OK = true; CP_IMPORTED = 'x'; cpSetImportPending(false); cpRowsSet({});" +
-    "PRODMAP = { prod: { 'casement windows': { f: 16, s: 17, t: 18 } }, glass: {} };" +
+    "PRODMAP = { prod: { 'casement windows': { f: 16, s: 17, t: 18 } }, glass: {}, hdr: [2, 3] };" +
     "LASTWB = __WB; ALL = [__JOB]; FABR_OK = true; FABR_ITEMS = __ROWS.slice(); FABR_PAINTED = {};");
   const runP = () => A("fabrColourRun()");
   assert.strictEqual(await runP(), 1, "one job painted");
@@ -221,19 +237,51 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.deepStrictEqual(LOGS.map(l => l.what), ["Fabrication colours"], "one Dashboard Log line per paint");
   assert.strictEqual(await runP(), 0, "nothing to do again: the paint is remembered while the download lags");
 
-  /* the office's record says yellow on F: fabrication stands off */
-  WRITES.length = 0; LOGS.length = 0;
-  A("FABR_PAINTED = {}; cpRowPut('R9001', 'prod:casement windows:f', { status: 'process', done: 1, total: 4 });");
-  FILLS[16] = "FFFF00"; FILLS[17] = "B4A7D6";
-  assert.strictEqual(await runP(), 0, "yellow record + purple already right: nothing");
-  /* the floor takes sashes back to 0: its own purple goes white; the office's cell is left */
-  A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __ROWS[0].fields, { SashesDone: 0 }) }];");
+  const fresh = (fields) => {                        // download white, live white, nothing remembered
+    WRITES.length = 0; LOGS.length = 0; HOOK = null; GETFAIL = false;
+    Object.keys(LIVE).forEach(k => delete LIVE[k]); Object.keys(FILLS).forEach(k => delete FILLS[k]);
+    global.__F = fields || {};
+    A("FABR_PAINTED = {}; cpRowsSet({}); Object.keys(FABR_FAIL).forEach(k => delete FABR_FAIL[k]);" +
+      "FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __ROWS[0].fields, __F) }];");
+  };
+  const cells = () => WRITES.map(w => /address='([A-Z]+\d+)/.exec(w.url)[1]);
+
+  /* B1: the office's record turns yellow on F between the plan and the write */
+  fresh();
+  HOOK = () => A("cpRowPut('R9001', 'prod:casement windows:f', { status: 'process', done: 1, total: 4 });");
+  assert.strictEqual(await runP(), 1);
+  assert.deepStrictEqual(cells(), ["Q7"], "B1: F is re-decided against the record as it is NOW and left");
+  /* B1: a colour painted in Excel after the download (foreign), and a cell
+     already right live: no PATCH at all, and so no log line */
+  fresh();
+  LIVE[16] = "FFFF00"; LIVE[17] = "B4A7D6";
+  await runP();
+  assert.deepStrictEqual([WRITES.length, LOGS.length], [0, 0],
+    "B1: live yellow is never painted over; live already purple is not rewritten or logged");
+  /* B1: the live read fails: nothing is written for that job this pass */
+  fresh();
+  GETFAIL = true;
+  await runP();
+  assert.deepStrictEqual([WRITES.length, LOGS.length], [0, 0], "B1: a failed live read paints nothing");
+  /* M3: a header that no longer names this sub-column is left alone */
+  fresh();
+  HDRV.P3 = "S";
+  await runP();
+  assert.deepStrictEqual(cells(), ["Q7"], "M3: the F cell's header says S now: not painted");
+  HDRV.P3 = "F";
+  /* M4: the sheet's own count gates the paint, not only the list's Total */
+  fresh();
+  job.prodsMain = [{ n: "casement windows", f: 0, s: 6, t: 2 }];
+  await runP();
+  assert.deepStrictEqual(cells(), ["Q7"], "M4: F is 0 on the sheet: not painted though the list says 4");
+  job.prodsMain = [{ n: "casement windows", f: 4, s: 6, t: 2 }];
+  /* the floor takes sashes back to 0: its own purple goes white */
+  fresh({ SashesDone: 0, FramesDone: 0 });
+  LIVE[17] = "B4A7D6"; FILLS[17] = "B4A7D6";
   assert.strictEqual(await runP(), 1);
   assert.deepStrictEqual(WRITES.map(w => w.body.color), ["#FFFFFF"], "own colour, done 0: white");
   /* an untouched row paints nothing; a gold row is whole */
-  WRITES.length = 0;
-  A("FABR_PAINTED = {}; cpRowsSet({}); FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __ROWS[0].fields, { DoneAt: '' }) }];");
-  FILLS[16] = ""; FILLS[17] = "";
+  fresh({ DoneAt: "" });
   assert.strictEqual(await runP(), 0, "DoneAt empty: nobody touched it, nothing painted");
   A("FABR_ITEMS = __ROWS.slice();");
   job.done = 1;
@@ -258,6 +306,18 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.deepStrictEqual(A("cpRepaintPlan([__JOB]).length"), 0,
     "(a) a blank row, after the adopter has run: not repainted white");
   pass("verify-and-report: (a) and (b) hold on the office's own code");
+
+  /* M1: a blank record row, and this browser has never painted the cell (the
+     adopter has not run): the repaint still leaves lavender / purple alone... */
+  A("PAINTED = {}; cpRowsSet({}); cpRowPut('R9001', 'prod:casement windows:f', { status: '', done: 0, total: 4 });");
+  FILLS[16] = "D9D2E9";
+  assert.strictEqual(A("cpRepaintPlan([__JOB]).length"), 0, "M1: lavender over a blank record is not whitened");
+  FILLS[16] = "B4A7D6";
+  assert.strictEqual(A("cpRepaintPlan([__JOB]).length"), 0, "M1: nor purple");
+  /* ... and the guard is that narrow: any other colour is still put right */
+  FILLS[16] = "FFFF00";
+  assert.strictEqual(A("cpRepaintPlan([__JOB]).length"), 1, "M1: a yellow cell over a blank record is still repainted");
+  pass("M1: the checkpoint repaint never whitens a fabrication colour over a blank record");
 
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
