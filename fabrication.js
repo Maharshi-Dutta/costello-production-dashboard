@@ -363,10 +363,12 @@ function tap(id, part, delta) {
   const rec = recordById(id);
   if (!rec) return;
   touch();
-  /* THE ELIGIBILITY GATE. The button is drawn greyed, and this is the rule: a
-     line of a group this person does not do is never queued. It says so. */
-  if (!mayDo(rec.group)) {
-    HINT[rec.job] = { group: rec.group, at: Date.now() };
+  /* THE GATE. The button is drawn greyed, and this is the rule: a line of a
+     group this person does not do - or, once assignments exist, a part they do
+     not hold an Assigned row on - is never queued. It says why. */
+  if (!mayTap(rec, part)) {
+    HINT[rec.job] = { group: rec.group, at: Date.now(),
+                      why: mayDo(rec.group) ? "assign" : "group" };
     render();
     setTimeout(render, HINT_MS + 50);
     return;
@@ -387,10 +389,89 @@ function itemsNow() {
 let RECS_BY_ID = {};
 function boardNow() {
   const tabs = F.fbTabs(itemsNow());
+  /* urgent first on every worker's list (Part B) */
+  tabs.floor = F.fbUrgentFirst(tabs.floor);
+  tabs.finished = F.fbUrgentFirst(tabs.finished);
   RECS_BY_ID = {};
   tabs.floor.concat(tabs.finished).forEach(c => c.groups.forEach(g => { RECS_BY_ID[String(g.id)] = g; }));
   return { tabs: tabs };
 }
+
+/* ---- Part B: the assignments list ------------------------------------------
+   Read every tick with the board. ASSIGN_OK: null not read yet, true read,
+   false the list is not there - and then this page behaves exactly as Part A
+   (eligible = may tap) and says so in the footer. The page's ONLY write to
+   this list is a Requested row for the person signed in (Take). */
+let ASSIGN_ROWS = [], IDX = {}, ASSIGN_OK = null;
+const assignOpts = () => ({ siteId: SITEID, fields: F.FB_ASSIGN_FIELDS });
+async function readAssign() {
+  if (!SITEID) return;
+  try {
+    /* ponytail: a full read every tick; move to delta if the list grows past a few thousand rows */
+    const items = await CW.listItems(F.FB_ASSIGN_LIST, assignOpts());
+    if (items == null) { ASSIGN_OK = false; ASSIGN_ROWS = []; IDX = {}; return; }
+    ASSIGN_ROWS = F.fbAssignRows(items); IDX = F.fbAssignIndex(ASSIGN_ROWS); ASSIGN_OK = true;
+  } catch (e) {
+    if (CW.isMissing && CW.isMissing(e)) { ASSIGN_OK = false; ASSIGN_ROWS = []; IDX = {}; }
+    /* anything else: keep the last read, the gate does not flap on a blip */
+  }
+}
+const listOn = () => ASSIGN_OK === true;
+const mayTap = (rec, part) => F.fbCanTap(PERSON, rec.group, part, IDX, listOn(), rec.job);
+let TAKING = {};
+async function take(id, part) {
+  const rec = recordById(id);
+  if (!rec || !PERSON || !listOn() || !mayDo(rec.group)) return;
+  touch();
+  const k = rec.job + "|" + rec.group + "|" + part;
+  if (TAKING[k] || F.fbRequested(IDX, PERSON, rec.job, rec.group, part)) return;
+  const free = Math.max(0, rec[part + "Total"] - F.fbAssignedSum(IDX, rec.job, rec.group, part));
+  const body = F.fbRequestFields(rec.job, rec.group, part, PERSON.name, free, new Date().toISOString());
+  if (!body || !(free > 0)) return;
+  TAKING[k] = 1; render();
+  try { await CW.listAdd(F.FB_ASSIGN_LIST, body, assignOpts()); await readAssign(); }
+  catch (e) { SOFT = "that request could not be sent — try again"; console.warn("[fabrication] take failed:", (e && e.message) || e); }
+  delete TAKING[k];
+  render();
+}
+
+/* ---- Part B: notices (banner, beep, badge) ---------------------------------- */
+const SEEN_KEY = "cw_fabseen";
+let SEEN = {};
+try { SEEN = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") || {}; } catch (e) { SEEN = {}; }
+const saveSeen = () => { try { localStorage.setItem(SEEN_KEY, JSON.stringify(SEEN)); } catch (e) {} };
+let UNSEEN = [], BEEPED = {}, AUDIO = null;
+function beep() {
+  /* a short tone, no audio file. A browser may refuse sound until somebody has
+     touched the page; that is not an error worth anything but silence. */
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    AUDIO = AUDIO || new AC();
+    if (AUDIO.state === "suspended" && AUDIO.resume) AUDIO.resume().catch(() => {});
+    const o = AUDIO.createOscillator(), g = AUDIO.createGain();
+    o.frequency.value = 880; g.gain.value = 0.15;
+    o.connect(g); g.connect(AUDIO.destination);
+    o.start(); o.stop(AUDIO.currentTime + 0.18);
+  } catch (e) {}
+}
+function noticesNow(cards) {
+  if (!PERSON || !listOn()) { UNSEEN = []; return; }
+  const all = F.fbNotices(ASSIGN_ROWS, cards, PERSON, IDX);
+  const seen = F.fbSeenFor(SEEN, PERSON.name, all);
+  saveSeen();
+  UNSEEN = F.fbUnseen(all, seen);
+  if (UNSEEN.some(n => !BEEPED[n.key])) beep();
+  UNSEEN.forEach(n => { BEEPED[n.key] = 1; });
+}
+function markSeen(job) {
+  if (!PERSON || !UNSEEN.length) return;
+  const seen = SEEN[PERSON.name] || (SEEN[PERSON.name] = {});
+  let moved = false;
+  UNSEEN.forEach(n => { if (!job || n.job === job) { seen[n.key] = 1; moved = true; } });
+  if (moved) { saveSeen(); render(); }
+}
+const badgeFor = job => UNSEEN.filter(n => n.job === job).length;
 const recordById = id => RECS_BY_ID[String(id)] || null;
 const hintFor = job => {
   const h = HINT[job];
@@ -405,15 +486,30 @@ function barHtml(done, total) {
 /** One part of one group. A line the person may not move is drawn greyed, NOT
     disabled: a disabled button swallows the tap, and the tap is what says
     "not your line". */
-function stepHtml(rec, line, mine) {
+const URG = '<span class="urg" title="urgent" aria-label="urgent">!</span>';
+/** What the label says under a line's name, and whether it offers Take. */
+function lineState(rec, part) {
+  if (!mayDo(rec.group)) return { can: false, words: "not your line" };
+  if (!listOn()) return { can: true, words: "" };
+  const mine = F.fbMine(IDX, PERSON, rec.job, rec.group, part);
+  if (mine > 0) return { can: true, words: "yours: " + mine };
+  if (F.fbRequested(IDX, PERSON, rec.job, rec.group, part)) return { can: false, words: "requested — waiting" };
+  const free = rec[part + "Total"] - F.fbAssignedSum(IDX, rec.job, rec.group, part);
+  return { can: false, words: free > 0 ? "" : "assigned to others", take: free > 0 };
+}
+function stepHtml(rec, line) {
+  const st = lineState(rec, line.part), mine = st.can;
   const lock = mine ? "" : ' aria-disabled="true"';
   const b = (t, act, cls) => '<button class="' + cls + '" data-id="' + esc(rec.id) +
     '" data-part="' + esc(line.part) + '" data-act="' + esc(act) + '"' + lock + '>' + t + '</button>';
   const full = line.done >= line.total;
+  const urgent = (rec.urgentOf || {})[line.part];
   return '<div class="step' + (mine ? "" : " locked") + ' c-' + (line.colour || "none") + '">' +
-    '<span class="stepl">' + esc(line.label) +
-      (mine ? '<span class="stepleft tab">' + esc(Math.max(0, line.total - line.done) + " left") + '</span>'
-            : '<span class="nomine">not your line</span>') + '</span>' +
+    '<span class="stepl">' + (urgent ? URG : "") + esc(line.label) +
+      (mine ? '<span class="stepleft tab">' + esc(Math.max(0, line.total - line.done) + " left") + '</span>' : "") +
+      (st.words ? '<span class="nomine' + (mine ? " yours" : "") + '">' + esc(st.words) + '</span>' : "") +
+      (st.take ? '<button class="take" data-take="' + esc(rec.id) + '" data-part="' + esc(line.part) + '">Take</button>' : "") +
+    '</span>' +
     '<span class="stepmid"><span class="stepn tab' + (full ? " full" : "") + '">' + line.done + ' / ' +
       line.total + '</span>' + barHtml(line.done, line.total) + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
@@ -421,24 +517,30 @@ function stepHtml(rec, line, mine) {
   '</div>';
 }
 function groupHtml(rec) {
-  const mine = mayDo(rec.group);
+  rec.urgentOf = F.fbUrgentOf(rec.urgent);
   return '<div class="wgrp c-' + (rec.colour || "none") + '">' +
-    '<div class="wghead"><span class="wgname cond">' + esc(rec.group) + '</span>' +
+    '<div class="wghead"><span class="wgname cond">' + (rec.urgentOf.group ? URG : "") + esc(rec.group) + '</span>' +
       (rec.doors ? '<span class="wgdoors tab">' + esc(rec.doors) + '</span>' : "") +
       '<span class="wgcount tab">' + rec.done + ' / ' + rec.total + '</span></div>' +
-    '<div class="steps">' + rec.lines.map(l => stepHtml(rec, l, mine)).join("") + '</div>' +
+    '<div class="steps">' + rec.lines.map(l => stepHtml(rec, l)).join("") + '</div>' +
   '</div>';
 }
 function cardInner(c) {
   const owed = owedForCard(c), bad = badForCard(c), lost = lostFor(c.job), hint = hintFor(c.job);
+  const jobUrgent = c.groups.some(g => F.fbUrgentOf(g.urgent).job);
+  const badge = badgeFor(c.job);
   return '<div class="chead">' +
+      (jobUrgent ? URG : "") +
       '<span class="cond job">' + esc(c.job) + '</span>' +
+      (badge ? '<span class="nbadge" title="new for you">' + badge + '</span>' : "") +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
       (c.section && !c.active ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
     '</div>' +
     (c.comment ? '<div class="cfacts"><span class="ccmt">“' + esc(c.comment) + '”</span></div>' : "") +
     '<div class="wgroups">' + c.groups.map(groupHtml).join("") + '</div>' +
-    (hint ? '<div class="hint">Not your line — ' + esc(hint.group) + ' is not one of your product groups.</div>' : "") +
+    (hint ? '<div class="hint">' + (hint.why === "assign"
+      ? "Not assigned to you yet — tap Take on the line, and the office approves it."
+      : "Not your line — " + esc(hint.group) + " is not one of your product groups.") + '</div>' : "") +
     (lost ? '<div class="unsaved">' + esc(lost.parts.map(p => p.group + " " + p.part + " " + p.value).join(", ")) +
         ' was not saved — the office changed this job after that tap</div>' : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
@@ -486,7 +588,11 @@ function qState(c) {
   const lost = lostFor(c.job), hint = hintFor(c.job);
   return (owedForCard(c) ? "o" : "") + (badForCard(c) ? "b" : "") +
          (lost ? "!" + lost.parts.map(p => p.group + p.part + p.value).join(",") : "") +
-         (hint ? "h" + hint.group : "") + "/" + NOTES.sig(c.job);
+         (hint ? "h" + hint.group + hint.why : "") + "/" + NOTES.sig(c.job) +
+         /* the assignment state of every line, and the notice badge: neither is
+            in the Fabrication station list, so boardDiff cannot see them */
+         "/" + c.groups.map(g => F.FB_PARTS.map(p => JSON.stringify(lineState(g, p))).join("")).join(";") +
+         "/" + badgeFor(c.job) + (Object.keys(TAKING).length ? "t" : "");
 }
 const pState = () => (PERSON ? PERSON.name + "|" + (PERSON.stages || []).join(",") : "");
 function makeCard(c) {
@@ -559,6 +665,22 @@ function render() {
   const sb = $("#search");
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
   const now = boarding ? boardNow() : null;
+  /* the notices, before any card is drawn: the badge is part of the card */
+  if (now) noticesNow(now.tabs.floor.concat(now.tabs.finished)); else UNSEEN = [];
+  const ban = $("#banner");
+  if (ban) {
+    const on = !!UNSEEN.length;
+    ban.hidden = !on; ban.style.display = on ? "" : "none";
+    ban.textContent = on ? (UNSEEN.length > 1 ? UNSEEN.length + " new: " : "New: ") + UNSEEN[0].text +
+      (UNSEEN.length > 1 ? " …" : "") + " — tap to dismiss" : "";
+  }
+  const afoot = $("#afoot");
+  if (afoot) {
+    const off = boarding && ASSIGN_OK === false;
+    afoot.hidden = !off; afoot.style.display = off ? "" : "none";
+    afoot.textContent = off ? "Assignments are not set up yet (the “Fabrication assignments” list is " +
+      "not in the floor’s site), so every line of your own product groups can be tapped." : "";
+  }
   let more = 0;
   if (now && QUERY.trim()) {
     if (TYPED) {
@@ -635,9 +757,18 @@ function wireBoard(host) {
   WIRED = true;
   host.addEventListener("click", ev => {
     touch();
+    /* a tap anywhere on a card clears that card's notice badge */
+    const card = ev.target && ev.target.closest ? ev.target.closest(".card") : null;
+    const cj = card && card.getAttribute ? card.getAttribute("data-job") : "";
+    if (cj && badgeFor(cj)) markSeen(cj);
     let el = ev.target;
     for (let i = 0; el && i < 5; i++) {
       const d = el.dataset || {};
+      if (d.take) {
+        ev.stopPropagation();
+        take(d.take, d.part);
+        return;
+      }
       if (d.act) {
         ev.stopPropagation();
         tap(d.id, d.part, d.act === "all" || d.act === "none" ? d.act : Number(d.act));
@@ -690,6 +821,7 @@ async function checkBuild() {
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
+  await readAssign();
   await pollList();
   if (await NOTES.poll()) render();
 }
@@ -725,8 +857,11 @@ async function start() {
   });
   const mb = $("#more");
   if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
+  const ban = $("#banner");
+  if (ban) ban.onclick = () => { touch(); markSeen(""); };
   render();
   await readPeople();
+  await readAssign();
   await readList();
   await NOTES.read();
   await flushQueue();

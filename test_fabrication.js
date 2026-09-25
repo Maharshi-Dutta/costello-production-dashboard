@@ -150,7 +150,9 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(F.fbEligible(pa, "CASEMENT WINDOWS") && F.fbEligible(pa, "pvc door"));
   assert.ok(!F.fbEligible(pa, "SIDELIGHTS") && !F.fbEligible(people[1], "CASEMENT WINDOWS") && !F.fbEligible(null, "PVC DOOR"));
   const tsrc = src("fabrication.js");
-  assert.ok(/if \(!mayDo\(rec\.group\)\) \{[\s\S]{0,200}return;/.test(tsrc), "tap() refuses an ineligible line before queueing");
+  assert.ok(/if \(!mayTap\(rec, part\)\) \{[\s\S]{0,300}return;[\s\S]{0,300}queueTap/.test(tsrc),
+    "tap() refuses a line the gate refuses before queueing");
+  assert.ok(/const mayTap = \(rec, part\) => F\.fbCanTap\(/.test(tsrc), "and the gate is the core's fbCanTap");
   pass("eligibility: a person moves only the groups named in Stages; the tablet's tap() enforces it");
 
   /* ================= 6. clamp, write bodies, rebase ================= */
@@ -318,6 +320,145 @@ const pass = m => { n++; console.log("  ok  " + m); };
   FILLS[16] = "FFFF00";
   assert.strictEqual(A("cpRepaintPlan([__JOB]).length"), 1, "M1: a yellow cell over a blank record is still repainted");
   pass("M1: the checkpoint repaint never whitens a fabrication colour over a blank record");
+
+  /* ================= 11. Part B, the core ================= */
+  const ai = (id, f) => ({ id: String(id), fields: Object.assign({ Job: "R9001", Group: "CASEMENT WINDOWS" }, f) });
+  let arows = F.fbAssignRows([
+    ai(1, { Part: "frames", Person: "Person A", Qty: 3, Status: "Assigned" }),
+    ai(2, { Part: "frames", Person: "Person B", Qty: 1, Status: "Requested" }),
+    ai(3, { Part: "sashes", Person: "Person A", Qty: 2, Status: "Refused" }),
+    ai(4, { Part: "sashes", Person: "Person A", Qty: 6, Status: "Removed" }),
+    ai(5, { Part: "", Person: "Person A", Qty: 1, Status: "Assigned" })]);
+  let idx = F.fbAssignIndex(arows);
+  assert.strictEqual(arows.length, 4, "a row with no part is not an assignment");
+  const L = F.fbLineOf(idx, "r9001", "casement windows", "frames");
+  assert.deepStrictEqual([L.assigned.length, L.requested.length], [1, 1]);
+  assert.deepStrictEqual(F.fbLineOf(idx, "R9001", "CASEMENT WINDOWS", "sashes"), { assigned: [], requested: [] },
+    "refused and removed rows are history");
+  const over = F.fbSplitCheck(idx, "R9001", "CASEMENT WINDOWS", "frames", 4, 2);
+  assert.ok(!over.ok && over.free === 1 && /Only 1 of 4/.test(over.msg), "split: a sum over the total is refused, said plainly");
+  assert.ok(F.fbSplitCheck(idx, "R9001", "CASEMENT WINDOWS", "frames", 4, 1).ok, "exactly the total is fine");
+  assert.ok(F.fbSplitCheck(idx, "R9001", "CASEMENT WINDOWS", "frames", 4, 1, "1").ok &&
+            !F.fbSplitCheck(idx, "R9001", "CASEMENT WINDOWS", "frames", 4, 5, "1").ok, "an approval excludes its own row");
+  assert.ok(!F.fbSplitCheck(idx, "R9001", "CASEMENT WINDOWS", "frames", 4, 0).ok, "0 is not an assignment");
+  const pB = { name: "Person B", stages: ["casement windows"] };
+  assert.ok(F.fbCanTap(pa, "CASEMENT WINDOWS", "frames", idx, true, "R9001"), "assigned: may tap");
+  assert.ok(!F.fbCanTap(pB, "CASEMENT WINDOWS", "frames", idx, true, "R9001"), "requested: locked until approved");
+  assert.ok(!F.fbCanTap(pa, "CASEMENT WINDOWS", "sashes", idx, true, "R9001"), "eligible but unassigned: locked");
+  assert.ok(F.fbCanTap(pa, "CASEMENT WINDOWS", "sashes", {}, false, "R9001"), "no assignments list: Part A's gate");
+  assert.ok(!F.fbCanTap(pa, "SIDELIGHTS", "frames", {}, false, "R9001"), "and never an ineligible group");
+  assert.ok(F.fbRequested(idx, pB, "R9001", "CASEMENT WINDOWS", "frames"));
+  assert.strictEqual(F.fbMine(idx, pa, "R9001", "CASEMENT WINDOWS", "frames"), 3, "yours: 3");
+  const rq = F.fbRequestFields("r9001", "casement windows", "Transoms", "Person A", 2, "T");
+  assert.deepStrictEqual(Object.keys(rq).sort(), ["Group", "Job", "Part", "Person", "Qty", "RequestedAt", "RequestedBy", "Status", "Title"]);
+  assert.ok(rq.Status === "Requested" && rq.Person === "Person A" && /^R9001\|CASEMENT WINDOWS\|transoms\|[a-z0-9]{6}$/.test(rq.Title));
+  assert.strictEqual(F.fbAssignFields("R9001", "X", "frames", "Person A", 2, "the office", "T").Status, "Assigned");
+  assert.deepStrictEqual(Object.keys(F.fbApproveFields(2, "o", "T")).sort(), ["DecidedAt", "DecidedBy", "Qty", "Status"]);
+  assert.deepStrictEqual(F.fbDecideFields("refused", "o", "T").Status, "Refused");
+  /* the tablet's only write to the assignments list is a Requested row */
+  assert.strictEqual((tsrc.match(/FB_ASSIGN_LIST/g) || []).length, 2, "the tablet names the list twice: its read, its one POST");
+  assert.ok(/CW\.listAdd\(F\.FB_ASSIGN_LIST, body/.test(tsrc) && /F\.fbRequestFields\(/.test(tsrc) &&
+            !/listPatch\(F\.FB_ASSIGN_LIST/.test(tsrc), "a POST of fbRequestFields, and never a PATCH");
+  pass("Part B core: rows, split refused over the total, locked until approved, Part A fallback, the Take body");
+
+  /* urgent, and the feeder never touches it */
+  assert.strictEqual(F.fbUrgentToggle("", "job", true), "job");
+  assert.strictEqual(F.fbUrgentToggle("job,frames", "job", false), "frames");
+  assert.deepStrictEqual(F.fbUrgentOf("Group; sashes, nonsense"), { group: true, sashes: true });
+  const ucards = F.fbOfficeBoard([
+    { id: "1", fields: { Title: "A1|X", Job: "A1", Group: "X", Frames: 1, Seq: 1, OnSheet: "Yes" } },
+    { id: "2", fields: { Title: "B2|X", Job: "B2", Group: "X", Frames: 1, Seq: 2, OnSheet: "Yes", Urgent: "transoms" } }]);
+  assert.deepStrictEqual(F.fbUrgentFirst(ucards).map(c => c.job), ["B2", "A1"], "urgent sorts to the top");
+  const uplan = ST.feedPlan([cw], [{ id: "9", fields: Object.assign({ Title: cw.title, Urgent: "job,frames" },
+    F.fbFeederFields(cw), { Customer: "changed" }) }], { at: "T", by: "o", def: F.FAB });
+  assert.ok(uplan.patches.length === 1 && !("Urgent" in uplan.patches[0].fields), "the feeder never writes Urgent");
+  assert.ok(F.FB_FEEDER_WRITES.indexOf("Urgent") < 0 && F.FB_FLOOR_FIELDS.indexOf("Urgent") < 0);
+  pass("urgent: the toggle, urgent first, and the feeder never overwrites it");
+
+  /* notifications: a baseline, then only what is new or changed */
+  const store = {};
+  let ncards = F.fbOfficeBoard([{ id: "1", fields: { Title: "R9001|CASEMENT WINDOWS", Job: "R9001",
+    Group: "CASEMENT WINDOWS", Frames: 4, OnSheet: "Yes" } }]);
+  let nts = F.fbNotices(arows, ncards, pa, idx);
+  assert.strictEqual(nts.length, 3, "Person A: one assigned, one refused, one removed; never their own request");
+  let seen = F.fbSeenFor(store, "Person A", nts);
+  assert.strictEqual(F.fbUnseen(nts, seen).length, 0, "first sight is a baseline, not a storm");
+  arows = F.fbAssignRows([ai(1, { Part: "frames", Person: "Person A", Qty: 2, Status: "Assigned" }),
+                          ai(6, { Part: "sashes", Person: "Person A", Qty: 6, Status: "Assigned" })]);
+  idx = F.fbAssignIndex(arows);
+  ncards = F.fbOfficeBoard([{ id: "1", fields: { Title: "R9001|CASEMENT WINDOWS", Job: "R9001",
+    Group: "CASEMENT WINDOWS", Frames: 4, Sashes: 6, OnSheet: "Yes", Urgent: "group" } }]);
+  nts = F.fbNotices(arows, ncards, pa, idx);
+  assert.strictEqual(F.fbUnseen(nts, F.fbSeenFor(store, "Person A", nts)).length, 3,
+    "a changed Qty, a new assignment and an urgent flag on a held line are three notices");
+  F.fbUnseen(nts, store["Person A"]).forEach(n => { store["Person A"][n.key] = 1; });
+  assert.strictEqual(F.fbUnseen(nts, store["Person A"]).length, 0, "seen once tapped");
+  assert.strictEqual(F.fbNotices(arows, ncards, pB, idx).length, 0, "nothing for somebody holding nothing");
+  const fsrcN = src("fabrication.js");
+  assert.ok(/cw_fabseen/.test(fsrcN) && /AudioContext/.test(fsrcN) && !/\.mp3|\.wav|\.ogg/.test(fsrcN),
+    "seen per person in cw_fabseen; a WebAudio beep, no audio file");
+  assert.ok(/function beep\(\) \{[\s\S]{0,700}\} catch \(e\) \{\}/.test(fsrcN), "and a blocked AudioContext is silent, not an error");
+  pass("notices: baseline, new and changed assignments and urgent flags, seen state");
+
+  /* ================= 12. Part B, the office's writes ================= */
+  let AITEMS = [], ADDS = [], PATCHES = [], TOASTS = [], ASSIGN_THERE = true, NEXT = 100;
+  CW.hasListConsent = async () => true;
+  CW.stationSite = async () => "site";
+  CW.listItems = async (name) => name === "Fabrication assignments"
+    ? (ASSIGN_THERE ? AITEMS.map(x => ({ id: x.id, fields: Object.assign({}, x.fields) })) : null) : [];
+  CW.listAdd = async (name, fields) => { ADDS.push({ name: name, fields: fields });
+    const it = { id: String(NEXT++), fields: Object.assign({}, fields) }; if (name === "Fabrication assignments") AITEMS.push(it); return it; };
+  CW.listPatch = async (name, id, fields) => { PATCHES.push({ name: name, id: String(id), fields: fields });
+    const hit = AITEMS.find(x => x.id === String(id)); if (name === "Fabrication assignments" && hit) Object.assign(hit.fields, fields); return {}; };
+  global.__TOASTS = TOASTS;
+  A("toast = function (m, bad) { __TOASTS.push(String(m)); };");
+  global.__R2 = [row, { id: "2", fields: Object.assign({}, row.fields, { Title: "R9001|PVC DOOR", Group: "PVC DOOR",
+    Frames: 3, Sashes: 4, Transoms: 0, DoneAt: "" }) }];
+  A("FABR_SITEID = 'site'; FABR_OK = true; FABR_ITEMS = __R2.slice(); FABR_ASSIGN_OK = true; FABR_ASSIGN = [];" +
+    "FABR_PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person A', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows' } }]);");
+  LOGS.length = 0;
+  assert.ok(await A("fabrAssign('1', 'frames', 'Person A', 3)"));
+  assert.strictEqual(ADDS.length, 1);
+  assert.deepStrictEqual([ADDS[0].name, ADDS[0].fields.Status, ADDS[0].fields.Qty, ADDS[0].fields.Person],
+    ["Fabrication assignments", "Assigned", 3, "Person A"]);
+  await A("fabrAssign('1', 'frames', 'Person A', 2)");
+  assert.strictEqual(ADDS.length, 1, "3 + 2 over a total of 4: refused, nothing written");
+  assert.ok(TOASTS.some(t => /Only 1 of 4/.test(t)), "and said so");
+  await A("fabrAssign('2', 'frames', 'Person A', 1)");
+  assert.strictEqual(ADDS.length, 1, "Person A does not do PVC DOOR: refused");
+  /* approve a Take */
+  AITEMS.push({ id: "50", fields: F.fbRequestFields("R9001", "CASEMENT WINDOWS", "frames", "Person B", 1, "T") });
+  await A("fabrApprove('50', 2)");
+  assert.strictEqual(PATCHES.length, 0, "approving 2 more over the total is refused");
+  await A("fabrApprove('50', 1)");
+  assert.deepStrictEqual(PATCHES.map(p => [p.id, p.fields.Status, p.fields.Qty]), [["50", "Assigned", 1]]);
+  await A("fabrDecide('50', 'removed')");
+  assert.strictEqual(PATCHES[1].fields.Status, "Removed");
+  AITEMS.push({ id: "51", fields: F.fbRequestFields("R9001", "CASEMENT WINDOWS", "sashes", "Person B", 6, "T") });
+  await A("fabrDecide('51', 'refused')");
+  assert.deepStrictEqual(Object.keys(PATCHES[2].fields).sort(), ["DecidedAt", "DecidedBy", "Status"],
+    "refuse PATCHes Status and the decision stamps, nothing else");
+  /* urgent: job level writes every row of the job, one log line */
+  const pBefore = PATCHES.length;
+  await A("fabrUrgent('job', 'R9001')");
+  const up = PATCHES.slice(pBefore);
+  assert.deepStrictEqual(up.map(p => [p.name, p.id, p.fields.Urgent]),
+    [["Fabrication station", "1", "job"], ["Fabrication station", "2", "job"]], "job-level urgent on every row");
+  assert.ok(up.every(p => Object.keys(p.fields).length === 1), "Urgent and nothing else");
+  await A("fabrUrgent('part', 'R9001', '1', 'sashes')");
+  assert.strictEqual(PATCHES[PATCHES.length - 1].fields.Urgent, "job,sashes");
+  assert.deepStrictEqual(LOGS.map(l => l.what.split(":")[0]),
+    ["Fabrication assign", "Fabrication approve", "Fabrication remove", "Fabrication refuse",
+     "Fabrication urgent", "Fabrication urgent"], "one Dashboard Log line per office write, and none for a refusal");
+  assert.ok(ADDS.concat(PATCHES).every(w => w.name === "Fabrication assignments" || w.name === "Fabrication station"),
+    "the office never writes Station people or Station log");
+  /* the list missing: the board says so, quietly */
+  ASSIGN_THERE = false;
+  await A("readFabricationAssign()");
+  assert.strictEqual(A("FABR_ASSIGN_OK"), false);
+  assert.ok(A("fabrBoardHtml()").indexOf("“Fabrication assignments” list is not in") >= 0, "the explained state");
+  assert.ok(A("fabrBoardHtml()").indexOf("fareqs") < 0);
+  pass("Part B office: assign, split refused, approve, remove, refuse, urgent, one log line each, missing list explained");
 
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");

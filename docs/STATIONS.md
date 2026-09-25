@@ -1103,7 +1103,35 @@ station**. Definition: `FABC.FAB` in `fabrication-core.js`, `site: "floor"`.
 | `FramesDone` / `SashesDone` / `TransomsDone` | Number | the tablet; the office board | fabricated so far |
 | `FramesBy/At`, `SashesBy/At`, `TransomsBy/At` | Single line | the tablet; the office | last mover of that counter |
 | `DoneBy` / `DoneAt` | Single line | the tablet; the office | last touch of any counter |
-| `Urgent` | Single line | the office only (Part B) | read, written by nothing yet |
+| `Urgent` | Single line | the office only (Part B) | blank, or a comma list of `job`, `group`, `frames`, `sashes`, `transoms`. `job` is the job-level flag, written on every row of the job. Never written by the feeder |
+
+### `Fabrication assignments` — one row per piece of work given to a person (Part B)
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| `Title` | Single line, unique | whoever creates the row | `JOB\|GROUP\|PART\|<random 6>` |
+| `Job`, `Group`, `Part` | Single line | creator | `Part` = `frames` / `sashes` / `transoms` |
+| `Person` | Single line | creator | a `Station people` Title |
+| `Qty` | Number | creator; the office on approval | how many of that part are this person's |
+| `Status` | Single line | tablet creates `Requested`; office `Assigned` / `Refused` / `Removed` | never deleted |
+| `RequestedBy` / `RequestedAt` | Single line | tablet | who pressed Take, when |
+| `DecidedBy` / `DecidedAt` | Single line | office | who assigned / approved / refused / removed, when |
+
+The tablet's only write is a new `Requested` row for the person signed in
+(Take); it never PATCHes a row. The office creates `Assigned` rows and PATCHes
+Status/Qty/Decided*. The sum of `Assigned` Qty on one part may not exceed the
+part's sheet total (checked on a fresh read before every write; refused with a
+message). A person may tap a line when eligible for the group **and** holding
+an `Assigned` row on that part. **If this list is missing** both screens say so
+quietly and the tablet behaves exactly as Part A (eligible = may tap); the
+office picks the list up within five minutes of it appearing.
+
+**Notifications** (tablet, page open only — nothing arrives while the page is
+closed): a new or changed assignment for the person signed in, or an urgent
+flag on a line they hold, shows a banner, a short beep (WebAudio; silent if the
+browser has not allowed sound yet) and a badge on the card until the card is
+tapped. Seen state per person in `cw_fabseen`; the first time a person signs
+in, what is already there is taken as seen. The delay is the ten-second poll.
 
 **Which groups.** An allow-list (`FB_WINDOW_GROUPS`, `FB_DOOR_GROUPS`), the
 owner's names, matched through the key normaliser. All three parts where the

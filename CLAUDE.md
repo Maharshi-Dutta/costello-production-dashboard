@@ -285,8 +285,18 @@ the one that first wrote them down.
      `FABC.fbOfficeFields(part, value, who, at)`, filtered through
      `FABC.fbFloorOnly` (`ST.floorOnly` with this station's definition, the
      tablet's own filter). One `Dashboard Log` line per change, no `Station
-     log` line. No seed: `FAB.seedFields` is empty. `Urgent` is on the list
-     for Part B and is written by nothing yet.
+     log` line. No seed: `FAB.seedFields` is empty.
+     **Part B (2026-09-25, same spec):** the office also writes `Urgent` on
+     `Fabrication station` rows (a PATCH of that one field; a job-level toggle
+     writes every row of the job) and is the only writer of
+     `Fabrication assignments` apart from one thing: it creates `Assigned`
+     rows (`FABC.fbAssignFields`) and PATCHes a row's `Status`, `Qty`,
+     `DecidedBy`, `DecidedAt` (`fbApproveFields`, `fbDecideFields`); rows are
+     never deleted. **The tablet writes `Fabrication assignments` only to
+     create a `Requested` row for the person signed in** (`fbRequestFields`,
+     Take) — it never PATCHes Status, Qty or Person. The feeder never writes
+     `Urgent` (it is not a feeder field). Every office write here leaves one
+     `Dashboard Log` line.
    Only the tablet (`station.js`, `welding.js`, `glazing.js`, `fabrication.js`) writes a By, an At,
    a last touch or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.

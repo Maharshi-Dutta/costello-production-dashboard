@@ -359,7 +359,7 @@ function fbRebase(e, fields) {
 }
 function fbCardSig(c) {
   return JSON.stringify([c.job, c.customer, c.comment, c.doors, c.section, c.seq, c.finished, c.colour,
-    c.groups.map(g => [g.id, g.group, g.colour, g.doors, FB_PARTS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
+    c.groups.map(g => [g.id, g.group, g.colour, g.doors, g.urgent, FB_PARTS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
 }
 
 /* ---- the colour painter's rule (rule 6) -------------------------------------
@@ -406,9 +406,183 @@ function fbReportJobs(data) {
                      "Last moved by", "When", "Complete"], rows: rows, jobs: jobs };
 }
 
+/* ==== Part B: assignments, approval, urgent, notifications ===================
+   `Fabrication assignments` (Floor stations): one row per piece of work given
+   to a person - Title `JOB|GROUP|PART|<random 6>`, Job, Group, Part, Person,
+   Qty, Status, RequestedBy/At, DecidedBy/At. Status is Requested (the tablet's
+   Take), Assigned (the office assigns, or approves a request), Refused or
+   Removed. Rows are never deleted.
+
+   Who writes what, and nothing else:
+     - the TABLET only ever creates a Requested row for the person signed in
+       (fbRequestFields). It never PATCHes a row: not Status, not Qty, not Person;
+     - the OFFICE creates Assigned rows and PATCHes Status/Qty/DecidedBy/At
+       (fbAssignFields, fbApproveFields, fbDecideFields). */
+const FB_ASSIGN_LIST = "Fabrication assignments";
+const FB_ASSIGN_FIELDS = ["Title", "Job", "Group", "Part", "Person", "Qty", "Status",
+                          "RequestedBy", "RequestedAt", "DecidedBy", "DecidedAt"];
+const FB_STATUS = { requested: "Requested", assigned: "Assigned", refused: "Refused", removed: "Removed" };
+const fbLow = v => fbTxt(v).trim().toLowerCase();
+const fbPartKey = p => (FB_PARTS.indexOf(fbLow(p)) >= 0 ? fbLow(p) : "");
+/** The key of one part of one group of one job. */
+const fbLineKey = (job, group, part) => fbKey(job) + "|" + fbKey(group) + "|" + fbPartKey(part);
+function fbRand6() {
+  let s = "";
+  for (let i = 0; i < 6; i++) s += "abcdefghjkmnpqrstuvwxyz23456789".charAt(Math.floor(Math.random() * 31));
+  return s;
+}
+const fbAssignTitle = (job, group, part, rnd) => fbLineKey(job, group, part) + "|" + (rnd || fbRand6());
+
+/** The list's rows, as the screens read them. A row with no job, group, part
+    or person is not an assignment. */
+function fbAssignRows(items) {
+  const out = [];
+  (items || []).forEach(it => {
+    const f = (it && it.fields) || {};
+    const tp = fbTxt(f.Title).split("|");
+    const r = { id: fbTxt(it && it.id), job: fbKey(f.Job || tp[0]), group: fbKey(f.Group || tp[1]),
+                part: fbPartKey(f.Part || tp[2]), person: fbTxt(f.Person).trim(),
+                qty: Math.max(0, fbInt(f.Qty, 0)), status: fbLow(f.Status),
+                requestedBy: fbTxt(f.RequestedBy), requestedAt: fbTxt(f.RequestedAt),
+                decidedBy: fbTxt(f.DecidedBy), decidedAt: fbTxt(f.DecidedAt) };
+    if (!r.job || !r.group || !r.part || !r.person) return;
+    r.key = fbLineKey(r.job, r.group, r.part);
+    out.push(r);
+  });
+  out.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  return out;
+}
+/** Rows by line: { key: { assigned: [], requested: [] } }. Refused and Removed
+    rows are history and are in neither. */
+function fbAssignIndex(rows) {
+  const out = {};
+  (rows || []).forEach(r => {
+    const b = out[r.key] || (out[r.key] = { assigned: [], requested: [] });
+    if (r.status === "assigned") b.assigned.push(r);
+    else if (r.status === "requested") b.requested.push(r);
+  });
+  return out;
+}
+const fbLineOf = (idx, job, group, part) => (idx || {})[fbLineKey(job, group, part)] || { assigned: [], requested: [] };
+const fbAssignedSum = (idx, job, group, part, exceptId) =>
+  fbLineOf(idx, job, group, part).assigned.filter(r => r.id !== fbTxt(exceptId)).reduce((n, r) => n + r.qty, 0);
+/** How many of that part a person holds (Assigned), 0 for none. */
+const fbMine = (idx, person, job, group, part) => !person ? 0 :
+  fbLineOf(idx, job, group, part).assigned.filter(r => r.person === person.name).reduce((n, r) => n + r.qty, 0);
+const fbRequested = (idx, person, job, group, part) => !!person &&
+  fbLineOf(idx, job, group, part).requested.some(r => r.person === person.name);
+/** A split may not give away more than the part's total on the sheet. `qty` is
+    what is being added (or confirmed on approval, `exceptId` = that row). */
+function fbSplitCheck(idx, job, group, part, total, qty, exceptId) {
+  const t = Math.max(0, fbInt(total, 0)), q = fbInt(qty, 0);
+  const have = fbAssignedSum(idx, job, group, part, exceptId);
+  const free = Math.max(0, t - have);
+  if (!(q > 0)) return { ok: false, free: free, msg: "The quantity has to be at least 1." };
+  if (have + q > t) return { ok: false, free: free,
+    msg: "Only " + free + " of " + t + " " + fbPartKey(part) + " are unassigned, so " + q + " cannot be given." };
+  return { ok: true, free: free, msg: "" };
+}
+/** THE TABLET GATE (Part B). Eligible for the group, and - once the
+    assignments list exists - holding an Assigned row on that part. With no
+    assignments list (`listOk` false) it is Part A's gate: eligible may tap. */
+function fbCanTap(person, group, part, idx, listOk, job) {
+  if (!fbEligible(person, group)) return false;
+  if (!listOk) return true;
+  return fbMine(idx, person, job, group, part) > 0;
+}
+
+/* ---- the bodies (the only shapes either side can send) ---- */
+/** The tablet's one write to this list: a Requested row for the person
+    signed in. */
+function fbRequestFields(job, group, part, person, qty, at) {
+  const who = fbTxt(person).trim(), when = fbTxt(at) || new Date().toISOString();
+  if (!fbPartKey(part) || !who || !fbKey(job) || !fbKey(group)) return null;
+  return { Title: fbAssignTitle(job, group, part), Job: fbKey(job), Group: fbKey(group), Part: fbPartKey(part),
+           Person: who, Qty: Math.max(0, fbInt(qty, 0)), Status: FB_STATUS.requested,
+           RequestedBy: who, RequestedAt: when };
+}
+/** The office's new assignment. */
+function fbAssignFields(job, group, part, person, qty, who, at) {
+  const when = fbTxt(at) || new Date().toISOString();
+  return { Title: fbAssignTitle(job, group, part), Job: fbKey(job), Group: fbKey(group), Part: fbPartKey(part),
+           Person: fbTxt(person).trim(), Qty: Math.max(0, fbInt(qty, 0)), Status: FB_STATUS.assigned,
+           DecidedBy: fbTxt(who), DecidedAt: when };
+}
+/** The office approving a request, with the quantity it confirms. */
+const fbApproveFields = (qty, who, at) => ({ Status: FB_STATUS.assigned, Qty: Math.max(0, fbInt(qty, 0)),
+  DecidedBy: fbTxt(who), DecidedAt: fbTxt(at) || new Date().toISOString() });
+/** Refuse a request, or remove an assignment. Nothing else changes. */
+const fbDecideFields = (status, who, at) => ({ Status: status === "refused" ? FB_STATUS.refused : FB_STATUS.removed,
+  DecidedBy: fbTxt(who), DecidedAt: fbTxt(at) || new Date().toISOString() });
+
+/* ---- urgent: `Urgent` on a Fabrication station row, office only ------------
+   A comma list of `job`, `group`, `frames`, `sashes`, `transoms`. `job` is the
+   job-level flag and is written on every row of the job. */
+const FB_URGENT_WORDS = ["job", "group"].concat(FB_PARTS);
+function fbUrgentOf(text) {
+  const out = {};
+  fbTxt(text).split(/[,;]+/).map(fbLow).forEach(w => { if (FB_URGENT_WORDS.indexOf(w) >= 0) out[w] = true; });
+  return out;
+}
+function fbUrgentToggle(text, word, on) {
+  const u = fbUrgentOf(text);
+  if (on) u[word] = true; else delete u[word];
+  return FB_URGENT_WORDS.filter(w => u[w]).join(",");
+}
+/** Is anything on this card urgent? And what, per group. */
+function fbCardUrgent(c) {
+  let any = false;
+  (c.groups || []).forEach(g => {
+    g.urgentOf = fbUrgentOf(g.urgent);
+    if (Object.keys(g.urgentOf).length) any = true;
+  });
+  return any;
+}
+/** Urgent cards first, each side keeping the board's own order. */
+function fbUrgentFirst(cards) {
+  const u = [], rest = [];
+  (cards || []).forEach(c => (fbCardUrgent(c) ? u : rest).push(c));
+  return u.concat(rest);
+}
+
+/* ---- notifications on the tablet --------------------------------------------
+   One key per thing worth telling the person signed in: each of their
+   assignment rows in its current state, and each urgent flag on a line they
+   hold. A key they have not seen is a notice. The keys change when the thing
+   changes, so a changed Qty or a new urgent flag is a new notice. */
+function fbNotices(rows, cards, person, idx) {
+  if (!person) return [];
+  const out = [];
+  (rows || []).forEach(r => {
+    if (r.person !== person.name) return;
+    if (r.status === "requested") return;                    // their own Take: nothing to tell them
+    const words = r.status === "assigned" ? "assigned to you: " + r.qty + " " + r.part
+      : r.status === "refused" ? "request refused: " + r.part : "assignment removed: " + r.part;
+    out.push({ key: "a|" + r.id + "|" + r.status + "|" + r.qty, job: r.job,
+               text: r.job + " " + r.group + " — " + words });
+  });
+  (cards || []).forEach(c => (c.groups || []).forEach(g => {
+    const u = fbUrgentOf(g.urgent);
+    if (!Object.keys(u).length) return;
+    const held = FB_PARTS.some(p => fbMine(idx, person, c.job, g.group, p) > 0);
+    if (!held) return;
+    out.push({ key: "u|" + c.job + "|" + g.group + "|" + Object.keys(u).sort().join(","), job: c.job,
+               text: c.job + " " + g.group + " — urgent" });
+  }));
+  return out;
+}
+/** Seen state for one person: { key: 1 }. The first time a person is seen at
+    all, everything current is taken as seen (a baseline, not a storm). */
+function fbSeenFor(store, name, notices) {
+  const s = store || {};
+  if (!s[name]) { s[name] = {}; (notices || []).forEach(n => { s[name][n.key] = 1; }); }
+  return s[name];
+}
+const fbUnseen = (notices, seen) => (notices || []).filter(n => !(seen || {})[n.key]);
+
 /* ---- the station definition (docs/STATIONS.md, "Adding a station") -------- */
 const FAB = {
-  key: "fabrication", name: FB_NAME, list: FB_LIST, site: FB_SITE,
+  key: "fabrication", name: FB_NAME, list: FB_LIST, site: FB_SITE, assignList: FB_ASSIGN_LIST,
   stages: FB_GROUP_KEYS.map(k => k.toLowerCase()),
   stageLabel: () => "Fabrication",
   reportStages: [FB_STAGE],
@@ -432,7 +606,11 @@ const FABC = {
   fbActive, fbOnSheet, fbColour, fbRollUp, fbRecord, fbCards, fbOfficeBoard, fbJobCard,
   fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
-  fbCellWord, fbCellWant, fbReportJobs
+  fbCellWord, fbCellWant, fbReportJobs,
+  FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,
+  fbAssignRows, fbAssignIndex, fbLineOf, fbAssignedSum, fbMine, fbRequested, fbSplitCheck, fbCanTap,
+  fbRequestFields, fbAssignFields, fbApproveFields, fbDecideFields,
+  fbUrgentOf, fbUrgentToggle, fbCardUrgent, fbUrgentFirst, fbNotices, fbSeenFor, fbUnseen
 };
 if (typeof window !== "undefined") window.FABC = FABC;
 else if (typeof globalThis !== "undefined") globalThis.FABC = FABC;
