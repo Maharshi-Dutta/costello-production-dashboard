@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fabrication station</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔧</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* The welding page's tokens and layout (10-inch tablet, portrait, one
+     column, never sideways). This station's colour at three levels is its own:
+     none = nothing fabricated, LAVENDER = started, PURPLE = every frame, sash
+     and transom done - the same two the office paints on the Production sheet,
+     and deliberately not welding's yellow and green. */
+  :root {
+    --bg:#16161a; --surface:#1e1e23; --surface-2:#24242a; --line:#33333b; --line-soft:#2b2b32;
+    --ink:#f2f1ee; --ink-2:#c9c6bf; --ink-3:#9a968d; --ink-4:#7a776f;
+    --brand:#0e0e11; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#6aa9ec; --urgent:#f07a72;
+    --lav:#c9bff0; --lav-bg:#2a2638; --lav-line:#5b5280;
+    --pur:#b19cf0; --pur-bg:#352a55; --pur-line:#7b66c4;
+  }
+  :root[data-theme="light"] {
+    --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
+    --ink:#17171a; --ink-2:#4d4a44; --ink-3:#6d6a62; --ink-4:#8e8b84;
+    --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
+    --accent:#184f95; --urgent:#b3261e;
+    --lav:#5e4f9e; --lav-bg:#f1eef9; --lav-line:#d9d2e9;
+    --pur:#4b3591; --pur-bg:#e3dcf3; --pur-line:#b4a7d6;
+  }
+  * { box-sizing:border-box }
+  [hidden] { display:none !important }
+  body { margin:0; background:var(--bg); color:var(--ink); font-size:15px;
+         font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif; -webkit-text-size-adjust:100% }
+  .cond { font-family:"Barlow Condensed",sans-serif; font-variant-numeric:tabular-nums }
+  .tab { font-variant-numeric:tabular-nums }
+  button { font:inherit; cursor:pointer }
+  @keyframes rise { from{transform:translateY(9px);opacity:0} to{transform:none;opacity:1} }
+  @keyframes shake { 10%,90%{transform:translateX(-2px)} 30%,70%{transform:translateX(5px)}
+                     50%{transform:translateX(-7px)} 100%{transform:none} }
+
+  #gate { position:fixed; inset:0; background:var(--brand); color:var(--onbrand); z-index:80;
+          display:flex; align-items:center; justify-content:center }
+  .gatebox { max-width:420px; padding:30px; text-align:left }
+  .gatebox h1 { font-family:"Barlow Condensed",sans-serif; font-size:42px; margin:0 0 6px;
+                text-transform:uppercase; letter-spacing:.02em }
+  .gatebox p { color:#a8a49a; line-height:1.55; margin:0 0 22px; font-size:14.5px }
+  .signin { background:#fff; color:#17171a; border:0; padding:15px 24px; border-radius:6px;
+            font-size:16px; font-weight:600; display:inline-flex; align-items:center; gap:10px; min-height:52px }
+  #gateerr { margin-top:18px; color:#f07a72; font-size:13.5px; line-height:1.5; white-space:pre-wrap;
+             display:none; background:#2a1a1a; padding:11px 13px; border-radius:5px; border:1px solid #5a2a2a }
+
+  /* two header rows, never three: only #search flexes */
+  header.top { position:sticky; top:0; z-index:30; background:var(--brand); color:var(--onbrand);
+               padding:9px 16px; display:flex; flex-direction:column; gap:8px }
+  .toprow { display:flex; align-items:center; gap:10px; flex-wrap:nowrap; min-width:0 }
+  .brand { font-family:"Barlow Condensed",sans-serif; font-size:24px; font-weight:700;
+           text-transform:uppercase; white-space:nowrap; flex:none }
+  #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
+           background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
+           padding:7px 14px; min-height:38px; display:flex; align-items:center;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+  #whois:empty { display:none }
+  #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
+  #search { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+            border-radius:24px; min-height:48px; padding:0 16px; font-size:16px;
+            font-family:inherit; flex:1 1 auto; min-width:90px; width:auto }
+  #search::placeholder { color:#8a867e }
+  #wtabs { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
+           overflow:hidden; background:var(--brand-2) }
+  #wtabs button { background:transparent; color:#a8a49a; border:0; min-height:48px; padding:0 13px;
+                  font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
+  #wtabs button.on { background:var(--onbrand); color:var(--brand) }
+  #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+               border-radius:24px; min-height:48px; padding:0 15px; font-size:14px; font-weight:600;
+               white-space:nowrap; flex:none }
+  #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
+                       border-radius:6px; min-height:48px; padding:0 13px; font-size:13px;
+                       white-space:nowrap; flex:none }
+
+  #main { padding:14px 16px 40px; max-width:980px; margin:0 auto }
+  #soft { font-size:13px; color:var(--urgent); padding:0 2px 8px }
+  #more { display:block; width:100%; min-height:48px; margin:0 0 10px; padding:0 16px;
+          border:1px dashed var(--line); border-radius:7px; background:var(--surface-2);
+          color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
+  #more[hidden] { display:none }
+  .grp { display:flex; flex-direction:column; gap:12px }
+  .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
+  .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
+           border-radius:6px; background:var(--surface); color:var(--ink); font-size:15px }
+
+  .card { border:1px solid var(--line); border-radius:7px; background:var(--surface);
+          padding:13px 14px; animation:rise .22s both }
+  .card.c-lavender { border-color:var(--lav-line) }
+  .card.c-purple { background:var(--pur-bg); border-color:var(--pur-line) }
+  .chead { display:flex; align-items:baseline; gap:12px; margin-bottom:5px; flex-wrap:nowrap }
+  .job { font-size:28px; font-weight:700; line-height:1; flex:none }
+  .cust { font-size:16px; color:var(--ink-2); flex:1 1 auto; min-width:0;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .csec { font-size:13px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none;
+          border:1px solid var(--line); border-radius:12px; padding:1px 9px }
+  .cfacts { display:flex; gap:12px; align-items:baseline; margin-bottom:12px }
+  .ccmt { font-size:14.5px; color:var(--ink-3); font-style:italic; min-width:0; flex:1 1 auto;
+          line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
+  .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
+  .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
+  .hint { margin-top:10px; font-size:13.5px; font-weight:600; color:var(--ink-2);
+          border:1px dashed var(--line); border-radius:6px; padding:8px 10px }
+
+  .wgroups { display:flex; flex-direction:column; gap:10px }
+  .wgrp { border:1px solid var(--line-soft); border-left:5px solid var(--line);
+          border-radius:6px; padding:10px 12px 9px; background:var(--surface-2) }
+  .wgrp.c-lavender { border-color:var(--lav-line); border-left-color:var(--lav); background:var(--lav-bg) }
+  .wgrp.c-purple { border-color:var(--pur-line); border-left-color:var(--pur); background:var(--pur-bg) }
+  .wghead { display:flex; align-items:baseline; gap:12px; margin-bottom:9px }
+  .wgname { font-size:18px; font-weight:700; text-transform:uppercase; letter-spacing:.01em;
+            min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  /* the job's door codes, labels only, on a door group's head */
+  .wgdoors { font-size:14px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none }
+  .wgcount { font-size:16px; font-weight:700; color:var(--ink-2); white-space:nowrap; flex:none; margin-left:auto }
+
+  /* one row per part, buttons always in the same column, glove-sized */
+  .steps { display:flex; flex-direction:column; gap:10px }
+  .step { display:grid; grid-template-columns:104px minmax(76px,1fr) auto; gap:12px; align-items:center }
+  .step.locked { opacity:.5 }
+  .step.locked .sbtn, .step.locked .sall { cursor:not-allowed }
+  .stepl { font-size:16px; color:var(--ink-2); min-width:0 }
+  .stepleft { font-size:17px; font-weight:700; color:var(--ink); display:block; margin-top:1px }
+  .step.c-purple .stepleft { color:var(--pur) }
+  .nomine { font-size:12px; color:var(--ink-4); display:block }
+  .stepmid { min-width:0 }
+  .stepn { font-size:22px; font-weight:700; display:block; text-align:left; line-height:1.1 }
+  .stepn.full { color:var(--pur) }
+  .wbar { display:block; height:10px; margin-top:6px; border-radius:5px; background:var(--line-soft); overflow:hidden }
+  .wbarfill { display:block; height:100%; background:var(--lav); border-radius:5px }
+  .step.c-purple .wbarfill { background:var(--pur) }
+  .stepc { display:flex; gap:8px; align-items:center; justify-content:flex-end; flex:none }
+  .sbtn { width:64px; height:56px; flex:none; border:1px solid var(--line); border-radius:8px;
+          background:var(--surface); color:var(--ink); font-size:24px; line-height:1 }
+  .sall { width:84px; height:56px; flex:none; padding:0; border:1px solid var(--line);
+          border-radius:8px; background:var(--surface); color:var(--ink-2); font-size:15px;
+          font-weight:600; white-space:nowrap }
+  .sbtn:active, .sall:active { background:var(--line-soft) }
+
+  .cmt { margin-top:11px; border-top:1px solid var(--line-soft); padding-top:9px }
+  .cmtog { display:inline-flex; align-items:center; gap:7px; min-height:44px; padding:0 13px;
+           border:1px solid var(--line); border-radius:7px; background:var(--surface-2);
+           color:var(--ink-2); font-size:13.5px }
+  .cmicon { flex:none; opacity:.8 }
+  .cmbody { margin-top:10px }
+  .cmthread { display:grid; gap:8px; margin-bottom:10px; max-height:220px; overflow-y:auto }
+  .cmrow { background:var(--surface-2); border:1px solid var(--line-soft); border-radius:6px;
+           padding:8px 10px; display:grid; grid-template-columns:1fr auto; gap:2px 10px }
+  .cmwho { font-size:12px; font-weight:600; color:var(--ink-2) }
+  .cmwhen { font-size:11.5px; color:var(--ink-4); text-align:right }
+  .cmtext { grid-column:1/-1; font-size:14px; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere }
+  .cmbox { width:100%; min-height:72px; border:1px solid var(--line); border-radius:7px;
+           background:var(--surface-2); color:var(--ink); font-size:16px; font-family:inherit;
+           padding:10px 11px; resize:vertical }
+  .cmfoot { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px }
+  .cmnote { font-size:11.5px; color:var(--ink-4); line-height:1.35 }
+  .cmnote.bad { color:var(--urgent); font-weight:600; font-size:12.5px }
+  .cmsend { min-height:44px; padding:0 20px; border:1px solid var(--line); border-radius:7px;
+            background:var(--surface-2); color:var(--ink); font-size:15px; font-weight:600 }
+  .cmsend:disabled { opacity:.4; cursor:default }
+  .cmhint { font-size:12.5px; color:var(--ink-3); line-height:1.5; margin-bottom:10px }
+
+  .picker { max-width:560px; margin:0 auto; padding:18px 4px 40px }
+  .pickh { font-family:"Barlow Condensed",sans-serif; font-size:34px; font-weight:700;
+           text-transform:uppercase; letter-spacing:.02em; margin-bottom:4px }
+  .picksub { font-size:14px; color:var(--ink-3); margin-bottom:18px }
+  .pgrid { display:grid; gap:12px; margin-top:14px }
+  .pbtn { min-height:64px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+          color:var(--ink); text-align:left; padding:10px 18px; display:flex; flex-direction:column;
+          justify-content:center; gap:3px }
+  .pname { font-size:19px; font-weight:600 }
+  .pstages { font-size:12.5px; color:var(--ink-3) }
+  .pindots { font-size:32px; letter-spacing:.3em; color:var(--ink-2); min-height:44px; margin:6px 0 2px }
+  .pindots.shake { animation:shake .4s both }
+  .pinbad { color:var(--urgent); font-size:13.5px; font-weight:600; margin-bottom:6px }
+  .pinpad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:10px }
+  .pk { min-height:56px; border:1px solid var(--line); border-radius:8px; background:var(--surface);
+        color:var(--ink); font-size:22px; font-weight:600 }
+  .pk.go { background:var(--surface-2); font-size:17px }
+  .pcancel { margin-top:16px; min-height:48px; width:100%; border:1px solid var(--line);
+             border-radius:6px; background:transparent; color:var(--ink-3); font-size:14px }
+
+  @media (max-width:520px){
+    .toprow { flex-wrap:wrap; row-gap:8px }
+    #main { padding:12px 12px 32px }
+    .step { grid-template-columns:1fr; row-gap:6px }
+    .stepc { justify-content:flex-start }
+    .wghead { flex-wrap:wrap }
+    .job { font-size:25px }
+    .wgname { font-size:16px }
+    .brand { font-size:21px }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gatebox">
+    <h1>Fabrication station</h1>
+    <p>Sign in with the station account to see the fabrication board and record the
+       frames, sashes and transoms that are done.</p>
+    <button class="signin" id="signinbtn">
+      <svg width="18" height="18" viewBox="0 0 23 23"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/><path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/></svg>
+      Sign in
+    </button>
+    <div id="gateerr"></div>
+  </div>
+</div>
+
+<header class="top" hidden id="top">
+  <div class="toprow">
+    <span class="brand">Fabrication</span>
+    <span id="whois"></span>
+    <span id="upd"></span>
+  </div>
+  <div class="toprow">
+    <input id="search" type="search" placeholder="Find a job" autocomplete="off" hidden>
+    <span id="wtabs" role="tablist" hidden>
+      <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
+    </span>
+    <button id="switchbtn" hidden>Switch person</button>
+    <button id="themebtn">Light</button>
+    <button id="outbtn">Sign out</button>
+  </div>
+</header>
+
+<div id="main" hidden>
+  <div id="soft" hidden></div>
+  <button id="more" hidden></button>
+  <div id="board"></div>
+</div>
+
+<script src="vendor/msal-browser.min.js"></script>
+<script src="graph.js?v=20260924-1248"></script>
+<script src="station-core.js?v=20260924-1248"></script>
+<script src="station-ui.js?v=20260924-1248"></script>
+<script src="fabrication-core.js?v=20260924-1248"></script>
+<script src="fabrication.js?v=20260924-1248"></script>
+</body>
+</html>

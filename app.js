@@ -24,7 +24,7 @@ const SHEETNAMES = ["Production", "Production (2)", "PA Lam", "Glass", "Wds Prep
    empty states and the reset in renderChips all follow from this array.
    SHEETNAMES stays exactly as it was, for the export filter and the row chips. */
 const STATIONS = [["glass", "Glass station"], ["welding", "Welding station"],
-                  ["glazing", "Glazing station"]];
+                  ["glazing", "Glazing station"], ["fabrication", "Fabrication station"]];
 /* Everything the Show dropdown can put in the job list's place. The floor
    stations, and then the John print sheet - which is not a station at all: it
    is the office's own second sheet, "Production (2)", shown on its own terms
@@ -2065,6 +2065,7 @@ function stationCatchUp() {
      was owed for ever and never taken. */
   if (state.board === "welding") redrawWelding();
   else if (state.board === "glazing") redrawGlazing();
+  else if (state.board === "fabrication") redrawFabrication();
   else redrawStation();
 }
 
@@ -2298,7 +2299,7 @@ function redrawStation() {
   /* the welding and glazing boards redraw on their own clocks (redrawWelding,
      redrawGlazing) from their own lists, so a glass poll must not rebuild
      either of them under somebody's filter */
-  if (state.board === "welding" || state.board === "glazing") {
+  if (state.board === "welding" || state.board === "glazing" || state.board === "fabrication") {
     if (state.sel && $("#dhost")) renderDrawer(); return;
   }
   const onBoard = typeof STATIONS !== "undefined" && STATIONS.some(b => b[0] === state.board);
@@ -2341,6 +2342,7 @@ function stationTick() {
     try { await stationPoll(); } catch (e) { /* it has its own catch; belt and braces */ }
     try { await weldPoll(); } catch (e) { /* ... and so does this one */ }
     try { await glzPoll(); } catch (e) { /* ... and the third */ }
+    try { await fabrPoll(); } catch (e) { /* ... and the fourth */ }
     try { stationCatchUp(); } catch (e) {}
     stationTick();
   }, STATION_TICK_MS);
@@ -2386,6 +2388,12 @@ function setStationFoot() {
   }
   if (typeof GLZ_FEED_ERR !== "undefined" && GLZ_FEED_ERR) {
     show("glazing feed failed"); el.title = GLZ_FEED_ERR; return;
+  }
+  if (typeof FABR_COLOUR_ERR !== "undefined" && FABR_COLOUR_ERR) {
+    show("fabrication colours not saved"); el.title = FABR_COLOUR_ERR; return;
+  }
+  if (typeof FABR_FEED_ERR !== "undefined" && FABR_FEED_ERR) {
+    show("fabrication feed failed"); el.title = FABR_FEED_ERR; return;
   }
   if (!STATION_FEED.at) { show(""); el.title = ""; return; }
   show("station feed: " + agoWords(STATION_FEED.at));
@@ -4024,6 +4032,581 @@ function glzDrawerLine(j) {
     '<button class="ghost" id="glzopen">open the glazing board</button></div>';
 }
 
+/* ================= the fabrication station, in the office ======================
+   2026-09-25, Part A (docs/specs/2026-09-25-fabrication-station.md). The fourth
+   station, built from docs/STATIONS.md "Adding a station" on welding's worked
+   example: feed the list, poll it, draw the board, let the office correct a
+   counter. Its columns and rules are fabrication-core.js' `FAB` definition.
+
+   What is different from welding: three parts per group (T too), and a COLOUR
+   PAINTER (rule 6, the fourth sanctioned fill, owner 2026-09-25): the office
+   paints a group's own F/S/T cell lavender (started) or purple (done) from this
+   list - only where the office's own checkpoint record for that cell is blank,
+   never over a colour it does not own, and white only over its own two. The
+   paint is a copy: nothing reads it back as status.
+
+   Every name here is FABR_* / fabr*: app.js already owns FAB_* / fab* for the
+   floating action button. The office writes the counters of `Fabrication
+   station` only through FABC.fbOfficeFields + fbFloorOnly, logs to `Dashboard
+   Log`, and never writes `Station people` or `Station log`. */
+const FABR_SITE_MISSING = "The “Floor stations” SharePoint site is not there yet, or this account " +
+  "cannot see it, so the fabrication board cannot be shown. Ask the manager — nothing in the Excel file is involved.";
+const FABR_LIST_MISSING = "The “Fabrication station” list is not in the “Floor stations” site yet. " +
+  "Ask the manager to add it — nothing in the Excel file is involved.";
+const FABR_LOG_MISSING = "The “Station log” list is not in the “Floor stations” site yet, so who " +
+  "fabricated what cannot be shown here. Ask the manager to add it.";
+let FABR_ITEMS = null, FABR_OK = null, FABR_WHY = "", FABR_ERR = "";
+let FABR_LOG = [], FABR_LOG_OK = null, FABR_LOG_WHY = "";
+let FABR_NOTES = null, FABR_NOTES_OK = null;
+let FABR_SITEID = null, FABR_SITE_GEN = 0;
+let FABR_TOK = { items: null, log: null, notes: null };
+let fabrBusy = false, fabrPolling = false;
+let FABR_FEED = { hash: "", at: 0 }, FABR_FEED_ERR = "";
+const FABR_FEED_KEY = "cw_fabfeed";
+try { FABR_FEED = JSON.parse(localStorage.getItem(FABR_FEED_KEY) || "null") || FABR_FEED; } catch (e) {}
+function saveFabrFeed() { try { localStorage.setItem(FABR_FEED_KEY, JSON.stringify(FABR_FEED)); } catch (e) {} }
+let FABR_OPEN = {}, FABR_Q = "", FABR_SECT = "";
+let fabrWriting = {};           // item id|part -> an office write in flight
+
+const fabrOn = () => typeof FABC !== "undefined" && !!FABC && typeof ST !== "undefined";
+async function fabrSiteId() { return await CW.stationSite(FABC.FAB.site); }
+const fabrOpts = () => ({ siteId: FABR_SITEID, fields: FABC.FB_FIELDS });
+
+function fabrTrouble(e) {
+  const m = (e && e.message) || String(e || "");
+  const gone = !!(CW.isMissing && CW.isMissing(e));
+  if (gone) {
+    FABR_SITEID = null;
+    if (CW.forgetStationSite) CW.forgetStationSite(false, FABC.FAB.site);
+  }
+  if (/permission needed/.test(m)) { FABR_OK = false; FABR_WHY = STATION_NEED_CONSENT; FABR_ERR = ""; return; }
+  if (gone) { FABR_OK = false; FABR_WHY = FABR_SITE_MISSING; FABR_ERR = ""; return; }
+  FABR_ERR = "cannot reach the fabrication lists just now — retrying";
+  console.warn("[fabrication] " + m);
+}
+async function readFabrication() {
+  if (!fabrOn() || typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
+  try {
+    if (CW.hasListConsent && !(await CW.hasListConsent())) {
+      FABR_OK = false; FABR_WHY = STATION_NEED_CONSENT; FABR_ERR = ""; return null;
+    }
+    FABR_SITEID = await fabrSiteId();
+    if (!FABR_SITEID) { FABR_OK = false; FABR_WHY = FABR_SITE_MISSING; FABR_ERR = ""; return null; }
+    const items = await CW.listItems(FABC.FB_LIST, fabrOpts());
+    if (items == null) { FABR_OK = false; FABR_WHY = FABR_LIST_MISSING; FABR_ERR = ""; return null; }
+    FABR_ITEMS = items; FABR_OK = true; FABR_WHY = ""; FABR_ERR = ""; FABR_TOK.items = null;
+    return items;
+  } catch (e) { fabrTrouble(e); return null; }
+}
+async function readFabricationLog() {
+  if (!fabrOn() || !FABR_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.LOG_LIST, { siteId: FABR_SITEID, fields: ST.LOG_FIELDS });
+    if (items == null) { FABR_LOG_OK = false; FABR_LOG_WHY = FABR_LOG_MISSING; return null; }
+    FABR_LOG = stationLogRecent(items); FABR_LOG_OK = true; FABR_LOG_WHY = ""; FABR_TOK.log = null;
+    return FABR_LOG;
+  } catch (e) { fabrTrouble(e); return null; }
+}
+async function readFabricationNotes() {
+  if (!fabrOn() || !FABR_SITEID) return null;
+  try {
+    const items = await CW.listItems(ST.COMMENT_LIST, { siteId: FABR_SITEID, fields: ST.COMMENT_FIELDS });
+    if (items == null) { FABR_NOTES_OK = false; FABR_NOTES = []; return null; }
+    FABR_NOTES = stationNotesRecent(items); FABR_NOTES_OK = true; FABR_TOK.notes = null;
+    return FABR_NOTES;
+  } catch (e) { fabrTrouble(e); return null; }
+}
+
+/* ---- the feeder: beside the others, in its own link of load()'s chain. No
+   seed (FAB.seedFields is empty), so no plan can name a floor column and no
+   re-read-before-seeding guard is needed. Never a delete. ---- */
+async function fabrAdd(fields, opts) {
+  try { return await CW.listAdd(FABC.FB_LIST, fields, opts); }
+  catch (e) {
+    /* Title is unique: a refusal usually means another dashboard made the row */
+    const mine = await CW.listItemsFor(FABC.FB_LIST, fields.Title, opts);
+    if (!mine.length) throw e;
+    const body = Object.assign({}, fields);
+    delete body.Title;
+    return CW.listPatch(FABC.FB_LIST, mine[0].id, body, opts);
+  }
+}
+let fabrAgainT = null;
+function fabrFeedAgain() {
+  if (fabrAgainT) return;
+  fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, 30000);
+}
+async function feedFabrication() {
+  if (!fabrOn() || fabrBusy) return null;
+  if (fabrPolling) { fabrFeedAgain(); return null; }
+  if (typeof CW === "undefined" || !CW || !CW.listAdd) return null;
+  fabrBusy = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) { FABR_FEED_ERR = ""; return null; }
+    const slice = FABC.fbSlice(ALL, BLOCKNAMES);
+    const hash = ST.sliceHash(slice, FABC.FAB);
+    if (hash === FABR_FEED.hash && Date.now() - (FABR_FEED.at || 0) < STATION_FEED_MS) { FABR_FEED_ERR = ""; return null; }
+    FABR_SITEID = await fabrSiteId();
+    if (!FABR_SITEID) { FABR_OK = false; FABR_WHY = FABR_SITE_MISSING; FABR_ERR = ""; return null; }
+    const fgen = CW.stationSiteMoves ? CW.stationSiteMoves(FABC.FAB.site) : 0;
+    if (fgen !== FABR_SITE_GEN) fabrSiteMoved(fgen);
+    const opts = fabrOpts();
+    const items = await CW.listItems(FABC.FB_LIST, opts);
+    if (items == null) { FABR_OK = false; FABR_WHY = FABR_LIST_MISSING; FABR_ERR = ""; return null; }
+    FABR_OK = true; FABR_WHY = ""; FABR_ERR = ""; FABR_ITEMS = items; FABR_TOK.items = null;
+    const plan = ST.feedPlan(slice, items, { at: new Date().toISOString(), by: feedWho(), def: FABC.FAB });
+    const all = plan.adds.map(f => () => fabrAdd(f, opts))
+      .concat(plan.patches.map(p => () => CW.listPatch(FABC.FB_LIST, p.id, p.fields, opts)));
+    const work = all.slice(0, STATION_FEED_MAX);
+    const r = await stationSend(work);
+    FABR_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
+    const whole = !r.failed && work.length === all.length;
+    FABR_FEED = whole ? { hash: hash, at: Date.now() } : { hash: "", at: Date.now() };
+    saveFabrFeed();
+    if (!whole) fabrFeedAgain();
+    console.log("[fabrication] fed " + r.sent + " of " + all.length + " (" + plan.adds.length + " new, " +
+                plan.patches.length + " changed, " + plan.unchanged + " already right)");
+    if (r.sent) {
+      const after = await CW.listItems(FABC.FB_LIST, opts);
+      if (after) { FABR_ITEMS = after; FABR_TOK.items = null; }
+    }
+    return r;
+  } catch (e) {
+    FABR_FEED_ERR = (e && e.message) || String(e);
+    console.warn("[fabrication] feed failed:", FABR_FEED_ERR);
+    fabrTrouble(e);
+    fabrFeedAgain();
+    return null;
+  } finally {
+    fabrBusy = false;
+    setStationFoot();
+  }
+}
+function fabrSiteMoved(gen) {
+  FABR_SITE_GEN = gen;
+  FABR_TOK = { items: null, log: null, notes: null };
+  FABR_FEED = { hash: "", at: 0 }; saveFabrFeed();
+}
+
+/* ---- the poll: its own try inside the station clock ---- */
+async function fabrDeltaOne(key, list, fields) {
+  const opts = { siteId: FABR_SITEID, fields: fields };
+  if (FABR_TOK[key]) opts.token = FABR_TOK[key];
+  const had = opts.token || null;
+  let d;
+  try { d = await CW.listDelta(list, opts); }
+  catch (e) {
+    if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+    FABR_TOK[key] = null;
+    const all = await CW.listItems(list, { siteId: FABR_SITEID, fields: fields });
+    return all == null ? null : { rows: all, fresh: true };
+  }
+  if (d == null) return null;                     // the list is not there any more
+  FABR_TOK[key] = d.next || null;
+  if (!had) return { rows: d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields })), fresh: true };
+  if (!d.items.length) return { rows: null, fresh: false };
+  return { rows: d.items, fresh: false };
+}
+async function fabrPoll() {
+  if (!fabrOn() || fabrPolling || fabrBusy || FABR_OK !== true || !CW.listDelta) return false;
+  fabrPolling = true;
+  try {
+    if (!CW.hasListConsent || !(await CW.hasListConsent())) return false;
+    FABR_SITEID = await fabrSiteId();
+    if (!FABR_SITEID) return false;
+    const gen = CW.stationSiteMoves ? CW.stationSiteMoves(FABC.FAB.site) : 0;
+    if (gen !== FABR_SITE_GEN) fabrSiteMoved(gen);
+    let moved = false, items = false;
+    const got = await fabrDeltaOne("items", FABC.FB_LIST, FABC.FB_FIELDS);
+    if (got === null) { FABR_OK = false; FABR_WHY = FABR_LIST_MISSING; }
+    else if (got.rows) {
+      FABR_ITEMS = got.fresh ? got.rows : ST.mergeDelta(FABR_ITEMS || [], got.rows);
+      moved = items = true;
+    }
+    if (FABR_LOG_OK === true) {
+      const lg = await fabrDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
+      if (lg === null) { FABR_LOG_OK = false; FABR_LOG_WHY = FABR_LOG_MISSING; }
+      else if (lg.rows) { FABR_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(FABR_LOG || [], lg.rows)); moved = true; }
+    }
+    if (FABR_NOTES_OK === true) {
+      const nt = await fabrDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
+      if (nt === null) { FABR_NOTES_OK = false; FABR_NOTES = FABR_NOTES || []; }
+      else if (nt.rows) { FABR_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(FABR_NOTES || [], nt.rows)); moved = true; }
+    }
+    FABR_ERR = "";
+    if (moved) redrawFabrication();
+    /* a counter moved: the sheet's colours follow. Not awaited - the poll must be
+       back for its next turn whatever the workbook is doing. */
+    if (items) fabrColourRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+    return moved;
+  } catch (e) {
+    fabrTrouble(e);
+    return false;
+  } finally {
+    fabrPolling = false;
+  }
+}
+/** Redraw the board, and nothing else. Off the board, only an open drawer
+    (this station has no voice in the phase bar). */
+function redrawFabrication() {
+  if (state.board !== "fabrication") { if (state.sel && $("#dhost")) renderDrawer(); return; }
+  if (rowsInUse()) { ROWS_STALE = true; return; }
+  ROWS_STALE = false;
+  quietRows();
+}
+/* the three reads, asked once each whoever asks first; a read that failed
+   (state still null) waits FABR_RETRY_MS before it is asked again, and an
+   answered one returns without calling back (welding's two rules, 2026-09-16) */
+const FABR_RETRY_MS = 15000;
+const fabrSoft = {}, fabrReading = {};
+const FABR_READS = {
+  board: { ok: () => FABR_OK, read: () => readFabrication() },
+  log: { ok: () => FABR_LOG_OK, read: () => readFabricationLog() },
+  notes: { ok: () => FABR_NOTES_OK, read: () => readFabricationNotes() }
+};
+function fabrReadIfNeeded(which, then) {
+  const R = FABR_READS[which];
+  if (!fabrOn() || R.ok() !== null) return;
+  if (which !== "board" && !FABR_SITEID) return;
+  if (fabrSoft[which] && Date.now() - fabrSoft[which] < FABR_RETRY_MS) return;
+  if (!fabrReading[which]) {
+    fabrSoft[which] = Date.now();
+    fabrReading[which] = R.read().then(r => {
+      fabrReading[which] = null;
+      if (R.ok() !== null) fabrSoft[which] = 0;
+      return r;
+    }, () => { fabrReading[which] = null; });
+  }
+  fabrReading[which].then(() => { if (then) then(); });
+}
+
+/* ---- the office's own edit: one counter, its By/At, DoneBy/DoneAt, one
+   `Dashboard Log` line, never `Station log`. The row is read immediately
+   before the write and the number derived from it (welding's review R3). ---- */
+async function fabrOfficeEdit(id, part, act) {
+  if (!fabrOn() || !CW.listPatch) return false;
+  const rec = (fabrRecordsNow().byId || {})[String(id)];
+  if (!rec) return false;
+  const k = String(id) + "|" + part;
+  if (fabrWriting[k]) return false;
+  if (FABC.fbApplyTap(rec, part, act) == null) return false;
+  if (FABR_OK !== true) { toast(FABR_WHY || FABR_LIST_MISSING, true); return false; }
+  fabrWriting[k] = 1;                              // up before the first await
+  redrawFabrication();
+  if (CW.hasListConsent && !(await CW.hasListConsent())) {
+    delete fabrWriting[k]; redrawFabrication(); toast(STATION_NEED_CONSENT, true); return false;
+  }
+  const who = feedWho(), at = new Date().toISOString();
+  let from = rec[part], value = null, stale = false;
+  const merge = extra => {
+    FABR_ITEMS = (FABR_ITEMS || []).map(it => String(it.id) === String(rec.id)
+      ? { id: it.id, fields: Object.assign({}, it.fields || {}, extra) } : it);
+  };
+  try {
+    FABR_SITEID = await fabrSiteId();
+    if (!FABR_SITEID) throw new Error(FABR_SITE_MISSING);
+    const now = await CW.listItem(FABC.FB_LIST, rec.id, fabrOpts());
+    if (!now || !now.fields) throw new Error(FABR_LIST_MISSING);
+    const fresh = FABC.fbRecord({ id: rec.id, fields: now.fields });
+    stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
+    from = fresh[part];
+    value = FABC.fbApplyTap(fresh, part, act);
+    if (value == null || value === from) {
+      delete fabrWriting[k]; merge(now.fields); redrawFabrication();
+      if (stale) toast(rec.job + " " + rec.group + ": updated from the floor first.");
+      return false;
+    }
+    const body = FABC.fbFloorOnly(FABC.fbOfficeFields(part, value, who, at));
+    await CW.listPatch(FABC.FB_LIST, rec.id, body, fabrOpts());
+    merge(Object.assign({}, now.fields, body));
+  } catch (e) {
+    delete fabrWriting[k];
+    console.warn("[fabrication] office edit refused:", (e && e.message) || e);
+    toast(rec.job + " " + rec.group + ": that change could not be saved. " + friendly(e), true);
+    redrawFabrication();
+    return false;
+  }
+  delete fabrWriting[k];
+  redrawFabrication();
+  if (stale) toast(rec.job + " " + rec.group + ": updated from the floor first — " +
+                   FABC.FB_PART_LABEL[part] + " is " + value + " now.");
+  noteChange(rec.job, FABC.fbLogWords(rec.job, rec.group, part), String(from), String(value));
+  /* the sheet's colour follows from the new counter */
+  fabrColourRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+  return true;
+}
+
+/* ---- what the board draws ---- */
+let FRECS = null, FRECS_OF = false;
+function fabrRecordsNow() {
+  if (FRECS_OF === FABR_ITEMS) return FRECS;
+  FRECS_OF = FABR_ITEMS;
+  const cards = fabrOn() ? FABC.fbOfficeBoard(FABR_ITEMS || []) : [];
+  const byId = {}, byJob = {};
+  cards.forEach(c => { byJob[c.job] = c; c.groups.forEach(g => { byId[String(g.id)] = g; }); });
+  FRECS = { cards: cards, byId: byId, byJob: byJob };
+  return FRECS;
+}
+let FLOGROWS = null, FLOGROWS_OF = false;
+function fabrLogRowsNow() {
+  if (FLOGROWS_OF === FABR_LOG) return FLOGROWS;
+  FLOGROWS_OF = FABR_LOG;
+  FLOGROWS = ST.logRows(FABR_LOG || [], FABC.FB_NAME);
+  return FLOGROWS;
+}
+const fabrNotesFor = job => ST.commentRows(FABR_NOTES || [], { job: job, station: FABC.FB_NAME });
+function fabrPartWords(c, part) {
+  let done = 0, total = 0;
+  c.groups.forEach(g => { done += g[part]; total += g[part + "Total"]; });
+  return { done: done, total: total };
+}
+function fabrCardsShown() {
+  let rows = FABC.fbFilter(fabrRecordsNow().cards, String(FABR_Q || "").trim());
+  if (FABR_SECT) rows = rows.filter(c => c.section === FABR_SECT);
+  return rows;
+}
+function fabrOfficeLineHtml(g, line) {
+  const busy = !!fabrWriting[String(g.id) + "|" + line.part];
+  const b = (t, act, cls) => '<button class="' + cls + '" data-fwid="' + esc(g.id) +
+    '" data-fwpart="' + esc(line.part) + '" data-fwact="' + esc(act) + '"' +
+    (busy ? ' disabled aria-disabled="true"' : "") + '>' + t + '</button>';
+  const stamp = line.at ? esc(line.by || "—") + " · " + esc(stWhen(line.at)) : "";
+  return '<div class="woline c-' + (line.colour || "none") + '">' +
+    '<span class="wolab">' + esc(line.label) + '</span>' +
+    '<span class="wonum tab">' + line.done + ' / ' + line.total + '</span>' +
+    '<span class="worem"></span>' + weldBarHtml(line.done, line.total) +
+    '<span class="wobtns">' + b("&minus;", "-1", "wobtn") + b("+", "1", "wobtn") +
+      b("All", "all", "wobtn wide") + b("None", "none", "wobtn wide") + '</span>' +
+    '<span class="wowho">' + stamp + '</span></div>';
+}
+function fabrRowHtml(c) {
+  const open = !!FABR_OPEN[c.job];
+  const notes = fabrNotesFor(c.job);
+  return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") + '" data-fwjob="' + esc(c.job) + '">' +
+    '<div class="wohead" data-fwtog="' + esc(c.job) + '">' +
+      '<span class="wotog">' + (open ? "▾" : "▸") + '</span>' +
+      '<span class="cond tab stjob">' + esc(c.job) + '</span>' +
+      '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
+      '<span class="wosect">' + esc(c.section || "—") + '</span>' +
+      '<span class="wototal tab">' + c.done + ' / ' + c.total + '</span>' +
+      weldBarHtml(c.done, c.total) +
+      FABC.FB_PARTS.map(p => { const w = fabrPartWords(c, p);
+        return '<span class="wopart tab">' + FABC.FB_PART_LABEL[p] + ' ' + w.done + '/' + w.total + '</span>'; }).join("") +
+      '<span class="wonotes-slot">' + (notes.length ? '<span class="wonotes" title="' +
+        esc(notes.map(n => (n.who || "somebody") + ": " + n.text).join("\n")) + '">' + notes.length + '</span>' : "") + '</span>' +
+      '<span class="wolast">' + (c.doneAt ? esc((c.doneBy || "—") + " · " + stWhen(c.doneAt)) : "") + '</span>' +
+    '</div>' +
+    (open ? '<div class="wobody">' + c.groups.map(g =>
+        '<div class="wogrp c-' + (g.colour || "none") + '"><div class="woghead"><span class="cond wogname">' +
+        esc(g.group) + (g.doors ? ' · ' + esc(g.doors) : "") + '</span><span class="wogcount tab">' +
+        g.done + ' / ' + g.total + '</span></div>' + g.lines.map(l => fabrOfficeLineHtml(g, l)).join("") + '</div>').join("") +
+      (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
+      (notes.length ? '<div class="wonotelist">' + notes.map(n =>
+        '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
+        '<span class="cmwhen">' + esc(ST.commentAgo(n.at)) + '</span>' +
+        '<div class="cmtext">' + esc(n.text) + '</div></div>').join("") + '</div>' : "") +
+      '</div>' : "") +
+  '</div>';
+}
+function fabrBoardHtml() {
+  if (!fabrOn()) return '<div class="empty">The fabrication board did not load.</div>';
+  if (FABR_OK === null) return '<div class="empty">' + esc(STATION_CHECKING) + '</div>';
+  if (FABR_OK !== true) return '<div class="empty" style="line-height:1.6">' + esc(FABR_WHY || FABR_LIST_MISSING) + '</div>';
+  const cards = fabrCardsShown();
+  const trouble = FABR_ERR ? '<div class="sttrouble">' + esc(FABR_ERR) + '</div>' : "";
+  const sects = weldSections(fabrRecordsNow().cards);
+  const bar = '<div class="wofilt">' +
+    '<input class="txt" id="fq" placeholder="Find a job, a customer or a group" value="' + esc(FABR_Q) + '">' +
+    '<select class="txt" id="fsect"><option value="">Every section</option>' +
+      sects.map(s => '<option value="' + esc(s) + '"' + (FABR_SECT === s ? " selected" : "") + '>' + esc(s) + '</option>').join("") +
+    '</select><span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span></div>';
+  const body = !cards.length
+    ? '<div class="empty" style="line-height:1.6">No fabrication jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>'
+    : cards.map(fabrRowHtml).join("");
+  return trouble + bar + '<div class="wolist">' + body + '</div>' + fabrLogPanelHtml();
+}
+const FABR_LOG_SHOW = 40;
+function fabrLogPanelHtml() {
+  const again = () => { if (state.board === "fabrication") redrawFabrication(); };
+  fabrReadIfNeeded("log", again);
+  fabrReadIfNeeded("notes", again);
+  const head = '<div class="wologhead"><span class="kick">Floor log</span>' +
+    '<span class="wologsub">Who fabricated what, and when. Written by the tablet only — ' +
+    'the office never writes a line of it.</span></div>';
+  if (FABR_LOG_OK === null) return '<div class="wolog">' + head + '<div class="cphint">' + esc(STATION_CHECKING) + '</div></div>';
+  if (FABR_LOG_OK !== true) return '<div class="wolog">' + head + '<div class="cphint">' + esc(FABR_LOG_WHY || FABR_LOG_MISSING) + '</div></div>';
+  const rows = fabrLogRowsNow();
+  const lines = rows.slice(0, FABR_LOG_SHOW).map(r =>
+    '<div class="stlrow"><span class="stlwho">' + esc(r.who || "—") + '</span>' +
+    '<span class="stn">' + esc(r.job) + '</span>' +
+    '<span class="stlwhat">' + esc(r.type) + ' · ' + esc(FABC.FB_PART_LABEL[r.stage] || r.stage) +
+      ' · ' + r.from + ' → ' + r.to + '</span>' +
+    '<span class="stlwhen tab">' + esc(stWhen(r.at)) + '</span></div>').join("");
+  return '<div class="wolog">' + head + (rows.length ? '<div class="stlog">' + lines + '</div>'
+    : '<div class="cphint">Nothing recorded on the fabrication floor yet.</div>') + '</div>';
+}
+function wireFabrBoard(host) {
+  if (!host || !host.querySelector) return;
+  const q = host.querySelector("#fq");
+  if (q) q.oninput = () => {
+    FABR_Q = q.value || "";
+    const at = q.selectionStart;
+    renderRows();
+    const n2 = $("#fq");
+    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
+  };
+  const se = host.querySelector("#fsect");
+  if (se) se.onchange = () => { FABR_SECT = se.value || ""; renderRows(); };
+  (host.querySelectorAll("[data-fwtog]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.target && ev.target.dataset && ev.target.dataset.fwact) return;
+      const j = el.dataset.fwtog;
+      if (FABR_OPEN[j]) delete FABR_OPEN[j]; else FABR_OPEN[j] = 1;
+      renderRows();
+    };
+  });
+  (host.querySelectorAll("[data-fwact]") || []).forEach(el => {
+    el.onclick = ev => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (el.disabled) return;
+      const act = el.dataset.fwact;
+      fabrOfficeEdit(el.dataset.fwid, el.dataset.fwpart, act === "all" || act === "none" ? act : Number(act))
+        .catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+    };
+  });
+}
+/** One read-only line in the job drawer: how far fabrication has got. */
+function fabrDrawerLine(j) {
+  if (!fabrOn() || !j) return "";
+  fabrReadIfNeeded("board", () => { if (state.sel && $("#dhost")) renderDrawer(); });
+  if (FABR_OK !== true) return "";
+  const c = FABC.fbJobCard(FABR_ITEMS || [], j.id);
+  if (!c || !c.total) return "";
+  return '<div class="weldline c-' + (c.colour || "none") + '"><span class="kick">Fabrication</span>' +
+    '<span class="weldnum tab">' + c.done + ' / ' + c.total + '</span>' +
+    '<button class="ghost" id="fabropen">open the fabrication board</button></div>';
+}
+
+/* ---- the colour painter (rule 6, the fourth sanctioned fill) ------------------
+   Per job: for every group row somebody has touched (DoneAt set), each of its
+   F/S/T cells gets FABC.fbCellWant - which answers null (leave it) whenever the
+   office's own record for that cell says anything, or the cell carries a colour
+   this station does not own. One $batch per job, on the job's checkpoint chain,
+   one `Dashboard Log` line per job painted. Nothing here writes the record, and
+   nothing reads the paint back as status: the list is the truth.
+
+   What the cell shows now is read from the downloaded workbook (LASTWB, via the
+   parser's own fillOf). The download lags ~36 s, so a cell this page has just
+   painted is trusted from memory for FABR_TRUST_MS rather than repainted. */
+const FABR_PAINT_LOG = "Fabrication colours";
+const FABR_PAINT_MAX = 30;             // cells per pass; the rest go on a follow-up
+const FABR_TRUST_MS = 120000;
+const FABR_BACKOFF_MS = 300000;        // a job whose write was refused waits five minutes
+let FABR_PAINTED = {};                 // job|item -> { word, at }: what this page last painted
+const FABR_FAIL = {};                  // job -> { at, why }
+let FABR_COLOUR_ERR = "", fabrPainting = false, fabrPaintT = null;
+const fabrColourWord = w => w === "process" ? "lavender" : w === "done" ? "purple" : w === "" ? "white" : "another colour";
+
+function fabrCellNow(j, item, col) {
+  const mem = FABR_PAINTED[j.id + "|" + item];
+  if (mem && Date.now() - mem.at < FABR_TRUST_MS) return mem.word;
+  const ws = LASTWB && LASTWB.getWorksheet ? LASTWB.getWorksheet(GLASS_PROD_SHEET) : null;
+  const row = j.src && j.src.Production;
+  /* a cell this page cannot see is a cell it does not touch */
+  if (!ws || !row || typeof fillOf !== "function") return "other";
+  return FABC.fbCellWord(fillOf(ws.getRow(row).getCell(col)));
+}
+function fabrColourPlan(j) {
+  if (!fabrOn() || !j || j.done || j.cat === "past") return null;   // a gold row is whole
+  if (!PRODMAP || !PRODMAP.prod || !cpWritable() || cpImportPending()) return null;
+  const card = (fabrRecordsNow().byJob || {})[String(j.id).trim().toUpperCase()];
+  if (!card) return null;
+  const out = [];
+  card.groups.forEach(g => {
+    if (!g.doneAt) return;                       // nobody has touched this row
+    const p = (j.prodsMain || []).find(x => x && FABC.fbKey(x.n) === g.group);
+    if (!p) return;
+    FABC.FB_PARTS.forEach(part => {
+      const sub = FABC.FB_PART_SUB[part];
+      const col = (PRODMAP.prod[p.n] || {})[sub];
+      if (!col) return;
+      const item = "prod:" + p.n + ":" + sub;
+      const cell = fabrCellNow(j, item, col);
+      const want = FABC.fbCellWant(g[part], g[part + "Total"], cpStatus(j, item), cell);
+      if (want == null) return;
+      out.push({ item: item, col: col, want: want, from: cell, label: g.group + " " + sub.toUpperCase() });
+    });
+  });
+  return out.length ? out : null;
+}
+async function fabrColourWrite(job, plan) {
+  try {
+    await CW.serialised(GLASS_PROD_SHEET, async () => {
+      const row = await CW.rowForJob(GLASS_PROD_SHEET, job);      // re-found right before writing
+      const f = await CW.findFile();
+      const S = f.base + "/worksheets('" + GLASS_PROD_SHEET + "')";
+      await CW.batchWrite(plan.map(p => ({
+        method: "PATCH",
+        url: S + "/range(address='" + CW.A1(p.col) + row + "')/format/fill",
+        body: { color: FABC.FB_WORD_HEX[p.want] }
+      })));
+    });
+    const at = Date.now();
+    plan.forEach(p => { FABR_PAINTED[job + "|" + p.item] = { word: p.want, at: at }; });
+    delete FABR_FAIL[job];
+    noteChange(job, FABR_PAINT_LOG, plan.map(p => p.label + " " + fabrColourWord(p.from)).join(", "),
+               plan.map(p => p.label + " " + fabrColourWord(p.want)).join(", "));
+    return plan.length;
+  } catch (e) {
+    const why = (e && e.message) || String(e);
+    FABR_FAIL[job] = { at: Date.now(), why: why };
+    console.warn("[fabrication] could not colour " + job + ": " + why);
+    throw e;
+  }
+}
+function setFabrFoot() {
+  const bad = Object.keys(FABR_FAIL);
+  FABR_COLOUR_ERR = bad.length ? bad.length + " job" + (bad.length > 1 ? "s" : "") +
+    " could not have fabrication colours written to the Production sheet — trying again in a few minutes. " +
+    "Last reason: " + (FABR_FAIL[bad[0]].why || "") : "";
+  setStationFoot();
+}
+function fabrPaintAgain() {
+  if (fabrPaintT) return;
+  fabrPaintT = setTimeout(() => { fabrPaintT = null; fabrColourRun().catch(() => {}); }, 30000);
+}
+async function fabrColourRun() {
+  if (!fabrOn() || typeof CW === "undefined" || !CW || !CW.serialised) return 0;
+  if (FABR_OK !== true || !PRODMAP || !ALL.length || !cpWritable() || cpImportPending()) return 0;
+  if (fabrPainting) { fabrPaintAgain(); return 0; }
+  const all = [];
+  ALL.forEach(j => {
+    const f = FABR_FAIL[j.id];
+    if (f && Date.now() - f.at < FABR_BACKOFF_MS) return;
+    const plan = fabrColourPlan(j);
+    if (plan) all.push({ id: j.id, plan: plan });
+  });
+  if (!all.length) return 0;
+  const todo = [];
+  let cells = 0;
+  for (let i = 0; i < all.length; i++) {
+    if (todo.length && cells + all[i].plan.length > FABR_PAINT_MAX) break;
+    cells += all[i].plan.length;
+    todo.push(all[i]);
+  }
+  fabrPainting = true;
+  try {
+    const r = await stationSend(todo.map(x => () => cpChain(x.id, () => fabrColourWrite(x.id, x.plan))));
+    if (todo.length < all.length || r.failed) fabrPaintAgain();
+    if (r.sent) scheduleReconcile();             // read the file back once it has caught up
+  } finally {
+    fabrPainting = false;
+    setFabrFoot();
+  }
+  return todo.length;
+}
+
 /* ---- the floor's voice in the phase bar (section E) --------------------------
    checkpoints.js owns the phase and takes the floor as a third opinion beside
    the sheet's own evidence and the hand-set phase; this is the hook that hands
@@ -4136,6 +4719,10 @@ function stationAfterFeedBody() {
      never touch the others. */
   weldReadIfNeeded(() => { if (!state.board) renderRows(); });
   glzReadIfNeeded(() => { if (!state.board) renderRows(); });
+  /* fabrication has no voice on the job list; its list is read here so the
+     colour painter has something to paint from on a page nobody opened the
+     board on (fabrReadIfNeeded is quiet and once per session) */
+  fabrReadIfNeeded("board", () => { fabrColourRun().catch(() => {}); });
   /* the floor's notes are read once per page here, not when a drawer happens to
      open: the Changes line is the whole notification, and a note nobody has
      opened a drawer to look for is exactly the one that needs announcing. The
@@ -4327,8 +4914,13 @@ async function load(reason, force) {
          before it can stop the third - and feedGlazing has its own try inside,
          so it cannot stop the colour writer below either. */
       .then(() => feedGlazing(), () => feedGlazing())
+      /* the fabrication feed, in its own link again (2026-09-25) */
+      .then(() => feedFabrication(), () => feedFabrication())
       .then(stationAfterFeed, () => {})
       .then(() => glassColourRun(), () => {})
+      /* and the fabrication colours, after the glass ones, in their own link:
+         neither painter can stop the other */
+      .then(() => fabrColourRun(), () => fabrColourRun())
       .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
   } catch (e) {
     /* A station account signing in here has no access to the workbook at all.
@@ -5673,6 +6265,7 @@ function stationDefs() {
   if (typeof ST !== "undefined" && ST.GLASS) out.push({ key: "glass", def: ST.GLASS });
   if (typeof WELDC !== "undefined" && WELDC.WELD) out.push({ key: "welding", def: WELDC.WELD });
   if (typeof GLZC !== "undefined" && GLZC.GLAZE) out.push({ key: "glazing", def: GLZC.GLAZE });
+  if (typeof FABC !== "undefined" && FABC.FAB) out.push({ key: "fabrication", def: FABC.FAB });
   return out;
 }
 /** Every station-stage a report can be run for: `glass|cut`, `welding|weld`. */
@@ -5704,6 +6297,11 @@ function stationReportData(pick) {
   if (pick.key === "glazing") {
     return { board: glzRecordsNow().cards, log: glzLogRowsNow(),
              notes: ST.commentRows(GLZ_NOTES || [], { station: GLZC.GLZ_NAME }),
+             days: [], target: null };
+  }
+  if (pick.key === "fabrication") {
+    return { board: fabrRecordsNow().cards, log: fabrLogRowsNow(),
+             notes: ST.commentRows(FABR_NOTES || [], { station: FABC.FB_NAME }),
              days: [], target: null };
   }
   return { board: ST.jobBoard(STATION_ITEMS || []),
@@ -6753,6 +7351,7 @@ function renderChips() {
        download the page already made and has nothing at all to read. */
     if (state.board === "welding") weldReadIfNeeded(() => renderAll());
     else if (state.board === "glazing") glzReadIfNeeded(() => renderAll());
+    else if (state.board === "fabrication") fabrReadIfNeeded("board", () => renderAll());
     else if (state.board && state.board !== "john") stationReadIfNeeded(() => renderAll());
   };
   c.appendChild(ssel);
@@ -8010,6 +8609,15 @@ function renderRows() {
         " on the Glazing station board" : "Glazing station";
       return;
     }
+    if (state.board === "fabrication") {
+      fabrReadIfNeeded("board", () => { if (state.board === "fabrication") renderRows(); });
+      host.innerHTML = '<div class="stboard weldboard fabboard">' + fabrBoardHtml() + '</div>';
+      wireFabrBoard(host);
+      const fn = (FABR_OK === true && fabrOn()) ? fabrCardsShown().length : 0;
+      $("#count").textContent = fn ? "Showing " + fn + " job" + (fn > 1 ? "s" : "") +
+        " on the Fabrication station board" : "Fabrication station";
+      return;
+    }
     /* the card's "last: ..." line comes from the log list, which the feeder
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
@@ -8526,6 +9134,8 @@ function cpSectionHtml(j, ed) {
     /* ... and how far the glazing floor has got, under it. Read-only in exactly
        the same way: no checkpoint, no cell, no write of any kind. */
     glzDrawerLine(j) +
+    /* ... and fabrication, read-only the same way */
+    fabrDrawerLine(j) +
     /* Doors: the same shape, with the quantity warning on whichever of the two
        the job actually has (amendments 6 and 10) */
     g("drs").map(x => cpLineHtml(j, x, on && !cpBusy(j, "drs"), !locked && !readOnly, warn)).join("") +
@@ -8852,6 +9462,14 @@ function renderDrawer() {
     state.board = "glazing"; state.picked = {};
     const sel = $("#showsel");
     if (sel) sel.value = "glazing";
+    closeDrawer();
+    renderAll();
+  };
+  const fo = $("#fabropen");
+  if (fo) fo.onclick = () => {
+    state.board = "fabrication"; state.picked = {};
+    const sel = $("#showsel");
+    if (sel) sel.value = "fabrication";
     closeDrawer();
     renderAll();
   };

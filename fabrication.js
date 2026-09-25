@@ -1,0 +1,755 @@
+/* The Fabrication station page - the fabricators' own screen
+   (docs/specs/2026-09-25-fabrication-station.md, Part A).
+
+   What this page can do, in full: read four SharePoint lists in the `Floor
+   stations` site ("Fabrication station", "Station people", "Station log",
+   "Station comments"), PATCH one FramesDone / SashesDone / TransomsDone counter
+   of a Fabrication station row with its By/At and the last-touch pair, POST
+   one Station log line per counter write that landed, and POST one note per
+   word somebody types for the office. Nothing else: no workbook, no delete, no
+   job fact, no export.
+
+   Built on welding.js's shape (the queue, the delta poll, the patched board);
+   what differs is three parts per group and the ELIGIBILITY gate - everybody
+   sees every line, and a person can move only the lines of a product group
+   named in their `Stages`. Lines they cannot move are drawn greyed, and a tap
+   on one says "not your line" rather than doing nothing.                   */
+
+const $ = s => document.querySelector(s);
+const esc = STU.stuEsc;
+const F = FABC;
+
+/* this page's own keys: never the glass or welding page's */
+const PERSON_KEY = "cw_fabperson";
+const QUEUE_KEY = "cw_fabq";
+const LOGQ_KEY = "cw_fablogq";
+const TAB_KEY = "cw_fabtab";             // "floor" | "finished"
+const RETRY_MS = 5000;
+const PEOPLE_MS = 600000;
+const HINT_MS = 4000;                    // how long "not your line" stays on a card
+
+let ITEMS = [], TOKEN = null, PEOPLE = [];
+let READY = false, PEOPLE_READ = false;
+let PROBLEM = "", SOFT = "", LASTREAD = 0;
+let QUERY = "", TAB = "floor", PRESEARCH = null, TYPED = false;
+let PERSON = null, LAST_TAP = 0;
+let PINFOR = null, PINTYPED = "", PINBAD = false;
+let HINT = {};                           // job -> { group, at }: a tap on somebody else's line
+let refreshT = null, retryT = null, buildT = null, peopleT = null, lockT = null;
+let flushing = false;
+const DELTA_OFF_MS = 300000;
+let DELTA_OFF = 0;
+const deltaOff = () => !!(DELTA_OFF && Date.now() - DELTA_OFF < DELTA_OFF_MS);
+
+try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
+const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
+
+/* ---- who is on the station ---- */
+function loadPerson() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(PERSON_KEY) || "null"); } catch (e) { raw = null; }
+  if (!raw || !raw.name) return;
+  if (ST.personExpired(raw.at, Date.now(), ST.PERSON_LOCK_MS)) return;
+  const hit = PEOPLE.find(p => p.name === raw.name);
+  if (!hit) return;
+  PERSON = hit; LAST_TAP = Number(raw.at) || Date.now();
+}
+function savePerson() {
+  try {
+    if (PERSON) localStorage.setItem(PERSON_KEY, JSON.stringify({ name: PERSON.name, at: LAST_TAP }));
+    else localStorage.removeItem(PERSON_KEY);
+  } catch (e) {}
+}
+function touch() { LAST_TAP = Date.now(); savePerson(); }
+function clearSearch() {
+  QUERY = ""; TYPED = false;
+  if (PRESEARCH != null) { TAB = PRESEARCH; PRESEARCH = null; try { window.scrollTo(0, 0); } catch (e) {} }
+  const sb = $("#search");
+  if (sb) sb.value = "";
+}
+function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {}; clearSearch(); touch(); render(); }
+function switchPerson() {
+  PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {};
+  clearSearch(); savePerson(); render();
+}
+function lockIfIdle() {
+  if (!PERSON) return;
+  if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
+  PERSON = null; HINT = {}; clearSearch(); savePerson(); render();
+}
+const who = () => (PERSON ? PERSON.name : "");
+const mayDo = group => F.fbEligible(PERSON, group);
+
+/* ---- the queues: one entry per row AND part, kept in localStorage and read
+   back through the core's whitelist ---- */
+let QUEUE = {}, LOGQ = {};
+const qKey = (id, part) => String(id) + "|" + String(part);
+function cleanQueue(raw) {
+  const out = {};
+  Object.keys(raw || {}).forEach(k => {
+    const e = raw[k];
+    if (!e || !e.id || F.FB_PARTS.indexOf(String(e.part)) < 0) return;
+    const v = Number(e.value);
+    if (!isFinite(v)) return;
+    const from = Number(e.from);
+    out[qKey(e.id, e.part)] = { id: String(e.id), part: String(e.part), value: Math.round(v),
+                                who: String(e.who || ""), at: String(e.at || ""),
+                                job: String(e.job || ""), group: String(e.group || ""),
+                                title: String(e.title || ""), site: String(e.site || ""),
+                                from: isFinite(from) ? Math.round(from) : 0, err: 0 };
+  });
+  return out;
+}
+function cleanLogQ(raw) {
+  const out = {};
+  Object.keys(raw || {}).forEach(k => {
+    const e = raw[k];
+    if (!e || !e.fields || !e.fields.Title) return;
+    out[String(k)] = { key: String(k), err: 0, fields: ST.logFields({
+      job: e.fields.Title, station: F.FB_NAME, type: e.fields.GlassType,
+      stage: e.fields.Stage, from: e.fields.From, to: e.fields.To,
+      who: e.fields.Who, at: e.fields.At }) };
+  });
+  return out;
+}
+try { QUEUE = cleanQueue(JSON.parse(localStorage.getItem(QUEUE_KEY) || "{}")); } catch (e) { QUEUE = {}; }
+try { LOGQ = cleanLogQ(JSON.parse(localStorage.getItem(LOGQ_KEY) || "{}")); } catch (e) { LOGQ = {}; }
+function saveQueue() {
+  try { localStorage.setItem(QUEUE_KEY, JSON.stringify(QUEUE)); } catch (e) {}
+  try { localStorage.setItem(LOGQ_KEY, JSON.stringify(LOGQ)); } catch (e) {}
+}
+function queueTap(rec, part, value) {
+  const k = qKey(rec.id, part);
+  const had = QUEUE[k];
+  QUEUE[k] = { id: String(rec.id), part: part, value: value, who: who(),
+               at: new Date().toISOString(), job: rec.job, group: rec.group,
+               title: rec.title || (rec.job + "|" + rec.group), site: SITEID || "",
+               from: had ? had.from : listValue(rec.id, part), err: 0 };
+  saveQueue();
+}
+function queuedFor(id) {
+  const out = {};
+  Object.keys(QUEUE).forEach(k => {
+    const e = QUEUE[k];
+    if (String(e.id) === String(id)) out[F.FB_DONE_FIELD[e.part]] = e.value;
+  });
+  return Object.keys(out).length ? out : null;
+}
+const owedFor = id => Object.keys(QUEUE).some(k => String(QUEUE[k].id) === String(id));
+const badFor = id => Object.keys(QUEUE).some(k => String(QUEUE[k].id) === String(id) && QUEUE[k].err);
+const owedForCard = c => c.groups.some(g => owedFor(g.id));
+const badForCard = c => c.groups.some(g => badFor(g.id));
+let LOST = {};
+const lostFor = job => LOST[String(job).trim().toUpperCase()] || null;
+function listValue(id, part) {
+  const it = ITEMS.find(x => String(x.id) === String(id));
+  if (!it) return 0;
+  const v = Number((it.fields || {})[F.FB_DONE_FIELD[part]]);
+  return isFinite(v) ? Math.round(v) : 0;
+}
+function rebaseQueue() {
+  let moved = false;
+  Object.keys(QUEUE).forEach(k => {
+    const e = QUEUE[k];
+    const it = ITEMS.find(x => String(x.id) === String(e.id));
+    if (!it) return;
+    const r = F.fbRebase(e, it.fields || {});
+    if (r.action === "drop") {
+      const job = String(e.job).trim().toUpperCase();
+      const note = LOST[job] || { job: job, parts: [] };
+      note.parts = note.parts.filter(p => !(p.part === e.part && p.group === e.group))
+                     .concat([{ part: e.part, group: e.group, value: e.value }]);
+      LOST[job] = note;
+      console.warn("[fabrication] dropping a queued tap for " + e.job + " " + e.group + " " + e.part +
+                   ": the row was moved after it was tapped");
+      delete QUEUE[k];
+      moved = true;
+      return;
+    }
+    if (r.action !== "rebase") return;
+    e.value = r.value; e.from = r.from;
+    moved = true;
+  });
+  if (moved) saveQueue();
+}
+function armRetry() {
+  if (retryT) return;
+  retryT = setTimeout(() => { retryT = null; flushQueue(); }, RETRY_MS);
+}
+/** The row a queued tap is about in the list as it is now: its id, or - if the
+    lists moved site - the oldest row with its Title; null drops it. */
+function currentId(e) {
+  if (!e.site || e.site === SITEID) return e.id;
+  const want = String(e.title || "").trim().toUpperCase();
+  let best = null;
+  ITEMS.forEach(it => {
+    const t = String((it.fields || {}).Title == null ? "" : it.fields.Title).trim().toUpperCase();
+    if (t === want && (!best || Number(it.id) < Number(best.id))) best = it;
+  });
+  return best ? String(best.id) : null;
+}
+/** Send everything owed: the counter first, the log line only once it landed. */
+async function flushQueue() {
+  if (flushing) return;
+  if (!Object.keys(QUEUE).length && !Object.keys(LOGQ).length) return;
+  if (!READY || !SITEID) { armRetry(); return; }
+  flushing = true;
+  const tried = {};
+  let wrote = false;
+  try {
+    for (;;) {
+      const k = Object.keys(QUEUE).find(x => !tried[x]);
+      if (!k) break;
+      tried[k] = 1;
+      const e = QUEUE[k];
+      if (!e) continue;
+      /* captured before the await: e IS QUEUE[k], so a tap landing mid-write
+         must be compared against what this pass actually sent (welding B19) */
+      const want = e.value, when = e.at, whose = e.who, wantFrom = e.from;
+      const body = F.fbFloorOnly(F.fbTapFields(e.part, want, whose, when));
+      const id = currentId(e);
+      if (!id) { delete QUEUE[k]; saveQueue(); continue; }
+      e.id = id; e.site = SITEID;
+      try {
+        await CW.listPatch(F.FB_LIST, id, body, listOpts());
+        wrote = true;
+        queueLog({ id: id, part: e.part, job: e.job, group: e.group,
+                   value: want, at: when, who: whose, from: wantFrom });
+        const now = QUEUE[k];
+        if (now && now.value === want && now.at === when) delete QUEUE[k];
+        else if (now) { now.err = 0; delete tried[k]; }
+        const it = ITEMS.find(x => String(x.id) === String(id));
+        if (it) (it.fields = it.fields || {})[F.FB_DONE_FIELD[e.part]] = want;
+      } catch (err) {
+        if (QUEUE[k]) QUEUE[k].err = 1;
+        if (CW.isMissing && CW.isMissing(err) && CW.forgetStationSite) CW.forgetStationSite(false, F.FAB.site);
+        console.warn("[fabrication] counter write failed for item " + id + ":", (err && err.message) || err);
+      }
+      saveQueue();
+    }
+    await flushLog();
+  } finally {
+    flushing = false;
+  }
+  render();
+  if (wrote) await pollList();
+  if (Object.keys(QUEUE).length || Object.keys(LOGQ).length) armRetry();
+}
+function queueLog(e) {
+  const from = Number(e.from) || 0;
+  if (from === e.value) return;
+  const key = e.id + "|" + e.part + "|" + e.at;
+  LOGQ[key] = { key: key, err: 0, fields: ST.logFields(F.fbLogEntry({
+    job: e.job, group: e.group, part: e.part, from: from, to: e.value, who: e.who, at: e.at })) };
+  saveQueue();
+}
+async function flushLog() {
+  if (!SITEID) return;
+  const keys = Object.keys(LOGQ);
+  for (let i = 0; i < keys.length; i++) {
+    const e = LOGQ[keys[i]];
+    if (!e) continue;
+    try { await CW.listAdd(ST.LOG_LIST, e.fields, logOpts()); delete LOGQ[keys[i]]; }
+    catch (err) { e.err = 1; console.warn("[fabrication] log line not written yet:", (err && err.message) || err); }
+    saveQueue();
+  }
+}
+
+/* ---- the lists ---- */
+let SITEID = null;
+const listOpts = () => ({ siteId: SITEID, fields: F.FB_FIELDS });
+const peopleOpts = () => ({ siteId: SITEID, fields: ST.PEOPLE_FIELDS });
+const logOpts = () => ({ siteId: SITEID, fields: ST.LOG_FIELDS });
+const commentOpts = () => ({ siteId: SITEID, fields: ST.COMMENT_FIELDS });
+const NOTES = ST.stationComments({
+  station: F.FB_NAME,
+  listItems: (name, o) => CW.listItems(name, o),
+  listAdd: (name, fields, o) => CW.listAdd(name, fields, o),
+  opts: commentOpts
+});
+
+function trouble(e) {
+  const m = (e && e.message) || String(e);
+  console.warn("[fabrication] could not read SharePoint:", m);
+  if (CW.isMissing && CW.isMissing(e)) {
+    SITEID = null;
+    if (CW.forgetStationSite) CW.forgetStationSite(false, F.FAB.site);
+  }
+  if (/interaction_required|login_required/.test(m)) { PROBLEM = "reauth"; SOFT = ""; READY = false; }
+  else if (/permission needed/.test(m)) { PROBLEM = "consent"; SOFT = ""; READY = false; }
+  else if (CW.isMissing && CW.isMissing(e)) { PROBLEM = "site"; SOFT = ""; READY = false; }
+  else SOFT = "cannot reach SharePoint — retrying";
+}
+async function resolveSite() {
+  if (!SITEID) SITEID = await CW.stationSite(F.FAB.site);
+  return SITEID;
+}
+async function readPeople() {
+  try {
+    if (!(await resolveSite())) { PROBLEM = "site"; SOFT = ""; READY = false; render(); return false; }
+    const items = await CW.listItems(ST.PEOPLE_LIST, peopleOpts());
+    if (items == null) { PROBLEM = "people"; SOFT = ""; READY = false; render(); return false; }
+    PEOPLE = F.fbPeople(items);
+    PEOPLE_READ = true;
+    if (PROBLEM === "people") PROBLEM = "";
+    if (PERSON) {
+      PERSON = PEOPLE.find(p => p.name === PERSON.name) || null;
+      if (!PERSON) savePerson();
+    } else loadPerson();
+    render();
+    return true;
+  } catch (e) { trouble(e); render(); return false; }
+}
+async function readList() {
+  try {
+    if (!(await resolveSite())) { PROBLEM = "site"; SOFT = ""; READY = false; render(); return false; }
+    if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
+    let items = null;
+    if (deltaOff()) {
+      items = await CW.listItems(F.FB_LIST, listOpts());
+      if (items == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
+      TOKEN = null;
+    } else {
+      try {
+        const d = await CW.listDelta(F.FB_LIST, listOpts());
+        if (d == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
+        items = d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
+        TOKEN = d.next; DELTA_OFF = 0;
+      } catch (e) {
+        if (!CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+        if (!(CW.isDeltaResync && CW.isDeltaResync(e))) DELTA_OFF = Date.now();
+        items = await CW.listItems(F.FB_LIST, listOpts());
+        if (items == null) { PROBLEM = "list"; SOFT = ""; READY = false; render(); return false; }
+        TOKEN = null;
+      }
+    }
+    ITEMS = items; READY = true; PROBLEM = ""; SOFT = ""; LASTREAD = Date.now();
+    rebaseQueue(); render(); flushQueue();
+    return true;
+  } catch (e) { trouble(e); render(); return false; }
+}
+let SITE_GEN = 0;
+function siteMoved() {
+  const m = CW.stationSiteMoves ? CW.stationSiteMoves(F.FAB.site) : 0;
+  if (m === SITE_GEN) return false;
+  SITE_GEN = m;
+  return true;
+}
+async function pollList() {
+  try { SITEID = (await CW.stationSite(F.FAB.site)) || SITEID; } catch (e) {}
+  if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
+  if (!TOKEN) return readList();
+  try {
+    const d = await CW.listDelta(F.FB_LIST, { siteId: SITEID, fields: F.FB_FIELDS, token: TOKEN });
+    if (d == null) return readList();
+    ITEMS = ST.mergeDelta(ITEMS, d.items);
+    if (d.next) TOKEN = d.next;
+    READY = true; SOFT = ""; LASTREAD = Date.now();
+    rebaseQueue(); render(); flushQueue();
+    return true;
+  } catch (e) {
+    if (CW.isDeltaRestart && CW.isDeltaRestart(e)) {
+      if (!(CW.isDeltaResync && CW.isDeltaResync(e))) DELTA_OFF = Date.now();
+      TOKEN = null;
+      return readList();
+    }
+    trouble(e); render(); return false;
+  }
+}
+
+/* ---- taps ---- */
+function tap(id, part, delta) {
+  if (!PERSON) return;
+  const rec = recordById(id);
+  if (!rec) return;
+  touch();
+  /* THE ELIGIBILITY GATE. The button is drawn greyed, and this is the rule: a
+     line of a group this person does not do is never queued. It says so. */
+  if (!mayDo(rec.group)) {
+    HINT[rec.job] = { group: rec.group, at: Date.now() };
+    render();
+    setTimeout(render, HINT_MS + 50);
+    return;
+  }
+  const value = F.fbApplyTap(rec, part, delta);
+  if (value == null || value === rec[part]) return;
+  delete LOST[String(rec.job).trim().toUpperCase()];
+  queueTap(rec, part, value);
+  render();
+  flushQueue();
+}
+function itemsNow() {
+  return ITEMS.map(it => {
+    const q = queuedFor(String(it.id));
+    return q ? { id: it.id, fields: Object.assign({}, it.fields, q) } : it;
+  });
+}
+let RECS_BY_ID = {};
+function boardNow() {
+  const tabs = F.fbTabs(itemsNow());
+  RECS_BY_ID = {};
+  tabs.floor.concat(tabs.finished).forEach(c => c.groups.forEach(g => { RECS_BY_ID[String(g.id)] = g; }));
+  return { tabs: tabs };
+}
+const recordById = id => RECS_BY_ID[String(id)] || null;
+const hintFor = job => {
+  const h = HINT[job];
+  return h && Date.now() - h.at < HINT_MS ? h : null;
+};
+
+/* ---- drawing ---- */
+function barHtml(done, total) {
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
+  return '<span class="wbar" aria-hidden="true"><span class="wbarfill" style="width:' + pct + '%"></span></span>';
+}
+/** One part of one group. A line the person may not move is drawn greyed, NOT
+    disabled: a disabled button swallows the tap, and the tap is what says
+    "not your line". */
+function stepHtml(rec, line, mine) {
+  const lock = mine ? "" : ' aria-disabled="true"';
+  const b = (t, act, cls) => '<button class="' + cls + '" data-id="' + esc(rec.id) +
+    '" data-part="' + esc(line.part) + '" data-act="' + esc(act) + '"' + lock + '>' + t + '</button>';
+  const full = line.done >= line.total;
+  return '<div class="step' + (mine ? "" : " locked") + ' c-' + (line.colour || "none") + '">' +
+    '<span class="stepl">' + esc(line.label) +
+      (mine ? '<span class="stepleft tab">' + esc(Math.max(0, line.total - line.done) + " left") + '</span>'
+            : '<span class="nomine">not your line</span>') + '</span>' +
+    '<span class="stepmid"><span class="stepn tab' + (full ? " full" : "") + '">' + line.done + ' / ' +
+      line.total + '</span>' + barHtml(line.done, line.total) + '</span>' +
+    '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
+      b(full ? "None" : "All", full ? "none" : "all", "sall") + '</span>' +
+  '</div>';
+}
+function groupHtml(rec) {
+  const mine = mayDo(rec.group);
+  return '<div class="wgrp c-' + (rec.colour || "none") + '">' +
+    '<div class="wghead"><span class="wgname cond">' + esc(rec.group) + '</span>' +
+      (rec.doors ? '<span class="wgdoors tab">' + esc(rec.doors) + '</span>' : "") +
+      '<span class="wgcount tab">' + rec.done + ' / ' + rec.total + '</span></div>' +
+    '<div class="steps">' + rec.lines.map(l => stepHtml(rec, l, mine)).join("") + '</div>' +
+  '</div>';
+}
+function cardInner(c) {
+  const owed = owedForCard(c), bad = badForCard(c), lost = lostFor(c.job), hint = hintFor(c.job);
+  return '<div class="chead">' +
+      '<span class="cond job">' + esc(c.job) + '</span>' +
+      '<span class="cust">' + esc(c.customer || "—") + '</span>' +
+      (c.section && !c.active ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
+    '</div>' +
+    (c.comment ? '<div class="cfacts"><span class="ccmt">“' + esc(c.comment) + '”</span></div>' : "") +
+    '<div class="wgroups">' + c.groups.map(groupHtml).join("") + '</div>' +
+    (hint ? '<div class="hint">Not your line — ' + esc(hint.group) + ' is not one of your product groups.</div>' : "") +
+    (lost ? '<div class="unsaved">' + esc(lost.parts.map(p => p.group + " " + p.part + " " + p.value).join(", ")) +
+        ' was not saved — the office changed this job after that tap</div>' : "") +
+    (bad ? '<div class="unsaved">not saved yet — retrying</div>'
+         : owed ? '<div class="saving">saving…</div>' : "") +
+    NOTES.html(c.job);
+}
+
+/* ---- the picker ---- */
+function pickerHtml() {
+  return STU.stuPickerHtml({
+    people: PEOPLE, pinFor: PINFOR, pinTyped: PINTYPED, pinBad: PINBAD,
+    labelOf: k => String(k).toUpperCase(),
+    empty: "Nobody is set up for the Fabrication station yet. Ask the office to add " +
+           "you to the “Station people” list."
+  });
+}
+function wirePicker(host) {
+  STU.stuWirePicker(host, {
+    onPerson: name => {
+      const p = PEOPLE.find(x => x.name === name);
+      if (!p) return;
+      if (ST.pinOk(p, "")) { pickPerson(p); return; }
+      PINFOR = p; PINTYPED = ""; PINBAD = false; render();
+    },
+    onKey: k => {
+      if (k === "cancel") { PINFOR = null; PINTYPED = ""; PINBAD = false; render(); return; }
+      if (k === "back") { PINTYPED = PINTYPED.slice(0, -1); PINBAD = false; render(); return; }
+      if (k === "ok") { submitPin(); return; }
+      if (PINTYPED.length < 8) PINTYPED += k;
+      PINBAD = false;
+      if (PINFOR && PINTYPED.length >= String(PINFOR.pin).length) submitPin();
+      else render();
+    }
+  });
+}
+function submitPin() {
+  if (!PINFOR) return;
+  if (ST.pinOk(PINFOR, PINTYPED)) { pickPerson(PINFOR); return; }
+  PINTYPED = ""; PINBAD = true; render();
+}
+
+/* ---- the board, drawn once and then patched (welding.js's shape) ---- */
+let NODES = {}, LIST = null, LIST_TAB = "", BOARD_PREV = null, QSIG = {}, PSIG = "", WIRED = false;
+function qState(c) {
+  const lost = lostFor(c.job), hint = hintFor(c.job);
+  return (owedForCard(c) ? "o" : "") + (badForCard(c) ? "b" : "") +
+         (lost ? "!" + lost.parts.map(p => p.group + p.part + p.value).join(",") : "") +
+         (hint ? "h" + hint.group : "") + "/" + NOTES.sig(c.job);
+}
+const pState = () => (PERSON ? PERSON.name + "|" + (PERSON.stages || []).join(",") : "");
+function makeCard(c) {
+  const el = document.createElement("div");
+  el.className = "card c-" + (c.colour || "none") + (c.finished ? " done" : "");
+  if (el.dataset) el.dataset.job = c.job;
+  el.setAttribute("data-job", c.job);
+  el.innerHTML = cardInner(c);
+  return el;
+}
+function dressCard(el, c) {
+  const act = document.activeElement;
+  const at = act && act.dataset && act.dataset.cmbox === c.job ? act.selectionStart : null;
+  el.className = "card c-" + (c.colour || "none") + (c.finished ? " done" : "");
+  el.innerHTML = cardInner(c);
+  if (at == null || !el.querySelector) return;
+  const box = el.querySelector('[data-cmbox="' + c.job + '"]');
+  if (!box) return;
+  const to = Math.min(Number(at) || 0, String(box.value || "").length);
+  try { box.focus(); if (box.setSelectionRange) box.setSelectionRange(to, to); } catch (e) {}
+}
+function paintBoard(host, board) {
+  if (!LIST || LIST_TAB !== TAB) {
+    host.innerHTML = "";
+    LIST = document.createElement("div"); LIST.className = "grp";
+    LIST_TAB = TAB;
+    host.appendChild(LIST);
+    NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+  }
+  const diff = ST.boardDiff(BOARD_PREV, board, F.fbCardSig);
+  const byJob = {};
+  board.forEach(c => { byJob[c.job] = c; });
+  diff.removed.forEach(j => {
+    const el = NODES[j];
+    if (el && el.remove) el.remove();
+    delete NODES[j]; delete QSIG[j];
+  });
+  const changed = diff.changed.slice();
+  const psig = pState(), pmoved = PSIG !== psig;
+  PSIG = psig;
+  board.forEach(c => {
+    const sig = qState(c);
+    if ((pmoved || QSIG[c.job] !== sig) && changed.indexOf(c.job) < 0 && diff.added.indexOf(c.job) < 0)
+      changed.push(c.job);
+    QSIG[c.job] = sig;
+  });
+  changed.forEach(j => { if (NODES[j]) dressCard(NODES[j], byJob[j]); });
+  diff.added.forEach(j => { NODES[j] = makeCard(byJob[j]); });
+  if (diff.order || diff.added.length || diff.removed.length) {
+    const act = document.activeElement;
+    const box = act && act.dataset && act.dataset.cmbox ? act : null;
+    const at = box ? box.selectionStart : null;
+    board.forEach(c => { if (NODES[c.job]) LIST.appendChild(NODES[c.job]); });
+    if (box && document.activeElement !== box) {
+      try { box.focus(); if (box.setSelectionRange && at != null) box.setSelectionRange(at, at); } catch (e) {}
+    }
+  }
+  BOARD_PREV = board;
+}
+
+function render() {
+  const host = $("#board");
+  if (!host) return;
+  const hdr = $("#whois");
+  if (hdr) hdr.textContent = PERSON ? PERSON.name + ((PERSON.stages || []).length
+    ? " · " + PERSON.stages.length + " group" + (PERSON.stages.length === 1 ? "" : "s") : " · no groups") : "";
+  const sw = $("#switchbtn");
+  if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
+  const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
+  const sb = $("#search");
+  if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
+  const now = boarding ? boardNow() : null;
+  let more = 0;
+  if (now && QUERY.trim()) {
+    if (TYPED) {
+      const s = F.fbSearchTab(now.tabs, QUERY, TAB);
+      if (s.tab !== TAB) { TAB = s.tab; try { window.scrollTo(0, 0); } catch (e) {} }
+    }
+    more = F.fbFilter(now.tabs[TAB === "floor" ? "finished" : "floor"], QUERY).length;
+  }
+  if (now) TYPED = false;
+  const mb = $("#more");
+  if (mb) {
+    mb.hidden = !more; mb.style.display = more ? "" : "none";
+    mb.textContent = more ? more + " more " + (TAB === "floor" ? "in Finished" : "on floor") + " ›" : "";
+  }
+  const tabs = $("#wtabs");
+  if (tabs) { tabs.hidden = !boarding; tabs.style.display = boarding ? "" : "none"; }
+  [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
+    const b = $(s);
+    if (!b) return;
+    b.className = TAB === t ? "on" : "";
+    b.setAttribute("aria-selected", TAB === t ? "true" : "false");
+    b.textContent = label + (now ? " · " + now.tabs[t].length : "");
+  });
+  const upd = $("#upd");
+  if (upd) upd.textContent = LASTREAD ? "updated " + STU.stuAgo(LASTREAD) : "";
+  const soft = $("#soft");
+  if (soft) { soft.textContent = SOFT; soft.hidden = !SOFT; soft.style.display = SOFT ? "" : "none"; }
+
+  if (!boarding) {
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    if (!PROBLEM && PEOPLE_READ && !PERSON) { host.innerHTML = pickerHtml(); wirePicker(host); return; }
+    host.innerHTML = '<div class="msg">' + esc(words()) + againHtml() + '</div>';
+    wireAgain();
+    return;
+  }
+  const board = F.fbFilter(now.tabs[TAB], QUERY);
+  if (!board.length) {
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    host.innerHTML = '<div class="msg">' +
+      (QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") + " matches “" + esc(QUERY) + "”."
+       : TAB === "floor" ? "Nothing on the floor right now." : "No finished jobs yet.") + '</div>';
+    return;
+  }
+  paintBoard(host, board);
+  wireBoard(host);
+}
+function words() {
+  return PROBLEM === "reauth" ? "The sign-in has expired. Tap Sign out, then Sign in again."
+    : PROBLEM === "consent" ? "Ask the office to grant the SharePoint permission."
+    : PROBLEM === "people" ? "The “Station people” list is not in the floor’s site yet. Ask the office to add it."
+    : PROBLEM === "list" ? "The “Fabrication station” list is not in the floor’s site yet. Ask the office to add it — " +
+                           "nothing in the Excel file is involved."
+    : PROBLEM === "site" ? "The floor’s SharePoint site is not there yet, or this account cannot see it. Ask the office."
+    : "Reading the board…";
+}
+const againHtml = () => PROBLEM === "reauth"
+  ? '<div><button class="again" id="reauth">Sign in again</button></div>'
+  : '<div><button class="again" id="again">Try again</button></div>';
+function wireAgain() {
+  const a = $("#again");
+  if (a) a.onclick = () => {
+    PROBLEM = ""; SOFT = ""; SITEID = null; TOKEN = null;
+    if (CW.forgetStationSite) CW.forgetStationSite(true, F.FAB.site);
+    render(); readPeople(); readList();
+  };
+  const r = $("#reauth");
+  if (r) r.onclick = async () => {
+    try { await CW.signIn(CW.LIST_SCOPES); PROBLEM = ""; SITEID = null; TOKEN = null; await start(); }
+    catch (e) { console.warn("[fabrication] sign-in again failed:", (e && e.message) || e); }
+  };
+}
+function wireBoard(host) {
+  if (WIRED || !host.addEventListener) return;
+  WIRED = true;
+  host.addEventListener("click", ev => {
+    touch();
+    let el = ev.target;
+    for (let i = 0; el && i < 5; i++) {
+      const d = el.dataset || {};
+      if (d.act) {
+        ev.stopPropagation();
+        tap(d.id, d.part, d.act === "all" || d.act === "none" ? d.act : Number(d.act));
+        return;
+      }
+      if (d.cmt) {
+        ev.stopPropagation();
+        NOTES.toggle(d.cmt);
+        render();
+        if (NOTES.isOpen(d.cmt) && NOTES.state.ok !== true) NOTES.read().then(() => render(), () => {});
+        return;
+      }
+      if (d.cmsend) {
+        ev.stopPropagation();
+        if (el.disabled) return;
+        sendNote(d.cmsend);
+        return;
+      }
+      el = el.parentElement;
+    }
+  });
+  host.addEventListener("input", ev => {
+    const d = (ev.target && ev.target.dataset) || {};
+    if (!d.cmbox) return;
+    touch();
+    NOTES.setDraft(d.cmbox, ev.target.value);
+  });
+}
+async function sendNote(job) {
+  if (!PERSON || !NOTES.draftOf(job).trim()) return;
+  const going = NOTES.send(job, who());
+  render();
+  await going;
+  render();
+}
+
+/* ---- staying current ---- */
+const BUILD_MS = 120000;
+let BUILD_NOW = null;
+async function checkBuild() {
+  try {
+    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    const latest = (await r.json()).build;
+    if (!latest) return;
+    if (!BUILD_NOW) { BUILD_NOW = latest; return; }
+    if (latest !== BUILD_NOW && !Object.keys(QUEUE).length && !Object.keys(LOGQ).length) location.reload(true);
+  } catch (e) {}
+}
+async function tickOnce() {
+  render();
+  if (!PEOPLE_READ) await readPeople();
+  await pollList();
+  if (await NOTES.poll()) render();
+}
+
+/* ---- the page ---- */
+async function start() {
+  STU.stuGate(false);
+  STU.stuApplyTheme(STU.stuThemeNow());
+  const tb = $("#themebtn");
+  if (tb) tb.onclick = () => STU.stuApplyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+  $("#outbtn").onclick = () => { if (confirm("Sign out of the Fabrication station?")) CW.signOut(); };
+  const sw = $("#switchbtn");
+  if (sw) sw.onclick = () => switchPerson();
+  const sb = $("#search");
+  if (sb) sb.oninput = () => {
+    QUERY = sb.value || "";
+    TYPED = true;
+    if (QUERY.trim()) { if (PRESEARCH == null) PRESEARCH = TAB; }
+    else clearSearch();
+    touch(); render();
+  };
+  const goTab = t => {
+    if (TAB !== t) {
+      TAB = t;
+      if (PRESEARCH == null) saveTab();
+      try { window.scrollTo(0, 0); } catch (e) {}
+    }
+    touch(); render();
+  };
+  [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
+    const b = $(s);
+    if (b) b.onclick = () => goTab(t);
+  });
+  const mb = $("#more");
+  if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
+  render();
+  await readPeople();
+  await readList();
+  await NOTES.read();
+  await flushQueue();
+  if (refreshT) clearInterval(refreshT);
+  refreshT = setInterval(tickOnce, ST.REFRESH_MS);
+  if (peopleT) clearInterval(peopleT);
+  peopleT = setInterval(readPeople, PEOPLE_MS);
+  if (lockT) clearInterval(lockT);
+  lockT = setInterval(lockIfIdle, 15000);
+  if (buildT) clearInterval(buildT);
+  checkBuild(); buildT = setInterval(checkBuild, BUILD_MS);
+}
+
+(async function boot() {
+  STU.stuApplyTheme(STU.stuThemeNow());
+  $("#signinbtn").onclick = async () => {
+    try { await CW.signIn(CW.LIST_SCOPES); await start(); }
+    catch (e) { STU.stuGate(true, "Sign-in failed:\n" + ((e && e.message) || e)); }
+  };
+  try {
+    const acct = await CW.initAuth();
+    if (acct) await start(); else STU.stuGate(true);
+  } catch (e) {
+    STU.stuGate(true, "Startup problem:\n" + ((e && e.message) || e));
+  }
+})();

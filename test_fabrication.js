@@ -1,0 +1,280 @@
+/* Offline test of the fabrication station, Part A
+   (docs/specs/2026-09-25-fabrication-station.md).
+
+   Two halves. The first is the pure core (fabrication-core.js over
+   station-core.js): the allow-list, the slice off `Production` alone, the door
+   labels, F/S/T with T, Active/OnSheet, the tabs, the eligibility gate, the
+   clamp, the write bodies, and the colour painter's rule (fbCellWant).
+
+   The second loads the office's own code (index.html's chain) with a stubbed
+   workbook channel and runs the painter end to end: what it plans, what it
+   sends, and - the two "verify and report" checks of the brief - that the
+   checkpoint writer never whitens a lavender cell whose record is blank and
+   that the hand-paint adopter never takes a lavender/purple cell for a hand
+   change. No network; every person is made up.
+   Run: node test_fabrication.js                                             */
+const fs = require("fs"), vm = require("vm"), assert = require("assert");
+
+/* ---------- browser shims (the minimum app.js needs to load) ---------- */
+const mem = {};
+global.localStorage = { getItem: k => (k in mem ? mem[k] : null),
+                        setItem: (k, v) => { mem[k] = String(v); }, removeItem: k => { delete mem[k]; } };
+global.window = { location: { origin: "http://localhost" }, innerWidth: 1280, innerHeight: 800,
+                  addEventListener() {}, removeEventListener() {} };
+global.performance = { now: () => Date.now() };
+function stubEl(tag) {
+  let html = "";
+  const e = { tagName: String(tag || "div").toUpperCase(), style: { setProperty() {} }, dataset: {}, kids: [],
+    textContent: "", value: "", hidden: false, className: "",
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    appendChild(c) { e.kids.push(c); return c; }, remove() {}, contains() { return false; },
+    setAttribute() {}, getAttribute() { return null; }, addEventListener() {}, removeEventListener() {},
+    focus() {}, blur() {}, getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0 }),
+    querySelector: () => null, querySelectorAll: () => [] };
+  Object.defineProperty(e, "innerHTML", { get: () => html, set: v => { html = String(v); } });
+  return e;
+}
+/* any element the page asks for exists, except the ones whose absence means
+   "that window is not open" */
+const EL = {}, NULLABLE = ["#fabhost", "#fabbtn", "#dhost", "#xhost", "#ahost", "#chost", "#vhost", "#lhost", "#dayhost"];
+global.document = { documentElement: stubEl(), body: stubEl(), head: stubEl(), activeElement: null,
+  title: "x", createElement: t => stubEl(t),
+  querySelector: s => (NULLABLE.indexOf(s) >= 0 ? null : (EL[s] = EL[s] || stubEl())), querySelectorAll: () => [],
+  addEventListener() {}, removeEventListener() {} };
+/* nothing in this run may reach the network: every call is a failure */
+const NET = [];
+global.fetch = async (url, init) => { NET.push(String(url)); return { ok: false, status: 599, text: async () => "{}" }; };
+
+const src = f => fs.readFileSync(__dirname + "/" + f, "utf8");
+const run = f => vm.runInThisContext(src(f), { filename: f });
+run("parser.js");
+run("graph.js");
+global.CW = window.CW;
+run("checkpoints.js");
+run("station-core.js");
+global.ST = window.ST;
+run("welding-core.js");
+run("glazing-core.js");
+run("fabrication-core.js");
+const F = window.FABC;
+run("export.js");
+run("app.js");
+const A = code => vm.runInThisContext(code);
+
+let n = 0;
+const pass = m => { n++; console.log("  ok  " + m); };
+
+(async () => {
+  /* ================= 1. the allow-list, through the key normaliser ========= */
+  ["casement windows", "polaris 85 tilt turn", "aluclad tilt turn", "4000 tilt turn", "pvc french wds",
+   "sidelights", "pvc door", "super door", "bifold", "pvc smart", "alu clad windows"]
+    .forEach(h => assert.ok(F.fbAllowed(h), h + " is on the owner's list"));
+  /* the parser's headers the owner's names do not match - reported, not guessed */
+  ["arch angles", "th w", "composite"].forEach(h => assert.ok(!F.fbAllowed(h), h + " matches no owner name"));
+  assert.ok(F.fbAllowed("ALUCLAD TILT & TURN") && F.fbAllowed("  Casement   Windows "), "the & and spacing do not matter");
+  assert.ok(F.fbIsDoorGroup("pvc door") && !F.fbIsDoorGroup("casement windows"));
+  pass("allow-list matched through fbKey; unmatched headers are left out");
+
+  /* ================= 2. the slice: Production alone, F/S/T, doors ========== */
+  const names = ["Ready to fit", "In production"];
+  const jobs = [
+    { id: "R9001", cust: "Person A 0861234567", cat: "prod", blk: 1, seq: 2,
+      notes: [{ k: "comment", t: "ring 087 1234567 first" }],
+      doors: [{ slot: 1, code: "CD" }, { slot: 2, code: "CD" }, { slot: 3, code: "DD" }],
+      prods: [{ n: "casement windows", f: 9, s: 9, t: 9 }, { n: "bifold", f: 1, s: 4, t: 0 }],
+      prodsMain: [{ n: "casement windows", f: 4, s: 6, t: 2 }, { n: "pvc door", f: 3, s: 4, t: 0 },
+                  { n: "composite", f: 0, s: 2, t: 0 }, { n: "sidelights", f: 0, s: 0, t: 0 }] },
+    { id: "R9002", cust: "Person B", cat: "prod", blk: 0, seq: 1, doors: [],
+      prodsMain: [{ n: "7000 casement", f: 0, s: 0, t: 3 }] },
+    { id: "R9003", cust: "Gone", cat: "past", blk: -1, prodsMain: [{ n: "casement windows", f: 1, s: 1, t: 0 }] }
+  ];
+  const slice = F.fbSlice(jobs, names);
+  const t = slice.map(r => r.title);
+  assert.deepStrictEqual(t, ["R9002|7000 CASEMENT", "R9001|CASEMENT WINDOWS", "R9001|PVC DOOR"],
+    "office order; composite and a zero group not fed; the past job not fed; bifold (prods only) not fed");
+  const cw = slice[1], pd = slice[2], t7 = slice[0];
+  assert.deepStrictEqual([cw.frames, cw.sashes, cw.transoms], [4, 6, 2], "counts from prodsMain, never prods");
+  assert.strictEqual(t7.transoms, 3, "a group with only T is fed");
+  assert.strictEqual(pd.doors, "2 CD, 1 DD", "door codes as labels, on a door group");
+  assert.strictEqual(cw.doors, "", "and not on a window group");
+  assert.ok(cw.active && !t7.active && t7.onSheet, "Active = In production; OnSheet = on the sheet");
+  assert.ok(!/086|087|1234567/.test(cw.customer + cw.comment), "rule 3: no phone number reaches the list");
+  const ff = F.fbFeederFields(cw);
+  assert.deepStrictEqual(Object.keys(ff).sort(), F.FB_FEEDER_FIELDS.slice().sort());
+  pass("the slice reads Production only, carries T, labels doors, and strips contact numbers");
+
+  /* ================= 3. the feed plan: no floor column, no delete ========= */
+  const have = [{ id: "5", fields: Object.assign({ Title: cw.title }, ff, { Frames: 1, FramesDone: 3, DoneAt: "2026-09-25T10:00:00Z" }) },
+                { id: "6", fields: { Title: "R8000|CASEMENT WINDOWS", Active: "Yes", OnSheet: "Yes", FramesDone: 2 } }];
+  const plan = ST.feedPlan(slice, have, { at: "T", by: "the office", def: F.FAB });
+  const named = plan.adds.concat(plan.patches.map(p => p.fields));
+  named.forEach(f => Object.keys(f).forEach(k =>
+    assert.ok(F.FB_FEEDER_WRITES.indexOf(k) >= 0, "the feeder wrote " + k)));
+  const gone = plan.patches.find(p => p.id === "6");
+  assert.deepStrictEqual([gone.fields.Active, gone.fields.OnSheet], ["No", "No"], "a row off the sheet: both flags off");
+  assert.strictEqual(plan.adds.length, 2);
+  pass("the feeder writes job facts only, and marks a gone row inactive rather than deleting it");
+
+  /* ================= 4. cards, colours, tabs ================= */
+  const items = [
+    { id: "1", fields: Object.assign({ Title: cw.title }, F.fbFeederFields(cw), { FramesDone: 4, SashesDone: 99, TransomsDone: 1 }) },
+    { id: "2", fields: Object.assign({ Title: pd.title }, F.fbFeederFields(pd), { FramesDone: 3, SashesDone: 4 }) },
+    { id: "3", fields: Object.assign({ Title: t7.title }, F.fbFeederFields(t7)) },
+    { id: "4", fields: { Title: "R7000|PVC DOOR", Job: "R7000", Group: "PVC DOOR", Frames: 1, Active: "No", OnSheet: "No" } }
+  ];
+  const board = F.fbOfficeBoard(items);
+  assert.deepStrictEqual(board.map(c => c.job), ["R9002", "R9001"], "off-sheet rows are on no board");
+  const c1 = board[1];
+  assert.strictEqual(c1.groups[0].sashes, 6, "display clamp: 99 of 6 reads 6");
+  assert.strictEqual(c1.groups[0].lines.length, 3, "three lines where T > 0");
+  assert.strictEqual(c1.groups[0].colour, "lavender", "started");
+  assert.strictEqual(c1.groups[1].colour, "purple", "a group all done");
+  assert.strictEqual(c1.colour, "lavender");
+  assert.strictEqual(F.fbColour(0, 5), "");
+  const tabs = F.fbTabs(items);
+  assert.deepStrictEqual([tabs.floor.map(c => c.job), tabs.finished.map(c => c.job)], [["R9001"], ["R9002"]],
+    "On floor = In production not finished; Finished = every other on-sheet card");
+  items[0].fields.SashesDone = 6; items[0].fields.TransomsDone = 2;
+  assert.deepStrictEqual(F.fbTabs(items).finished.map(c => c.job), ["R9002", "R9001"], "a finished job moves to Finished");
+  assert.deepStrictEqual(F.fbSearchTab(F.fbTabs(items), "9002", "floor"), { tab: "finished", other: 0 });
+  assert.strictEqual(F.fbJobCard(items, "r9001").groups.length, 2);
+  pass("cards, lavender/purple roll-up, the two tabs and the search switch");
+
+  /* ================= 5. eligibility ================= */
+  const people = F.fbPeople([
+    { id: "1", fields: { Title: "Person A", Station: "Fabrication", Active: "Yes", Stages: "Casement  windows; pvc door, NOT A GROUP" } },
+    { id: "2", fields: { Title: "Person B", Station: "Welding", Active: "Yes", Stages: "casement windows" } },
+    { id: "3", fields: { Title: "Person C", Station: "Fabrication", Active: "Yes", Stages: "" } }]);
+  assert.deepStrictEqual(people.map(p => p.name), ["Person A", "Person C"], "this station's people only");
+  const pa = people[0];
+  assert.ok(F.fbEligible(pa, "CASEMENT WINDOWS") && F.fbEligible(pa, "pvc door"));
+  assert.ok(!F.fbEligible(pa, "SIDELIGHTS") && !F.fbEligible(people[1], "CASEMENT WINDOWS") && !F.fbEligible(null, "PVC DOOR"));
+  const tsrc = src("fabrication.js");
+  assert.ok(/if \(!mayDo\(rec\.group\)\) \{[\s\S]{0,200}return;/.test(tsrc), "tap() refuses an ineligible line before queueing");
+  pass("eligibility: a person moves only the groups named in Stages; the tablet's tap() enforces it");
+
+  /* ================= 6. clamp, write bodies, rebase ================= */
+  const g0 = F.fbRecord(items[0]);
+  assert.strictEqual(F.fbApplyTap(g0, "transoms", 5), 2, "+5 clamps to the total");
+  assert.strictEqual(F.fbApplyTap(g0, "frames", -9), 0);
+  assert.strictEqual(F.fbApplyTap(g0, "sashes", "none"), 0);
+  assert.strictEqual(F.fbApplyTap(g0, "frames", "all"), 4);
+  assert.strictEqual(F.fbApplyTap(g0, "glass", 1), null, "not a part");
+  const body = F.fbFloorOnly(Object.assign(F.fbTapFields("transoms", 2, "Person A", "2026-09-25T11:00:00Z"),
+    { Job: "X", Active: "No", Urgent: "group", Frames: 99 }));
+  assert.deepStrictEqual(Object.keys(body).sort(), ["DoneAt", "DoneBy", "TransomsAt", "TransomsBy", "TransomsDone"]);
+  assert.strictEqual(F.fbOfficeFields, F.fbTapFields, "the office writes the same body");
+  const e = { part: "frames", from: 1, value: 2, at: "2026-09-25T10:00:00Z" };
+  assert.deepStrictEqual(F.fbRebase(e, { FramesDone: 3, Frames: 4 }), { action: "rebase", value: 4, from: 3 });
+  assert.deepStrictEqual(F.fbRebase(e, { FramesDone: 0, DoneAt: "2026-09-25T10:05:00Z" }), { action: "drop" });
+  assert.deepStrictEqual(F.fbLogEntry({ job: "r9001", group: "pvc door", part: "Frames", from: 1, to: 2 }).type, "PVC DOOR");
+  pass("clamp, the five-field write body, Urgent unwritable, rebase and the log line");
+
+  /* ================= 7. the painter's rule ================= */
+  assert.strictEqual(F.fbCellWord("FFD9D2E9"), "process");
+  assert.strictEqual(F.fbCellWord("#b4a7d6"), "done");
+  assert.strictEqual(F.fbCellWord(""), "");
+  assert.strictEqual(F.fbCellWord("FFFFFF"), "");
+  ["FFFF00", "FFE699", "00B050", "FF0000"].forEach(h => assert.strictEqual(F.fbCellWord(h), "other"));
+  assert.strictEqual(F.fbCellWant(2, 4, "", ""), "process", "blank record: paints lavender");
+  assert.strictEqual(F.fbCellWant(4, 4, "", "process"), "done", "blank record: purple when all done");
+  ["process", "done", "cut"].forEach(r => assert.strictEqual(F.fbCellWant(4, 4, r, ""), null, r + " record: never"));
+  assert.strictEqual(F.fbCellWant(0, 4, "", "done"), "", "own colour, done 0: white");
+  assert.strictEqual(F.fbCellWant(0, 4, "", "process"), "");
+  assert.strictEqual(F.fbCellWant(0, 4, "", "other"), null, "foreign colour, done 0: nothing");
+  assert.strictEqual(F.fbCellWant(3, 4, "", "other"), null, "foreign colour: never painted over");
+  assert.strictEqual(F.fbCellWant(0, 4, "", ""), null, "white and nothing done: nothing");
+  assert.strictEqual(F.fbCellWant(2, 4, "", "process"), null, "already right: nothing");
+  assert.ok(A("cpWordForHex('" + F.FB_PROCESS_HEX + "') === null && cpWordForHex('" + F.FB_DONE_HEX + "') === null"),
+    "neither colour is a checkpoint colour");
+  pass("the painter's rule: never over the office, never over a foreign colour, white only over its own");
+
+  /* ================= 8. the painter end to end, in the office's code ========= */
+  const WRITES = [], LOGS = [];
+  CW.serialised = async (s, fn) => fn();
+  CW.rowForJob = async () => 7;
+  CW.findFile = async () => ({ base: "/x/workbook", siteId: "s" });
+  CW.batchWrite = async reqs => { reqs.forEach(r => WRITES.push(r)); };
+  global.__LOGS = LOGS;
+  A("noteChange = function (job, what, from, to) { __LOGS.push({ job: job, what: what, from: from, to: to }); };" +
+    "scheduleReconcile = function () {};");
+  const FILLS = {};                                  // column -> hex in the downloaded sheet
+  global.__WB = { getWorksheet: () => ({ getRow: () => ({ getCell: c =>
+    ({ fill: FILLS[c] ? { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + FILLS[c] } } : null }) }) }) };
+  const job = { id: "R9001", src: { Production: 7 }, done: 0, cat: "prod", blk: 1,
+    prods: [{ n: "casement windows", f: 4, s: 6, t: 2 }], prodsMain: [{ n: "casement windows", f: 4, s: 6, t: 2 }],
+    cp: { win: "", drs: "", glass: {}, prod: {} }, doors: [], glass: {} };
+  global.__JOB = job;
+  const row = { id: "1", fields: { Title: "R9001|CASEMENT WINDOWS", Job: "R9001", Group: "CASEMENT WINDOWS",
+    Frames: 4, Sashes: 6, Transoms: 2, FramesDone: 2, SashesDone: 6, TransomsDone: 0,
+    Active: "Yes", OnSheet: "Yes", DoneAt: "2026-09-25T10:00:00Z", DoneBy: "Person A" } };
+  global.__ROWS = [row];
+  A("CP_LIST_OK = true; CP_IMPORTED = 'x'; cpSetImportPending(false); cpRowsSet({});" +
+    "PRODMAP = { prod: { 'casement windows': { f: 16, s: 17, t: 18 } }, glass: {} };" +
+    "LASTWB = __WB; ALL = [__JOB]; FABR_OK = true; FABR_ITEMS = __ROWS.slice(); FABR_PAINTED = {};");
+  const runP = () => A("fabrColourRun()");
+  assert.strictEqual(await runP(), 1, "one job painted");
+  assert.deepStrictEqual(WRITES.map(w => [w.url.replace(/^.*address='/, "").replace(/'.*$/, ""), w.body.color]),
+    [["P7", "#D9D2E9"], ["Q7", "#B4A7D6"]], "F lavender, S purple, T (done 0, white) untouched");
+  assert.ok(WRITES.every(w => w.method === "PATCH" && /worksheets\('Production'\)\/range\(address='[A-Z]+7'\)\/format\/fill$/.test(w.url)),
+    "fills only, on the job's own row");
+  assert.deepStrictEqual(LOGS.map(l => l.what), ["Fabrication colours"], "one Dashboard Log line per paint");
+  assert.strictEqual(await runP(), 0, "nothing to do again: the paint is remembered while the download lags");
+
+  /* the office's record says yellow on F: fabrication stands off */
+  WRITES.length = 0; LOGS.length = 0;
+  A("FABR_PAINTED = {}; cpRowPut('R9001', 'prod:casement windows:f', { status: 'process', done: 1, total: 4 });");
+  FILLS[16] = "FFFF00"; FILLS[17] = "B4A7D6";
+  assert.strictEqual(await runP(), 0, "yellow record + purple already right: nothing");
+  /* the floor takes sashes back to 0: its own purple goes white; the office's cell is left */
+  A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __ROWS[0].fields, { SashesDone: 0 }) }];");
+  assert.strictEqual(await runP(), 1);
+  assert.deepStrictEqual(WRITES.map(w => w.body.color), ["#FFFFFF"], "own colour, done 0: white");
+  /* an untouched row paints nothing; a gold row is whole */
+  WRITES.length = 0;
+  A("FABR_PAINTED = {}; cpRowsSet({}); FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __ROWS[0].fields, { DoneAt: '' }) }];");
+  FILLS[16] = ""; FILLS[17] = "";
+  assert.strictEqual(await runP(), 0, "DoneAt empty: nobody touched it, nothing painted");
+  A("FABR_ITEMS = __ROWS.slice();");
+  job.done = 1;
+  assert.strictEqual(await runP(), 0, "a gold row is left whole");
+  job.done = 0;
+  pass("the painter end to end: one $batch of fills, one log line, never over the office, white only over its own");
+
+  /* ================= 9. verify-and-report (a) and (b) ================= */
+  /* (a) the checkpoint writer (cpRepaintPlan) never whitens a lavender cell
+     whose record is blank - no row at all, or a row saying "" that this
+     browser has never painted (the adopter, run before it in load(), records
+     PAINTED from the file first, and lavender parses as "") */
+  FILLS[16] = "D9D2E9";
+  /* the parser reads both colours as no checkpoint colour at all - the same as
+     white - so j.cp for a lavender cell is "" (which is what __JOB carries) */
+  assert.ok(A("cpOf('D9D2E9') === '' && cpOf('B4A7D6') === ''"), "the parser reads lavender and purple as blank");
+  A("PAINTED = {}; cpRowsSet({});");
+  assert.deepStrictEqual(A("cpAdoptCandidates([__JOB]).length"), 0, "(b) no row: not a hand change");
+  assert.deepStrictEqual(A("cpRepaintPlan([__JOB]).length"), 0, "(a) no row: never repainted");
+  A("cpRowPut('R9001', 'prod:casement windows:f', { status: '', done: 0, total: 4 });");
+  assert.deepStrictEqual(A("cpAdoptCandidates([__JOB]).length"), 0, "(b) a blank row: not a hand change");
+  assert.deepStrictEqual(A("cpRepaintPlan([__JOB]).length"), 0,
+    "(a) a blank row, after the adopter has run: not repainted white");
+  pass("verify-and-report: (a) and (b) hold on the office's own code");
+
+  /* ================= 10. the gates ================= */
+  const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
+  ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
+   "/workbook", "downloadWorkbook", "parseWorkbook", "ExcelJS", "listDelete", '"DELETE"'].forEach(bad =>
+    assert.strictEqual(fsrc.indexOf(bad), -1, "a fabrication station file names `" + bad + "`"));
+  const page = src("fabrication.html");
+  ["graph.js", "station-core.js", "station-ui.js", "fabrication-core.js", "fabrication.js"]
+    .forEach(s => assert.ok(page.indexOf(s) > 0, "fabrication.html loads " + s));
+  ["exceljs", "parser.js", "app.js", "checkpoints.js"].forEach(s =>
+    assert.strictEqual(page.toLowerCase().indexOf(s), -1, "fabrication.html must not load " + s));
+  assert.ok(/:root\[data-theme="light"\]/.test(page) && /\.sbtn \{ width:64px; height:56px/.test(page));
+  assert.ok(src("index.html").indexOf("fabrication-core.js") > 0, "the office page loads the core");
+  const mine = fsrc + src("test_fabrication.js");
+  assert.ok(!/@(?!example\.test)[a-z0-9-]+\.(com|ie|net|org|co\.uk)/i.test(mine), "no address or domain");
+  assert.strictEqual(NET.length, 0, "nothing in this run reached the network");
+  pass("no station file names a workbook write or a delete; no network; no real address");
+
+  console.log("\n" + n + " checks passed");
+})().catch(e => { console.error(e); process.exit(1); });

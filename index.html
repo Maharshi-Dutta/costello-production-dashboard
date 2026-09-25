@@ -19,6 +19,7 @@
     --urgent:#b3261e; --urgent-bg:#fbe3e1;
     --green:#3f8f2c; --green-bg:#e8f5e3; --green-bg2:#dcefd5;
     --f:#2a78d6; --s:#c25525; --t:#14805a;
+    --lav:#5e4f9e; --lav-bg:#f1eef9; --pur:#4b3591; --pur-bg:#e3dcf3;
   }
   :root[data-theme="dark"] {
     --bg:#16161a; --surface:#1e1e23; --surface-2:#24242a; --line:#33333b; --line-soft:#2b2b32;
@@ -31,6 +32,7 @@
     --urgent:#f07a72; --urgent-bg:#3b1d1b;
     --green:#6dbf4b; --green-bg:#1d2c17; --green-bg2:#243a1c;
     --f:#5598e7; --s:#e07a4a; --t:#35a97c;
+    --lav:#c9bff0; --lav-bg:#2a2638; --pur:#b19cf0; --pur-bg:#352a55;
   }
   * { box-sizing:border-box }
   /* an ID/class rule with display: outranks the UA's [hidden] rule, so the
@@ -362,6 +364,17 @@
      the glass board's finished card uses, so "done" reads the same everywhere */
   .worow.c-gold { border-color:var(--done); background:var(--done-bg) }
   .worow.done .wototal { font-weight:700 }
+  /* the Fabrication board (2026-09-25): welding's row with a third part
+     (Transoms), so one more fixed track; its own two colours, lavender started
+     and purple done - the same two it paints on the Production sheet */
+  .fabboard .wohead { grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
+            64px 90px 92px 92px 100px 34px minmax(90px,1fr) }
+  .worow.c-lavender, .wogrp.c-lavender { border-color:var(--lav); background:var(--lav-bg) }
+  .worow.c-purple, .wogrp.c-purple { border-color:var(--pur); background:var(--pur-bg) }
+  .c-lavender .wobarfill { background:var(--lav) }
+  .c-purple .wobarfill { background:var(--pur) }
+  .weldline.c-lavender .weldnum { color:var(--lav) }
+  .weldline.c-purple .weldnum { color:var(--pur) }
   .wohead { display:grid; grid-template-columns:18px 78px minmax(90px,1.4fr) minmax(80px,1fr)
             64px 90px 92px 92px 34px minmax(90px,1fr); gap:9px; align-items:center;
             padding:9px 11px; cursor:pointer; font-size:12.5px }
@@ -442,6 +455,7 @@
        above: a per-row auto column sizes to that row's own content). */
     .wohead { grid-template-columns:18px 70px 1fr 64px 34px; row-gap:5px }
     .wohead .wosect, .wohead .wolast, .wohead .wobar, .wohead .wopart { display:none }
+    .fabboard .wohead { grid-template-columns:18px 70px 1fr 64px 34px }
     /* glazing keeps its steppers in the head, so the phone shows job, customer,
        the count and the buttons, and the notes badge joins the hidden set */
     .glzboard .wohead { grid-template-columns:70px 1fr 64px 170px }
@@ -864,6 +878,7 @@
 <script src="station-core.js?v=20260924-1248"></script>
 <script src="welding-core.js?v=20260924-1248"></script>
 <script src="glazing-core.js?v=20260924-1248"></script>
+<script src="fabrication-core.js?v=20260924-1248"></script>
 <script src="export.js?v=20260924-1248"></script>
 <script src="app.js?v=20260924-1248"></script>
 </body>

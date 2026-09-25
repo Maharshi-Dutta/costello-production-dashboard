@@ -24,8 +24,13 @@ Three pages ship from this repo:
   [`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md) and `docs/REFERENCE.md` §24.
   One number per job: units glazed out of the job's **windows** — doors are not
   glazed at this station and are fed as a fact only (owner 2026-09-23,
-  [`docs/specs/2026-09-23-glazing-windows-only.md`](docs/specs/2026-09-23-glazing-windows-only.md)). **The fourth station
-  is the same checklist again.**
+  [`docs/specs/2026-09-23-glazing-windows-only.md`](docs/specs/2026-09-23-glazing-windows-only.md)).
+- `fabrication.html` + `fabrication.js` + `fabrication-core.js` — the fabrication
+  floor station, 2026-09-25, the **fourth**, from the same checklist — see
+  [`docs/specs/2026-09-25-fabrication-station.md`](docs/specs/2026-09-25-fabrication-station.md). One row per job and
+  product group, F / S / T counters; a person moves only the groups named in
+  their `Stages`. Its top-level names are `FB_*`/`fb*` (core) and `FABR_*`/`fabr*`
+  (in `app.js`): `FAB_*`/`fab*` already belong to `app.js`'s floating button.
 
 Check `docs/specs/README.md` for the status of every spec.
 
@@ -52,7 +57,7 @@ the one that first wrote them down.
    it, and deletes the original — the only structural write in the app). No
    feature may write a value, a new row, a new sheet, or a colour anywhere
    else on `Production`, ever.
-   There are exactly **three** sanctioned reasons to make a fill, and the owner
+   There are exactly **four** sanctioned reasons to make a fill, and the owner
    gave each of them in a dated spec:
    - **checkpoint colours** — the office ticking work off in the drawer
      ([`docs/specs/2026-09-04-checkpoints.md`](docs/specs/2026-09-04-checkpoints.md), and since 2026-09-11
@@ -100,7 +105,23 @@ the one that first wrote them down.
      (owner 2026-09-14: *"already golden means it finished even if all the cell
      or component has no ticked. u should not change anything in the excel
      sheet."*). Still only a fill, still only on the job's own row.
-     Adding a **fourth** reason is a new decision for
+   - **fabrication colours from the floor** (owner, **2026-09-25**,
+     [`docs/specs/2026-09-25-fabrication-station.md`](docs/specs/2026-09-25-fabrication-station.md) rule 6): the office
+     dashboard (never the tablet) paints a product group's own F / S / T cell
+     on `Production` from the `Fabrication station` list — `#D9D2E9` light
+     lavender when that line is started, `#B4A7D6` purple when it is fully
+     fabricated. The owner's words: *"never lowers office but office can lower
+     theirs"*. So it paints a cell **only while the office's own checkpoint
+     record for that item is blank** (`cpStatus`), never over a colour it does
+     not own (yellow, gold, the Cut green, anything else), and clears a cell to
+     white **only** when it currently shows one of its own two colours and that
+     line's done count is back to 0. Only rows somebody has touched (`DoneAt`
+     set) produce paint. The colour is a **copy**: nothing reads it back as
+     status, it is not written to `Dashboard progress`, and the list is the
+     truth. One `$batch` of fills per job, one `Dashboard Log` line
+     ("Fabrication colours") per job painted (`fabrColourRun` in `app.js`, the
+     rule itself is `FABC.fbCellWant`).
+     Adding a **fifth** reason is a new decision for
      the owner, not a judgement call for a session.
 2. **No other sheet on the workbook is touched** except the dashboard's own
    sheets, created and owned by the dashboard: `Dashboard Log`,
@@ -157,8 +178,8 @@ the one that first wrote them down.
    station list, **`Glazing station`** (one row per job, `Floor stations` site)
    ([`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md)).
 
-   There are **exactly six** exceptions, each granted by the owner in a dated
-   spec, each for a named case; a **seventh** is a new decision for the owner,
+   There are **exactly seven** exceptions, each granted by the owner in a dated
+   spec, each for a named case; an **eighth** is a new decision for the owner,
    not a judgement call for a session.
    - **Seeding** (owner, 2026-09-08, the v3 spec's "Seeding" section and
      nowhere else): the feeder writes `Cut`/`Hotmelt` on a row it is
@@ -255,7 +276,18 @@ the one that first wrote them down.
      direction, and **there is no seed** — there is no office record of glazing
      to seed from, so `GLAZE.seedFields` is empty and the feeder's whole
      vocabulary holds not one floor column.
-   Only the tablet (`station.js`, `welding.js`, `glazing.js`) writes a By, an At,
+   - **The office's fabrication edits** (owner, **2026-09-25**,
+     [`docs/specs/2026-09-25-fabrication-station.md`](docs/specs/2026-09-25-fabrication-station.md) section 5, Part A): on
+     the office's own **Fabrication station** board, the office may set and
+     clear a group's `FramesDone`, `SashesDone` or `TransomsDone`. One click
+     writes **exactly five fields** of one `Fabrication station` row: that
+     part's counter, its `By`/`At`, and `DoneBy`/`DoneAt` — the shape of
+     `FABC.fbOfficeFields(part, value, who, at)`, filtered through
+     `FABC.fbFloorOnly` (`ST.floorOnly` with this station's definition, the
+     tablet's own filter). One `Dashboard Log` line per change, no `Station
+     log` line. No seed: `FAB.seedFields` is empty. `Urgent` is on the list
+     for Part B and is written by nothing yet.
+   Only the tablet (`station.js`, `welding.js`, `glazing.js`, `fabrication.js`) writes a By, an At,
    a last touch or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.
    The floor's list columns are never the office's to write for any other
@@ -305,7 +337,8 @@ node --check parser.js && node --check graph.js && node --check checkpoints.js \
   && node --check export.js && node --check app.js \
   && node --check station-core.js && node --check station-ui.js && node --check station.js \
   && node --check welding-core.js && node --check welding.js \
-  && node --check glazing-core.js && node --check glazing.js
+  && node --check glazing-core.js && node --check glazing.js \
+  && node --check fabrication-core.js && node --check fabrication.js
 
 node test_move.js
 node test_checkpoints.js
@@ -322,6 +355,8 @@ node test_john.js
 node test_welding.js
 node test_daysheets.js
 node test_glazing.js
+node test_fabrication.js
+node test_pages.js
 
 node verify.js   # dev-only cross-check, see below
 ```
@@ -340,9 +375,10 @@ python build.py   # stamps a ?v=<timestamp> onto every script tag and writes ver
 
 `build.py` rewrites the cache-busting query string on every `<script src="…">`
 tag matching `parser`, `graph`, `checkpoints`, `station-core`, `station-ui`,
-`station`, `welding-core`, `welding`, `glazing-core`, `glazing`, `export` or
-`app` — on **all four** of
-`index.html`, `glass.html`, `welding.html` and `glazing.html` — and updates
+`station`, `welding-core`, `welding`, `glazing-core`, `glazing`,
+`fabrication-core`, `fabrication`, `export` or `app` — on **all five** of
+`index.html`, `glass.html`, `welding.html`, `glazing.html` and
+`fabrication.html` — and updates
 the `<span id="build">` footer text on each. `glass.html` carries the same
 build stamp as `index.html`, which matters more there than anywhere else: a
 tablet left signed in for weeks is exactly where a stale cached script does

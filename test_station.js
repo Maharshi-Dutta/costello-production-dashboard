@@ -2966,7 +2966,7 @@ const person = (name, stages, pin, active, station) =>
      it was called, and adding the welding board and then the glazing board
      really was one entry in this array plus a renderer for its key. */
   assert.deepStrictEqual(STATIONS, [["glass", "Glass station"], ["welding", "Welding station"],
-                                    ["glazing", "Glazing station"]],
+                                    ["glazing", "Glazing station"], ["fabrication", "Fabrication station"]],
     "one array next to SHEETNAMES is where the next station goes");
   assert.strictEqual(SHEETNAMES[0], "Production", "SHEETNAMES is untouched, for the export and the row chips");
   pass("the dropdown is driven by one STATIONS array, and SHEETNAMES is left exactly as it was");

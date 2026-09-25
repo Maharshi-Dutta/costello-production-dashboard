@@ -1082,6 +1082,48 @@ it), and no timer was added for it. **Both** `redrawWelding()` and
 `redrawGlazing()` take that branch when they are off their own board, so a
 welding-only job's badge does not have to wait for the glass list to move.
 
+## The Fabrication station data model
+
+Part A built 2026-09-25 (`docs/specs/2026-09-25-fabrication-station.md`). The
+tablet is `fabrication.html`; the office sees it at **Show ▸ Fabrication
+station**. Definition: `FABC.FAB` in `fabrication-core.js`, `site: "floor"`.
+
+### `Fabrication station` — one row per job **and product group**
+
+| column | type | written by | meaning |
+|---|---|---|---|
+| `Title` | Single line, **unique** | feeder | `JOB\|GROUP`, the group through the key normaliser (upper case, non-alphanumerics collapsed) |
+| `Job`, `Group`, `GroupSeq`, `Customer`, `Comment`, `Seq` | as welding | feeder | as welding; `Customer` and `Comment` through `ST.stripContact` |
+| `Doors` | Single line | feeder | the job's DOORS DONE codes as labels (`2 CD, 1 DD`), on door groups only, else blank. Nothing is computed from them |
+| `Frames` / `Sashes` / `Transoms` | Number | feeder | the group's F / S / T on `Production` alone (`j.prodsMain`) |
+| `Section` | Single line | feeder | the job's section |
+| `Active` | Single line | feeder | `Yes` while the job is **In production** |
+| `OnSheet` | Single line | feeder | `Yes` while the job and group are on the sheet at all; a row that leaves gets `Active = No` and `OnSheet = No`, never deleted |
+| `FedAt` / `FedBy` | Single line | feeder | as welding |
+| `FramesDone` / `SashesDone` / `TransomsDone` | Number | the tablet; the office board | fabricated so far |
+| `FramesBy/At`, `SashesBy/At`, `TransomsBy/At` | Single line | the tablet; the office | last mover of that counter |
+| `DoneBy` / `DoneAt` | Single line | the tablet; the office | last touch of any counter |
+| `Urgent` | Single line | the office only (Part B) | read, written by nothing yet |
+
+**Which groups.** An allow-list (`FB_WINDOW_GROUPS`, `FB_DOOR_GROUPS`), the
+owner's names, matched through the key normaliser. All three parts where the
+sheet's count is > 0. No seed.
+
+**Who may move what.** `Station people`: `Station = Fabrication`, `Stages` = a
+comma list of product group names (`casement windows, pvc door`), matched
+through the same normaliser. Everybody sees every line; a line of a group not
+in the person's `Stages` is drawn greyed, and a tap on it says "not your line"
+and writes nothing.
+
+**Shared lists.** `Station log`: `Station = Fabrication`, `GlassType` = the
+group, `Stage` = `frames` / `sashes` / `transoms` (tablet only).
+`Station comments`: `Station = Fabrication`.
+
+**Colours.** None / lavender (started) / purple (done), at line, group and
+card, on the tablet and the office board. The office also paints the
+`Production` sheet's F/S/T cell in the same two colours — only where the
+office's own checkpoint record is blank (CLAUDE.md rule 1, the fourth fill).
+
 ## What the feeder does, and when
 
 The feeder runs inside the master dashboard, not the station page. After
