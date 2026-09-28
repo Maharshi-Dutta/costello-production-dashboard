@@ -222,6 +222,8 @@ function newStation(stage) {
   };
   sb.globalThis = sb;
   vm.createContext(sb);
+  /* glass.html loads station-ui.js before station.js (the day sheet lives there) */
+  vm.runInContext(src("station-ui.js"), sb, { filename: "station-ui.js" });
   vm.runInContext(src("station.js"), sb, { filename: "station.js" });
   return sb;
 }
@@ -230,7 +232,7 @@ const reset = () => { REQ.length = 0; TOASTS.length = 0; LOGGED.length = 0; };
 const dayReq = () => REQ.filter(r => r.path.indexOf("/" + DAY_ID) >= 0);
 const targetReq = () => REQ.filter(r => r.path.indexOf("/" + TARGET_ID) >= 0);
 const consent = yes => { CW.hasListConsent = async () => !!yes; };
-/* saveDay() sets its own flush going and does not await it - the tablet must
+/* DAY.save() sets its own flush going and does not await it - the tablet must
    never block a hand on the screen - so the test waits for it to finish rather
    than starting a second one that the `flushing` guard would turn straight back. */
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
@@ -269,10 +271,15 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   /* the day sheet is switched on by the DEFINITION - which is the whole of
      "built so another page can switch it on later" */
   assert.ok(ST.daySheetOf(ST.GLASS, "cut"), "cutting has one");
-  assert.strictEqual(ST.daySheetOf(ST.GLASS, "hotmelt"), null, "hotmelting has not");
-  assert.strictEqual(ST.daySheetOf(ST.GLASS, "tuff"), null);
-  assert.strictEqual(ST.daySheetOf(WELDC.WELD, "weld"), null, "and neither has welding, yet");
-  assert.deepStrictEqual(ST.daySheetStages(ST.GLASS), ["cut"]);
+  /* 2026-09-28: hotmelting and welding gained one each, by definition */
+  assert.ok(ST.daySheetOf(ST.GLASS, "hotmelt"), "hotmelting has one since 2026-09-28");
+  assert.strictEqual(ST.daySheetOf(ST.GLASS, "tuff"), null, "tuff has none");
+  assert.ok(ST.daySheetOf(WELDC.WELD, "weld"), "and so has welding");
+  assert.deepStrictEqual(ST.daySheetStages(ST.GLASS), ["cut", "hotmelt"]);
+  assert.deepStrictEqual(ST.daySheetStages(WELDC.WELD), ["weld"]);
+  assert.strictEqual(ST.dayHasTarget(ST.GLASS, "cut"), true, "cutting keeps its weekly target");
+  assert.strictEqual(ST.dayHasTarget(ST.GLASS, "hotmelt"), false, "hotmelting has none (owner: not now)");
+  assert.strictEqual(ST.dayHasTarget(WELDC.WELD, "weld"), false, "nor has welding");
   assert.deepStrictEqual(ST.daySheetOf(ST.GLASS, "cut").counts, COUNTS,
     "four counts, in the order the paper sheet asks for them");
   pass("which stage has a day sheet comes off the station definition, not off a page");
@@ -348,7 +355,7 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   assert.strictEqual(ST.dayCount("007"), 7);
   assert.strictEqual(ST.dayCount(-1), null);
   assert.strictEqual(ST.dayCount(1.5), null);
-  assert.strictEqual(ST.dayFields(ST.GLASS, "hotmelt", { day: "2026-09-21", who: "A", counts: {} }), null,
+  assert.strictEqual(ST.dayFields(ST.GLASS, "tuff", { day: "2026-09-21", who: "A", counts: {} }), null,
     "and a stage with no day sheet builds no row at all");
   pass("a negative, a decimal and a word are all refused at the form, not rounded");
 
@@ -465,14 +472,14 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
 
   const cut = newStation("cut");
   const S = code => vm.runInContext(code, cut);
-  S("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAYQ = {}; TOKEN = null;");
+  S("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAY.q = {}; TOKEN = null;");
   assert.strictEqual(await S("readPeople()"), true);
   await S("readList()");
   S("pickPerson(PEOPLE.find(p => p.name === 'Person A'))");
   assert.strictEqual(S("PERSON.name"), "Person A");
   reset();
-  assert.strictEqual(await S("readDay()"), true, "the cutting tablet reads both lists");
-  assert.strictEqual(S("TARGET"), 250, "and knows the office's target");
+  assert.strictEqual(await S("DAY.read()"), true, "the cutting tablet reads both lists");
+  assert.strictEqual(S("DAY.target"), 250, "and knows the office's target");
   assert.ok(dayReq().length === 1 && targetReq().length === 1, "one read each, no more");
   assert.ok(dayReq().every(r => r.method === "GET") && targetReq().every(r => r.method === "GET"));
   pass("the cutting tablet reads the day sheets and the target, once each, read-only");
@@ -481,10 +488,10 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      what is typed to what is already saved */
   const TODAY = ST.dayKey(new Date());
   DAYITEMS = [daySheetRow(ST.isoWeek(TODAY).monday, "Person A", [20, 0, 0, 0], { WeekTarget: 250 })];
-  await S("readDay()");
-  S("openDaySheet(); draftNow().counts.Clear = '12'; draftNow().counts.KGlass = '3'; saveDraft();");
-  assert.strictEqual(S("draftTotal()"), 15, "what is typed now adds up");
-  const wk = S("JSON.stringify(weekWords(draftTotal()))");
+  await S("DAY.read()");
+  S("DAY.open(); DAY.draftNow().counts.Clear = '12'; DAY.draftNow().counts.KGlass = '3'; DAY.saveDraft();");
+  assert.strictEqual(S("DAY.draftTotal()"), 15, "what is typed now adds up");
+  const wk = S("JSON.stringify(DAY.weekWords(DAY.draftTotal()))");
   assert.strictEqual(JSON.parse(wk).done, 35, "this week is the saved 20 plus the typed 15");
   assert.ok(JSON.parse(wk).words.indexOf("35 of 250") >= 0, "“35 of 250 sheets”");
   assert.ok(String(mem.cw_daysheetdraft).indexOf('"Clear":"12"') >= 0,
@@ -504,20 +511,20 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      save below (seen 2026-09-22, HISTORY.md). Start this block with nothing
      saved, so it tests the draft's date and not the calendar. */
   DAYITEMS = [];
-  await S("readDay()");
+  await S("DAY.read()");
   mem.cw_daysheetdraft = JSON.stringify({ day: YESTERDAY, stage: "cut", who: "Person A",
                                           counts: { Clear: "9" }, note: "late finish", target: 200 });
-  S("DAYDRAFT = null;");
-  assert.strictEqual(S("draftNow().day"), YESTERDAY,
+  S("DAY.draft = null;");
+  assert.strictEqual(S("DAY.draftNow().day"), YESTERDAY,
     "a draft started yesterday is still yesterday's - not thrown away, and not re-dated");
-  assert.strictEqual(S("draftNow().counts.Clear"), "9", "with what was typed into it");
-  assert.strictEqual(S("sheetDay()"), YESTERDAY, "and that is the day the sheet on screen is about");
-  assert.ok(S("daySheetHtml()").indexOf(YESTERDAY) >= 0, "the header says which day it will save under");
-  assert.ok(S("daySheetHtml()").indexOf("daycarry") >= 0, "and says so in as many words");
-  assert.strictEqual(S("weekWords(0).target"), 200,
+  assert.strictEqual(S("DAY.draftNow().counts.Clear"), "9", "with what was typed into it");
+  assert.strictEqual(S("DAY.sheetDay()"), YESTERDAY, "and that is the day the sheet on screen is about");
+  assert.ok(S("DAY.html()").indexOf(YESTERDAY) >= 0, "the header says which day it will save under");
+  assert.ok(S("DAY.html()").indexOf("daycarry") >= 0, "and says so in as many words");
+  assert.strictEqual(S("DAY.weekWords(0).target"), 200,
     "measured against the target that was in force then, not the one set since");
   reset();
-  assert.strictEqual(await S("saveDay()"), true);
+  assert.strictEqual(await S("DAY.save()"), true);
   await settle();
   const carried = dayReq().filter(r => r.method === "POST");
   assert.strictEqual(carried.length, 1);
@@ -531,35 +538,35 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      sitting there to be filed under a day three weeks late */
   mem.cw_daysheetdraft = JSON.stringify({ day: DAYBEFORE, stage: "cut", who: "Person A",
                                           counts: { Clear: "99" }, note: "old" });
-  S("DAYDRAFT = null;");
-  assert.strictEqual(S("draftNow().day"), TODAY, "a draft two days old is dropped");
-  assert.strictEqual(S("draftNow().counts.Clear"), undefined);
+  S("DAY.draft = null;");
+  assert.strictEqual(S("DAY.draftNow().day"), TODAY, "a draft two days old is dropped");
+  assert.strictEqual(S("DAY.draftNow().counts.Clear"), undefined);
   pass("D4: a draft survives to the end of the following day and no longer");
 
   /* ===== D4: an untouched form is not four noughts =====
      with today's own sheet not yet saved, or the form would be the read-only
      one - today can be the Monday the fixture row above sits on */
   DAYITEMS = [];
-  await S("readDay()");
+  await S("DAY.read()");
   reset();
-  S("clearDraft(); DAYDRAFT = null;");
-  assert.strictEqual(S("draftOk()"), false, "Save is dead on a form nobody has typed into");
-  assert.ok(S("daySheetHtml()").indexOf('id="daysave"') >= 0);
-  assert.ok(/id="daysave"[^>]*disabled/.test(S("daySheetHtml()")), "and it is drawn disabled");
-  assert.strictEqual(await S("saveDay()"), false, "and it refuses even if the click gets through");
+  S("DAY.clearDraft(); DAY.draft = null;");
+  assert.strictEqual(S("DAY.draftOk()"), false, "Save is dead on a form nobody has typed into");
+  assert.ok(S("DAY.html()").indexOf('id="daysave"') >= 0);
+  assert.ok(/id="daysave"[^>]*disabled/.test(S("DAY.html()")), "and it is drawn disabled");
+  assert.strictEqual(await S("DAY.save()"), false, "and it refuses even if the click gets through");
   assert.strictEqual(dayReq().filter(r => r.method === "POST").length, 0, "so nothing is sent");
-  S("draftNow().note = 'machine down all day'; saveDraft();");
-  assert.strictEqual(S("draftOk()"), true,
+  S("DAY.draftNow().note = 'machine down all day'; DAY.saveDraft();");
+  assert.strictEqual(S("DAY.draftOk()"), true,
     "a day with nothing cut but a line about why is a real entry and saves");
-  assert.strictEqual(S("draftTotal()"), 0);
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '0'; saveDraft();");
-  assert.strictEqual(S("draftOk()"), true, "and so is a deliberate nought typed into a box");
+  assert.strictEqual(S("DAY.draftTotal()"), 0);
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '0'; DAY.saveDraft();");
+  assert.strictEqual(S("DAY.draftOk()"), true, "and so is a deliberate nought typed into a box");
   pass("D4: an untouched form cannot be saved; a note alone, or a typed nought, can");
 
   /* ===== the count cap ===== */
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '10000'; saveDraft();");
-  assert.strictEqual(S("draftOk()"), false, "ten thousand sheets in a day is a stuck finger");
-  assert.strictEqual(await S("saveDay()"), false);
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '10000'; DAY.saveDraft();");
+  assert.strictEqual(S("DAY.draftOk()"), false, "ten thousand sheets in a day is a stuck finger");
+  assert.strictEqual(await S("DAY.save()"), false);
   assert.strictEqual(ST.dayCount(9999), 9999, "the cap itself is fine");
   assert.strictEqual(ST.dayCount(10000), null);
   assert.strictEqual(ST.dayFields(ST.GLASS, "cut",
@@ -568,10 +575,10 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   pass("a count over " + ST.DAY_COUNT_MAX + " is refused at the form and in the row builder");
 
   /* no target set at all says so, rather than "of 0" */
-  S("clearDraft(); DAYDRAFT = null; TARGET = null;");
-  assert.ok(S("weekWords(0).words").indexOf("no target set") >= 0, "the words, not “of 0”");
-  assert.ok(S("weekWords(0).words").indexOf("of 0") < 0);
-  S("TARGET = 250; clearDraft(); DAYDRAFT = null;");
+  S("DAY.clearDraft(); DAY.draft = null; DAY.target = null;");
+  assert.ok(S("DAY.weekWords(0).words").indexOf("no target set") >= 0, "the words, not “of 0”");
+  assert.ok(S("DAY.weekWords(0).words").indexOf("of 0") < 0);
+  S("DAY.target = 250; DAY.clearDraft(); DAY.draft = null;");
   pass("with no target the tablet says “no target set”, never “of 0”");
 
   /* the save: one POST, the right row, and nothing else touched. The fixture
@@ -579,9 +586,9 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      and then this person would already have saved today. */
   reset();
   DAYITEMS = [];
-  await S("readDay()");
-  S("DAYDRAFT = null; draftNow().counts.Clear = '12'; draftNow().counts.KGlass = '3'; saveDraft();");
-  assert.strictEqual(await S("saveDay()"), true);
+  await S("DAY.read()");
+  S("DAY.draft = null; DAY.draftNow().counts.Clear = '12'; DAY.draftNow().counts.KGlass = '3'; DAY.saveDraft();");
+  assert.strictEqual(await S("DAY.save()"), true);
   await settle();
   const posts = dayReq().filter(r => r.method === "POST");
   assert.strictEqual(posts.length, 1, "exactly one POST");
@@ -598,23 +605,23 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
 
   /* it cannot be saved twice: the page refuses, and the list would too */
   reset();
-  assert.strictEqual(await S("saveDay()"), false, "the page refuses a second save");
+  assert.strictEqual(await S("DAY.save()"), false, "the page refuses a second save");
   await settle();
   assert.strictEqual(dayReq().filter(r => r.method === "POST").length, 0, "so no POST is made");
-  assert.ok(S("!!daySheetSaved(sheetDay())"), "the sheet reads as saved");
-  assert.ok(S("daySheetHtml()").indexOf(ST.DAY_SAVED_WORDS) >= 0,
+  assert.ok(S("!!DAY.saved(DAY.sheetDay())"), "the sheet reads as saved");
+  assert.ok(S("DAY.html()").indexOf(ST.DAY_SAVED_WORDS) >= 0,
     "and says to ask the office about a mistake");
   pass("one sheet per person per day: the second attempt makes no request at all");
 
   /* a replayed queue item that already landed, or a second tablet saving the
      same key: SharePoint's unique refusal is read as ALREADY SAVED */
   reset();
-  S("DAYQ[" + JSON.stringify("Glass|cut|" + TODAY + "|Person A") + "] = { fields: " +
+  S("DAY.q[" + JSON.stringify("Glass|cut|" + TODAY + "|Person A") + "] = { fields: " +
     JSON.stringify(Object.assign({}, sent)) + ", err: 0 };");
-  await S("flushDay()");
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 0, "the owed row is let go");
-  assert.strictEqual(S("!!daySheetSaved(sheetDay())"), true, "and the saved sheet is what is shown");
-  assert.ok(S("daySheetHtml()").indexOf("waiting to send") < 0, "never a red error");
+  await S("DAY.flush()");
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 0, "the owed row is let go");
+  assert.strictEqual(S("!!DAY.saved(DAY.sheetDay())"), true, "and the saved sheet is what is shown");
+  assert.ok(S("DAY.html()").indexOf("waiting to send") < 0, "never a red error");
   assert.strictEqual(DAYITEMS.filter(x => x.fields.Who === "Person A" && x.fields.Day === TODAY).length, 1,
     "and the list still holds exactly one row for that person and day");
   pass("a unique-value refusal is read as already saved, not as a failure");
@@ -622,18 +629,18 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   /* offline at save: the row is owed, and says "waiting to send" */
   reset();
   DAYITEMS = [];
-  await S("readDay()");
+  await S("DAY.read()");
   FAIL_DAY_POST = 2;
-  S("DAYDRAFT = null; draftNow().counts.Clear = '7'; saveDraft();");
-  assert.strictEqual(await S("saveDay()"), true);
+  S("DAY.draft = null; DAY.draftNow().counts.Clear = '7'; DAY.saveDraft();");
+  assert.strictEqual(await S("DAY.save()"), true);
   await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 1, "still owed");
-  assert.ok(S("daySheetHtml()").indexOf("waiting to send") >= 0, "and it says so, rather than “saved”");
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 1, "still owed");
+  assert.ok(S("DAY.html()").indexOf("waiting to send") >= 0, "and it says so, rather than “saved”");
   FAIL_DAY_POST = 0;
   await S("flushQueue()");
   await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 0, "and it goes when the connection is back");
-  assert.strictEqual(S("!!daySheetSaved(sheetDay())"), true);
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 0, "and it goes when the connection is back");
+  assert.strictEqual(S("!!DAY.saved(DAY.sheetDay())"), true);
   pass("a save made offline is owed, says “waiting to send”, and lands when the wifi is back");
 
   /* ===== D2: A DRAFT IS ONE PERSON'S WRITING =====
@@ -644,25 +651,25 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      neither of them could correct afterwards. */
   reset();
   DAYITEMS = [];
-  await S("readDay()");
-  S("clearDraft(); DAYDRAFT = null; openDaySheet(); draftNow().counts.Clear = '11'; saveDraft();");
-  assert.strictEqual(S("DAYOPEN"), true, "Person A has the sheet open with 11 in it");
-  assert.strictEqual(S("draftNow().who"), "Person A", "and the draft says whose writing it is");
+  await S("DAY.read()");
+  S("DAY.clearDraft(); DAY.draft = null; DAY.open(); DAY.draftNow().counts.Clear = '11'; DAY.saveDraft();");
+  assert.strictEqual(S("DAY.shown"), true, "Person A has the sheet open with 11 in it");
+  assert.strictEqual(S("DAY.draftNow().who"), "Person A", "and the draft says whose writing it is");
   S("switchPerson()");
-  assert.strictEqual(S("DAYOPEN"), false, "switching person closes the sheet");
+  assert.strictEqual(S("DAY.shown"), false, "switching person closes the sheet");
   S("pickPerson(PEOPLE.find(p => p.name === 'Person A'))");   // a second cutter, same tablet
   vm.runInContext("PERSON = { name: 'Person E', stages: ['cut'] };", cut);
-  assert.strictEqual(S("draftNow().counts.Clear"), undefined,
+  assert.strictEqual(S("DAY.draftNow().counts.Clear"), undefined,
     "the next person is handed a blank form, never somebody else's numbers");
-  assert.strictEqual(S("draftNow().who"), "Person E");
+  assert.strictEqual(S("DAY.draftNow().who"), "Person E");
   /* ... and Person A's writing is not lost: it is theirs, and it comes back */
-  vm.runInContext("PERSON = { name: 'Person A', stages: ['cut'] }; DAYDRAFT = null;", cut);
-  assert.strictEqual(S("draftNow().counts.Clear"), "11", "and theirs comes back when they do");
+  vm.runInContext("PERSON = { name: 'Person A', stages: ['cut'] }; DAY.draft = null;", cut);
+  assert.strictEqual(S("DAY.draftNow().counts.Clear"), "11", "and theirs comes back when they do");
   /* the ten-minute idle lock goes through switchPerson, so it closes it too */
-  S("openDaySheet(); LAST_TAP = Date.now() - ST.PERSON_LOCK_MS - 1000; lockIfIdle();");
-  assert.strictEqual(S("DAYOPEN"), false, "and a tablet left alone closes the sheet as well");
-  vm.runInContext("PERSON = PEOPLE.find(p => p.name === 'Person A'); DAYDRAFT = null;", cut);
-  S("clearDraft(); DAYDRAFT = null;");
+  S("DAY.open(); LAST_TAP = Date.now() - ST.PERSON_LOCK_MS - 1000; lockIfIdle();");
+  assert.strictEqual(S("DAY.shown"), false, "and a tablet left alone closes the sheet as well");
+  vm.runInContext("PERSON = PEOPLE.find(p => p.name === 'Person A'); DAY.draft = null;", cut);
+  S("DAY.clearDraft(); DAY.draft = null;");
   pass("D2: a draft belongs to one person; switching person, or the idle lock, closes the sheet");
 
   /* ===== D7: unreachable is not missing =====
@@ -671,22 +678,22 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      page. The first build refused it - because DAY_OK is false for "no such
      list" and for "the wifi is out" alike - and the day was lost. */
   reset();
-  S("DAY_OK = false; DAY_MISSING = false; DAY_WHY = ST.DAY_UNREACHABLE;");
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '6'; saveDraft();");
-  assert.strictEqual(await S("saveDay()"), true, "a list that could not be READ still takes the save");
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 1, "it is owed, like any other offline write");
+  S("DAY.ok = false; DAY.missing = false; DAY.why = ST.DAY_UNREACHABLE;");
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '6'; DAY.saveDraft();");
+  assert.strictEqual(await S("DAY.save()"), true, "a list that could not be READ still takes the save");
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 1, "it is owed, like any other offline write");
   await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 0, "and goes the moment the list answers again");
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 0, "and goes the moment the list answers again");
   /* ... and a list that genuinely is not there still refuses, with the words */
   reset();
   DAYITEMS = [];
-  await S("readDay()");
-  S("DAY_OK = false; DAY_MISSING = true; DAY_WHY = ST.DAY_MISSING_FLOOR;");
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '6'; saveDraft();");
-  assert.strictEqual(await S("saveDay()"), false, "a list that is not there refuses the save");
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 0, "nothing is queued for a list that cannot exist");
-  assert.ok(S("DAYBAD").indexOf("Station day sheets") >= 0, "and the form says which list it is");
-  S("DAY_OK = true; DAY_MISSING = false; DAY_WHY = ''; DAYBAD = ''; clearDraft(); DAYDRAFT = null;");
+  await S("DAY.read()");
+  S("DAY.ok = false; DAY.missing = true; DAY.why = ST.DAY_MISSING_FLOOR;");
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '6'; DAY.saveDraft();");
+  assert.strictEqual(await S("DAY.save()"), false, "a list that is not there refuses the save");
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 0, "nothing is queued for a list that cannot exist");
+  assert.ok(S("DAY.bad").indexOf("Station day sheets") >= 0, "and the form says which list it is");
+  S("DAY.ok = true; DAY.missing = false; DAY.why = ''; DAY.bad = ''; DAY.clearDraft(); DAY.draft = null;");
   pass("D7: a save is queued when the list is unreachable and refused only when it is missing");
 
   /* ===== D6: a row SharePoint keeps refusing =====
@@ -696,28 +703,28 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      only way the day would really be lost. */
   reset();
   DAYITEMS = [];
-  await S("readDay()");
+  await S("DAY.read()");
   FAIL_DAY_POST = 9;
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '5'; saveDraft();");
-  assert.strictEqual(await S("saveDay()"), true);
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '5'; DAY.saveDraft();");
+  assert.strictEqual(await S("DAY.save()"), true);
   await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 1);
-  assert.ok(S("daySheetHtml()").indexOf("waiting to send") >= 0, "once refused it is still the wifi");
-  await S("flushDay()"); await settle();
-  await S("flushDay()"); await settle();
-  assert.ok(S("Object.values(DAYQ)[0].refused >= 3"), "three refusals of the same row");
-  assert.ok(S("daySheetHtml()").indexOf("could not be saved — tell the office") >= 0,
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 1);
+  assert.ok(S("DAY.html()").indexOf("waiting to send") >= 0, "once refused it is still the wifi");
+  await S("DAY.flush()"); await settle();
+  await S("DAY.flush()"); await settle();
+  assert.ok(S("Object.values(DAY.q)[0].refused >= 3"), "three refusals of the same row");
+  assert.ok(S("DAY.html()").indexOf("could not be saved — tell the office") >= 0,
     "and now it says so, instead of pointing at the wifi");
-  assert.ok(S("daySheetHtml()").indexOf("waiting to send") < 0);
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 1, "and it is still queued, never thrown away");
+  assert.ok(S("DAY.html()").indexOf("waiting to send") < 0);
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 1, "and it is still queued, never thrown away");
   /* it survives a reload with its count: a refused row must not read as brand
      new every time the tablet is restarted */
   const reloaded = newStation("cut");
-  assert.strictEqual(vm.runInContext("Object.values(DAYQ)[0].refused >= 3", reloaded), true,
+  assert.strictEqual(vm.runInContext("Object.values(DAY.q)[0].refused >= 3", reloaded), true,
     "the refusal count is rebuilt from localStorage with the row");
   FAIL_DAY_POST = 0;
-  await S("flushDay()"); await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 0, "and it still goes the moment it can");
+  await S("DAY.flush()"); await settle();
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 0, "and it still goes the moment it can");
   pass("D6: three refusals change the words, keep the row, and survive a reload");
 
   /* ===== D6: an owed day sheet does not pin the tablet on an old build =====
@@ -725,11 +732,11 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
      a new build is exactly what a list that keeps refusing may need. */
   reset();
   DAYITEMS = [];
-  await S("readDay()");                 // today's sheet is not on the list again
+  await S("DAY.read()");                 // today's sheet is not on the list again
   FAIL_DAY_POST = 9;
-  S("clearDraft(); DAYDRAFT = null; draftNow().counts.Clear = '4'; saveDraft();");
-  await S("saveDay()"); await settle();
-  assert.strictEqual(S("Object.keys(DAYQ).length"), 1, "a sheet is owed");
+  S("DAY.clearDraft(); DAY.draft = null; DAY.draftNow().counts.Clear = '4'; DAY.saveDraft();");
+  await S("DAY.save()"); await settle();
+  assert.strictEqual(S("Object.keys(DAY.q).length"), 1, "a sheet is owed");
   assert.strictEqual(S("owingWrites()"), false, "but no COUNTER or log line is");
   assert.strictEqual(S("owingAnything()"), true, "the retry timer still knows about it");
   let reloads = 0;
@@ -739,10 +746,10 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   assert.strictEqual(reloads, 1, "a new build reloads the tablet with a day sheet owed");
   /* ... and the owed sheet is still there afterwards, because it is in storage */
   const afterReload = newStation("cut");
-  assert.strictEqual(vm.runInContext("Object.keys(DAYQ).length", afterReload), 1,
+  assert.strictEqual(vm.runInContext("Object.keys(DAY.q).length", afterReload), 1,
     "the owed sheet is rebuilt on the next load: the reload cost nothing");
   FAIL_DAY_POST = 0;
-  await S("flushDay()"); await settle();
+  await S("DAY.flush()"); await settle();
   pass("D6: an owed day sheet no longer pins the tablet on an old build, and survives the reload");
 
   /* THE WHOLE RUN so far, over both new lists: append and read, and nothing
@@ -757,31 +764,112 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
     "and nothing on this page has been anywhere near the workbook");
   pass("over the whole tablet run: reads and appends only, no PATCH, no DELETE, no workbook");
 
-  /* a stage with no day sheet: no button, and NOT ONE REQUEST for either list */
+  /* ===== the HOTMELTING sheet (2026-09-28) =====
+     DG and TG typed by the person, the tablet's own count of their hotmelt
+     taps today beside it (`Counted`), no weekly target and so no request for
+     the target list at all. */
+  const hotFields = ST.dayFieldsFor(ST.GLASS, "hotmelt");
+  ["DG", "TG", "Counted"].forEach(k => assert.ok(hotFields.indexOf(k) >= 0, "hotmelt reads " + k));
+  assert.ok(ST.dayFieldsFor(ST.GLASS, "cut").indexOf("Counted") < 0, "cutting's read is unchanged");
+  assert.deepStrictEqual(ST.dayFieldsFor(WELDC.WELD, "weld").filter(k => SPEC_DAY_COLUMNS.indexOf(k) < 0),
+    ["Squares"], "welding reads its one count and nothing else new");
+  assert.strictEqual(ST.dayTitle("Welding", "weld", "2026-09-28", "Person A"), "Welding|weld|2026-09-28|Person A");
+  assert.strictEqual(ST.dayTitle("Glass", "hotmelt", "2026-09-28", "Person B"), "Glass|hotmelt|2026-09-28|Person B");
+  const wRow = ST.dayFields(WELDC.WELD, "weld", { day: "2026-09-28", who: "Person A",
+    counts: { Squares: "41" }, weekTarget: 300, counted: 9, at: "2026-09-28T16:00:00.000Z" });
+  assert.strictEqual(wRow.Squares, 41);
+  assert.strictEqual(wRow.Station, "Welding");
+  assert.ok(!("WeekTarget" in wRow), "no WeekTarget on a stage with target: false, even if one is handed in");
+  assert.ok(!("Counted" in wRow), "and no Counted on a stage that does not count its taps");
+  const hRow = ST.dayFields(ST.GLASS, "hotmelt", { day: "2026-09-28", who: "Person B",
+    counts: { DG: "3", TG: "" }, weekTarget: 250, counted: 4, at: "2026-09-28T16:00:00.000Z" });
+  assert.strictEqual(hRow.DG, 3); assert.strictEqual(hRow.TG, 0);
+  assert.strictEqual(hRow.Counted, 4, "the tablet's own count rides with the row");
+  assert.ok(!("WeekTarget" in hRow));
+  assert.ok(!("Counted" in ST.dayFields(ST.GLASS, "hotmelt", { day: "2026-09-28", who: "Person B",
+    counts: { DG: "1" }, counted: null })), "an unknown count is simply not written");
+  const offHot = ST.dayOfficeFields(ST.daySheetOf(ST.GLASS, "hotmelt").counts,
+    { counts: { DG: "2", TG: "1", Counted: "99" }, note: "x", who: "the office", at: "t",
+      day: "2026-01-01", Who: "Person Z", Title: "nope" });
+  assert.deepStrictEqual(Object.keys(offHot).sort(), ["DG", "EditedAt", "EditedBy", "Note", "TG"],
+    "the office's correction of a hotmelt sheet never carries Counted, Day, Who or Title");
+  pass("hotmelting and welding: their columns, their Title keys, and no WeekTarget on either");
+
+  /* the tablet's count: this person, this stage, this LOCAL day, net of minus taps, never below 0 */
+  const L = (who, stage, from, to, at) => ({ who: who, stage: stage, from: from, to: to, at: at });
+  const loc = (d, h, m) => new Date(2026, 8, d, h, m).toISOString();
+  const lines = [L("Person B", "hotmelt", 0, 5, loc(28, 9, 0)), L("Person B", "hotmelt", 5, 4, loc(28, 9, 5)),
+                 L("Person B", "hotmelt", 0, 7, loc(27, 23, 30)),     // yesterday, late
+                 L("Person B", "hotmelt", 4, 6, loc(28, 0, 30)),      // today, just after midnight
+                 L("Person B", "cut", 0, 9, loc(28, 10, 0)), L("Person C", "hotmelt", 0, 8, loc(28, 10, 0))];
+  assert.strictEqual(ST.dayCounted(lines, "Person B", "2026-09-28", "hotmelt"), 6, "5 - 1 + 2, today only");
+  assert.strictEqual(ST.dayCounted(lines, "Person B", "2026-09-27", "hotmelt"), 7, "23:30 is the day before");
+  assert.strictEqual(ST.dayCounted(lines, "person b", "2026-09-28", "hotmelt"), 6, "the name as the log has it");
+  assert.strictEqual(ST.dayCounted([L("Person B", "hotmelt", 5, 0, loc(28, 9, 0))], "Person B", "2026-09-28", "hotmelt"),
+    0, "a day of nothing but minus taps is nought, never below");
+  assert.strictEqual(ST.dayCounted([], "Person B", "2026-09-28", "hotmelt"), 0);
+  pass("ST.dayCounted: today only, this person only, this stage only, net of minus taps, floor 0, local day");
+
   reset();
+  const TODAY_H = ST.dayKey(new Date());
+  LOGITEMS.length = 0;
+  LOGITEMS.push(item({ Title: "R5301", Station: "Glass", GlassType: "DG", Stage: "hotmelt", From: 0, To: 3,
+                       Who: "Person B", At: new Date().toISOString() }),
+                item({ Title: "R5302", Station: "Glass", GlassType: "DG", Stage: "hotmelt", From: 3, To: 5,
+                       Who: "Person B", At: new Date().toISOString() }),
+                item({ Title: "R5302", Station: "Glass", GlassType: "DG", Stage: "hotmelt", From: 5, To: 4,
+                       Who: "Person B", At: new Date().toISOString() }),
+                item({ Title: "R5303", Station: "Welding", GlassType: "X", Stage: "hotmelt", From: 0, To: 50,
+                       Who: "Person B", At: new Date().toISOString() }));
+  DAYITEMS = [];
+  delete mem.cw_stationdayq; delete mem.cw_daysheetdraft;
   const hot = newStation("hotmelt");
   const H = code => vm.runInContext(code, hot);
-  H("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAYQ = {}; TOKEN = null;");
+  const ASKED = [];
+  let answer = false;
+  hot.confirm = m => { ASKED.push(String(m)); return answer; };
+  H("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAY.q = {}; TOKEN = null;");
   await H("readPeople()");
   await H("readList()");
   H("pickPerson(PEOPLE.find(p => p.name === 'Person B'))");
   assert.strictEqual(H("PAGE_STAGE"), "hotmelt");
-  assert.strictEqual(H("daySheet()"), null, "the hotmelting tablet has no day sheet");
-  assert.strictEqual(await H("readDay()"), false, "asking it to read one does nothing");
-  assert.strictEqual(await H("saveDay()"), false, "and there is nothing to save");
-  H("render()");
-  assert.strictEqual(dayReq().length, 0, "not one request for the day sheets list");
-  assert.strictEqual(targetReq().length, 0, "and none for the target list either");
-  pass("a stage whose definition has no day sheet draws no button and asks for neither list");
+  assert.ok(H("!!DAY.sheet()"), "the hotmelting tablet has a day sheet now");
+  assert.strictEqual(await H("DAY.read()"), true, "and reads the day sheets list");
+  assert.strictEqual(targetReq().length, 0, "but never the target list: hotmelting has no target");
+  assert.strictEqual(H("DAY.counted()"), 4, "4 units counted: 3 + 2 - 1, Glass lines only");
+  H("DAY.open()");
+  assert.ok(/You hotmelted <strong class="tab">4<\/strong> units today/.test(H("DAY.html()")),
+    "the sheet opens with “You hotmelted 4 units today”");
+  assert.ok(H("DAY.html()").indexOf("dayweek") < 0, "and no week-against-target line");
+  assert.ok(H("DAY.html()").indexOf('data-daycount="DG"') > 0 && H("DAY.html()").indexOf('data-daycount="TG"') > 0,
+    "two boxes, DG and TG");
+  assert.strictEqual(H("DAY.draftNow().counts.DG"), undefined, "neither is prefilled");
+  H("DAY.draftNow().counts.DG = '5'; DAY.saveDraft();");
+  assert.strictEqual(await H("DAY.save()"), false, "Back on the question saves nothing");
+  assert.ok(ASKED[0].indexOf("You counted 4 taps today and typed 5. Save anyway?") === 0,
+    "one plain question when the typed total is not the count");
+  answer = true;
+  assert.strictEqual(await H("DAY.save()"), true, "Save anyway saves");
+  await settle();
+  const hPosts = dayReq().filter(r => r.method === "POST");
+  assert.strictEqual(hPosts.length, 1);
+  const hb = hPosts[0].body.fields;
+  assert.strictEqual(hb.Title, "Glass|hotmelt|" + TODAY_H + "|Person B");
+  assert.strictEqual(hb.DG, 5); assert.strictEqual(hb.TG, 0); assert.strictEqual(hb.Counted, 4);
+  assert.ok(!("WeekTarget" in hb), "no WeekTarget");
+  assert.strictEqual(await H("DAY.save()"), false, "and a second save the same day is refused");
+  assert.strictEqual(mem.cw_stationdayq === undefined || mem.cw_stationdayq === "{}", true, "nothing left owed");
+  assert.strictEqual(targetReq().length, 0, "not one request for the target list in the whole hotmelt run");
+  pass("the hotmelting sheet: its own count, DG and TG typed, one question on a mismatch, Counted saved");
 
   /* ================= 7. the office ================= */
   reset();
-  A("STATION_ITEMS = null; STATION_OK = null; DAY_ITEMS = null; DAY_OK = null; TARGET_ITEMS = null;");
+  A("STATION_ITEMS = null; STATION_OK = null; for (const k in DAYST) delete DAYST[k]; DAYSEL = '';");
   DAYITEMS = [daySheetRow("2026-09-21", "Person A", [12, 4, 0, 2], { WeekTarget: 250 }),
               daySheetRow("2026-09-22", "Person A", [10, 0, 0, 0], { WeekTarget: 250, Note: "machine down" }),
               daySheetRow("2026-09-14", "Person A", [30, 0, 0, 0], { WeekTarget: 200 })];
   assert.ok(await A("readDaySheets()"), "the office reads them");
-  assert.strictEqual(A("DAY_OK"), true);
+  assert.strictEqual(A("dayS().ok"), true);
   assert.strictEqual(A("dayTargetNow().target"), 250);
   assert.strictEqual(A("dayStage()"), "cut", "the stage comes off the definition");
   pass("the office reads the day sheets and the target from the station's own site");
@@ -937,7 +1025,7 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   [src("app.js"), src("station.js")].forEach(f =>
     assert.ok(!/savedAt\s*\)?\s*\.slice\(11/.test(f) && !/savedAt\).slice\(11, 16\)/.test(f),
       "neither screen slices the ISO stamp for a clock any more"));
-  assert.ok(src("station.js").indexOf("ST.stClock(saved.savedAt)") >= 0,
+  assert.ok(src("station-ui.js").indexOf("ST.stClock(saved.savedAt)") >= 0,
     "the tablet's “saved 14:02” is the same helper");
   /* the window is left OPEN: the edit-mode test below carries on with it */
   pass("“saved at” is the local clock on both screens, from one helper, never a slice of the stamp");
@@ -971,6 +1059,50 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   A("$('#dayhost').remove();");
   pass("D3: no repaint of the table while a correction is being typed; the paint is owed, not lost");
 
+  /* ===== 2026-09-28: one window, every station-stage with a sheet ===== */
+  assert.deepStrictEqual(JSON.parse(A("JSON.stringify(dayStages().map(o => o.id))")),
+    ["Glass|cut", "Glass|hotmelt", "Welding|weld"], "Cutting, Hotmelting and Welding, off the definitions");
+  A("state.board = null; openDaySheets();");
+  assert.strictEqual(A("dayPick().id"), "Glass|cut", "from the job list it opens on Cutting");
+  A("$('#dayhost').remove(); state.board = 'welding'; openDaySheets();");
+  assert.strictEqual(A("dayPick().id"), "Welding|weld", "from the welding board, on Welding");
+  A("$('#dayhost').remove(); state.board = null;");
+  /* hotmelting: DG, TG, the tablet's count read-only beside them, no target */
+  reset();
+  DAYITEMS = DAYITEMS.concat([item({ Title: "Glass|hotmelt|2026-09-22|Person B", Station: "Glass",
+    Stage: "hotmelt", Day: "2026-09-22", Who: "Person B", DG: 3, TG: 1, Counted: 5, Note: "",
+    SavedAt: "2026-09-22T16:00:00.000Z" }, "88")]);
+  A("openDaySheets('Glass|hotmelt');");
+  await settle();
+  A("DAYF.from = '2026-09-01'; DAYF.to = '2026-09-30'; renderDaySheets();");
+  const hwin = REG["dayhost"] ? REG["dayhost"].innerHTML : "";
+  assert.ok(hwin.indexOf('id="dsstage"') >= 0, "a station-stage selector at the top");
+  assert.ok(hwin.indexOf('id="dstarget"') < 0, "no target control for a stage without one");
+  assert.ok(html("#dsbody").indexOf(">Counted<") >= 0 && html("#dsbody").indexOf("≠ counted") >= 0,
+    "Counted is shown, and a sheet whose DG + TG is not it is marked");
+  assert.ok(html("#dsbody").indexOf("Person A") < 0, "and cutting's sheets are not hotmelting's");
+  assert.strictEqual(targetReq().length, 0, "the target list is not even asked for");
+  reset();
+  assert.strictEqual(await A("saveDayEdit('88', { counts: { DG: '4', TG: '1' }, note: 'fixed' })"), true);
+  const hp = dayReq().filter(r => r.method === "PATCH");
+  assert.strictEqual(hp.length, 1);
+  assert.deepStrictEqual(Object.keys(hp[0].body).sort(), ["DG", "EditedAt", "EditedBy", "Note", "TG"],
+    "a correction PATCHes the counts, the note and the Edited pair - never Counted");
+  assert.strictEqual(LOGGED.length, 1);
+  assert.strictEqual(LOGGED[0].job, "(Glass hotmelt)");
+  assert.strictEqual(LOGGED[0].what, "Day sheet corrected");
+  assert.strictEqual(await A("saveDayTarget('50')"), false, "and no target can be saved for it");
+  A("$('#dayhost').remove();");
+  /* welding's list lives in Floor stations; this fake has no such site, so it
+     is the quiet explained state - on Welding only */
+  A("openDaySheets('Welding|weld');");
+  await settle();
+  assert.strictEqual(A("dayS('Welding|weld').ok"), false, "welding's own state says it could not read");
+  assert.strictEqual(A("dayS('Glass|cut').ok"), true, "while cutting's is untouched");
+  A("$('#dayhost').remove(); DAYSEL = '';");
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+  pass("the Day sheets window: a selector per station-stage, Counted beside DG/TG, no target where none");
+
   reset();
   A("state.board = 'glass'; STATION_OK = true;");
   A("openStationReport('glass');");
@@ -993,11 +1125,11 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   reset();
   DAY_EXISTS = false; TARGET_EXISTS = false;
   CW._resetListIds(); delete mem.cw_listids;
-  A("DAY_ITEMS = null; DAY_OK = null; DAY_SOFT = 0; DAY_SOFT_MS = 0; TARGET_OK = null;");
+  A("for (const k in DAYST) delete DAYST[k]; DAYSEL = '';");
   assert.strictEqual(await A("readDaySheets()"), null);
-  assert.strictEqual(A("DAY_OK"), false);
-  assert.ok(String(A("DAY_WHY")).indexOf("Station day sheets") >= 0, "it says which list, plainly");
-  assert.ok(String(A("DAY_WHY")).indexOf("nothing in the Excel file is involved") >= 0,
+  assert.strictEqual(A("dayS().ok"), false);
+  assert.ok(String(A("dayS().why")).indexOf("Station day sheets") >= 0, "it says which list, plainly");
+  assert.ok(String(A("dayS().why")).indexOf("nothing in the Excel file is involved") >= 0,
     "and that the Excel file has nothing to do with it");
   A("STATION_OK = true; STATION_ITEMS = " + JSON.stringify(ITEMS) + ";");
   const board = A("stationBoardHtml()");
@@ -1009,11 +1141,11 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   reset();
   const cut2 = newStation("cut");
   const S2 = code => vm.runInContext(code, cut2);
-  S2("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAYQ = {};");
-  assert.strictEqual(await S2("readDay()"), false);
-  assert.strictEqual(S2("DAY_OK"), false);
-  assert.ok(String(S2("DAY_WHY")).indexOf("Station day sheets") >= 0);
-  assert.ok(String(S2("daySheetHtml()")).indexOf("Station day sheets") < 0 ||
+  S2("SITEID = " + JSON.stringify(SITE) + "; QUEUE = {}; LOGQ = {}; DAY.q = {};");
+  assert.strictEqual(await S2("DAY.read()"), false);
+  assert.strictEqual(S2("DAY.ok"), false);
+  assert.ok(String(S2("DAY.why")).indexOf("Station day sheets") >= 0);
+  assert.ok(String(S2("DAY.html()")).indexOf("Station day sheets") < 0 ||
             S2("!!PERSON") === false, "the tablet says so inside the sheet, not over the board");
   DAY_EXISTS = true; TARGET_EXISTS = true;
   CW._resetListIds(); delete mem.cw_listids;
@@ -1181,17 +1313,31 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
     "the default is ST.dayKey of the stamp: the local day, wherever this runs");
   pass("D9: log lines, notes and day sheets are all bucketed by the same local day");
 
-  /* a stage with no day sheet: the same report, without the day-sheet columns */
-  const hotRep = stationReport(ST.GLASS, "hotmelt", GDATA, P);
+  /* hotmelting has a day sheet since 2026-09-28: its two counts and a total,
+     and NO target columns (target: false); Days carries the tablet's count */
+  const hotSheet = { id: "h1", fields: { Title: "Glass|hotmelt|2026-09-22|Person B", Station: "Glass",
+    Stage: "hotmelt", Day: "2026-09-22", Who: "Person B", DG: 3, TG: 1, Counted: 5, Note: "",
+    SavedAt: "2026-09-22T16:00:00.000Z" } };
+  const hotDays = ST.dayRows([hotSheet], ST.daySheetOf(ST.GLASS, "hotmelt").counts, { stage: "hotmelt" });
+  assert.strictEqual(hotDays[0].counted, 5, "dayRows carries Counted");
+  const hotRep = stationReport(ST.GLASS, "hotmelt", Object.assign({}, GDATA, { days: hotDays }), P);
   const hs = hotRep[0];
   assert.deepStrictEqual(hs.columns, ["Week", "Week starting", "Units recorded", "Jobs touched",
-                                      "Jobs complete at this stage"],
-    "no counts, no total, no target: this stage has no day sheet");
+                                      "Jobs complete at this stage", "DG units hotmelted",
+                                      "TG units hotmelted", "Units total"],
+    "its two counts and their total, and no Target or Difference: this stage has no target");
   assert.ok(hs.head.some(h => h[0] === "Stage" && h[1] === "Hotmelting"));
   assert.strictEqual(hs.rows[0][2], 3, "and it counts its own stage's units");
-  assert.ok(hotRep.find(s => s.name === "Days").columns.indexOf("Note") < 0,
-    "the Days sheet loses its day-sheet columns too");
-  pass("glass hotmelting gets the same report with the day-sheet columns left out");
+  const hDays = hotRep.find(s => s.name === "Days");
+  assert.ok(hDays.columns.indexOf("Counted by the tablet") > 0, "the Days sheet carries the tablet's count");
+  const hLine = hDays.rows.find(r => r[0] === "2026-09-22");
+  assert.strictEqual(hLine[hDays.columns.indexOf("Counted by the tablet")], 5);
+  assert.strictEqual(hLine[hDays.columns.indexOf("DG units hotmelted")], 3);
+  /* a stage with no day sheet at all (tuff) still gets the report without them */
+  const tuffRep = stationReport(ST.GLASS, "tuff", GDATA, P);
+  assert.deepStrictEqual(tuffRep[0].columns, ["Week", "Week starting", "Units recorded", "Jobs touched",
+                                              "Jobs complete at this stage"], "no day sheet, no day-sheet columns");
+  pass("glass hotmelting's report carries its DG/TG sheet and Counted, and no target columns");
 
   /* WELDING goes through the same function with no branch in it: its own
      definition answers for its board, one row per job AND product group.
@@ -1235,8 +1381,18 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   assert.strictEqual(wj.rows[0][wj.columns.indexOf("Frames done")], 10);
   assert.strictEqual(wj.rows[1][wj.columns.indexOf("Sashes done")], 1);
   const ws = wrep[0];
+  /* 2026-09-28: welding has a day sheet (squares), and no target */
   assert.deepStrictEqual(ws.columns, ["Week", "Week starting", "Units recorded", "Jobs touched",
-                                      "Jobs complete at this stage"], "and no day-sheet columns at all");
+                                      "Jobs complete at this stage", "Squares welded today", "Squares total"],
+    "its squares and their total, and no target columns");
+  const wdSheet = ST.dayRows([{ id: "w1", fields: { Title: "Welding|weld|2026-09-22|Person C", Station: "Welding",
+    Stage: "weld", Day: "2026-09-22", Who: "Person C", Squares: 41, Note: "", SavedAt: "2026-09-22T16:00:00.000Z" } }],
+    WELDC.WELD.daySheets.weld.counts, { stage: "weld" });
+  const wrep2 = stationReport(WELDC.WELD, "weld", Object.assign({}, WDATA, { days: wdSheet }), P);
+  const wd2 = wrep2.find(s => s.name === "Days");
+  assert.strictEqual(wd2.rows.find(r => r[0] === "2026-09-22")[wd2.columns.indexOf("Squares welded today")], 41,
+    "the welding report's Days sheet carries the squares from the day sheet");
+  assert.ok(wd2.columns.indexOf("Counted by the tablet") < 0, "and no tablet count: welding keeps none");
   assert.ok(ws.head.some(h => h[0] === "Station" && h[1] === "Welding"));
   /* the units really are counted, and both parts are in them: 10 frames + 8
      sashes + 1 sash = 19 over the week, on two days */

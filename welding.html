@@ -103,6 +103,56 @@
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
                        border-radius:6px; min-height:48px; padding:0 13px; font-size:13px;
                        white-space:nowrap; flex:none }
+  /* End of day (2026-09-28): on row 1 beside the two capsules, the Cutting
+     page's own button. 44 px: it is tapped, unlike the capsules beside it. */
+  #daybtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+            border-radius:24px; min-height:44px; padding:0 13px; font-size:14px; font-weight:600;
+            white-space:nowrap; flex:none }
+  /* with End of day on row 1, a portrait tablet (up to 900 px) has no room for
+     "updated 12 s ago" as well as the person's name: it goes, and the capsules
+     pad less, rather than the name vanishing or the row pushing the page
+     sideways (measured 700-1100 px, 2026-09-28) */
+  @media (max-width:900px){
+    #upd { display:none }
+    #gtotalf, #gtotals { padding:7px 11px }
+  }
+
+  /* ---- the end-of-day sheet (2026-09-28) --------------------------------
+     The glass cutting page's sheet (station-ui.js), with its own CSS copied
+     from glass.html: one full-width column, a label above its box, 16px or
+     more in every box so iOS never zooms the page on focus. */
+  .dayform, .dayread { display:grid; gap:12px; margin-top:6px }
+  .dayrow { display:grid; gap:5px }
+  .dayl { font-size:14px; color:var(--ink-2) }
+  .dayv { font-size:20px; font-weight:700 }
+  .daybox { width:100%; min-height:56px; border:1px solid var(--line); border-radius:7px;
+            background:var(--surface-2); color:var(--ink); font-size:20px; font-weight:600;
+            font-family:inherit; padding:0 13px }
+  .daytext { width:100%; min-height:80px; border:1px solid var(--line); border-radius:7px;
+             background:var(--surface-2); color:var(--ink); font-size:16px; font-family:inherit;
+             padding:10px 11px; resize:vertical }
+  .daytot { font-size:17px; color:var(--ink-2); margin-top:4px }
+  .daytot strong { color:var(--ink); font-size:20px }
+  .daybad { font-size:13.5px; font-weight:600; color:var(--urgent) }
+  .daysave { min-height:60px; border:1px solid var(--line); border-radius:8px;
+             background:var(--surface-2); color:var(--ink); font-size:18px; font-weight:600 }
+  .daysave:active { background:var(--line-soft) }
+  .daysave:disabled { opacity:.4; cursor:default }
+  .daysaid { font-size:13.5px; color:var(--ink-3); margin-top:2px }
+  .daysaid.owed { color:var(--fab); font-weight:600 }
+  .daysaid.owed.bad { color:var(--urgent) }
+  .daycarry { font-size:13px; color:var(--fab); font-weight:600; margin:-8px 0 12px }
+  .daynote { font-size:14px; line-height:1.45; white-space:pre-wrap; color:var(--ink-2);
+             background:var(--surface-2); border:1px solid var(--line-soft); border-radius:6px;
+             padding:9px 11px }
+  .dayhist { margin-top:22px; display:grid; gap:7px }
+  .dayhist .kick { font-size:11px; letter-spacing:.15em; text-transform:uppercase;
+                   font-weight:600; color:var(--ink-4) }
+  .dayline { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; font-size:13px;
+             color:var(--ink-3); border-bottom:1px solid var(--line-soft); padding-bottom:6px }
+  .daylday { font-weight:600; color:var(--ink-2) }
+  .dayltot { margin-left:auto; font-size:16px; font-weight:700; color:var(--ink) }
+  .cphint { font-size:13px; color:var(--ink-3); line-height:1.5; margin-bottom:10px }
 
   /* ---- the board ----
      ONE COLUMN, ALWAYS. The first build put the cards in a two-column grid from
@@ -332,6 +382,7 @@
     <span id="whois"></span>
     <span id="gtotalf" hidden></span>
     <span id="gtotals" hidden></span>
+    <button id="daybtn" hidden>End of day</button>
     <span id="upd"></span>
   </div>
   <div class="toprow">

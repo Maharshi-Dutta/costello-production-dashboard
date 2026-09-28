@@ -213,6 +213,8 @@ function newStation() {
   };
   sb.globalThis = sb;
   vm.createContext(sb);
+  /* glass.html loads station-ui.js before station.js (the day sheet lives there) */
+  vm.runInContext(src("station-ui.js"), sb, { filename: "station-ui.js" });
   vm.runInContext(src("station.js"), sb, { filename: "station.js" });
   return sb;
 }

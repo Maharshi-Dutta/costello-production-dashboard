@@ -312,6 +312,8 @@ function newStation(search) {
   };
   sb.globalThis = sb;
   vm.createContext(sb);
+  /* glass.html loads station-ui.js before station.js (the day sheet lives there) */
+  vm.runInContext(src("station-ui.js"), sb, { filename: "station-ui.js" });
   vm.runInContext(src("station.js"), sb, { filename: "station.js" });
   return sb;
 }
@@ -2653,6 +2655,13 @@ const person = (name, stages, pin, active, station) =>
   A("STATION_LOG = " + JSON.stringify(winLog) + "; STATION_PEOPLE = " + JSON.stringify(pItems) + ";");
   openStationLog("");
   let lw = logFrame();
+  /* 2026-09-28: from the job list the window opens on every station ("Floor
+     log"); a board opens it on its own station */
+  assert.ok(lw.indexOf("Floor log") > 0, "opened from the job list, it is every station's log");
+  assert.ok(lw.indexOf('id="lgstation"') > 0, "with a station filter");
+  /* the rest of this block is about the GLASS log, so it is opened on Glass */
+  openStationLog("", "Glass");
+  lw = logFrame();
   assert.ok(lw.indexOf("Glass station log") > 0);
   assert.ok(lw.indexOf("Person A") > 0 && lw.indexOf("Person B") > 0 && lw.indexOf("Person C") > 0);
   assert.ok(lw.indexOf("Person Z") < 0, "another station's line is not this station's log");
@@ -2735,6 +2744,29 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(logBody().indexOf('data-j="R5310"') < 0);
   REG["lhost"].remove();
   pass("a log line for a job that is no longer on the sheet cannot close the window and open nothing");
+
+  /* 2026-09-28: the office's own edits of a floor counter are in the window,
+     marked "office", out of CHANGES (the Dashboard Log already downloaded);
+     a station whose log cannot be read is one quiet line and the rest show */
+  A("CHANGES_WAS = CHANGES; CHANGES = [{ at: '07/09/2026 09:00', who: 'the office', job: 'R5303', " +
+    "what: 'Glass cutting', from: '2', to: '3', shared: true }, { at: '07/09/2026 09:01', who: 'the office', " +
+    "job: 'R5303', what: 'Phase', from: '1', to: '2', shared: true }];");
+  A("STATION_LOG = " + JSON.stringify(winLog) + "; STATION_LOG_OK = true;");
+  openStationLog("", "");
+  assert.ok(/lgoffice[^>]*>office</.test(logBody()), "the office's edit is in the list, marked office");
+  assert.ok(logBody().indexOf("the office") > 0, "with who made it");
+  assert.ok(logBody().indexOf("Phase") < 0, "and a line that is not a floor counter edit is not");
+  assert.ok(/Person A <strong class="tab">8<\/strong>/.test(logCounts()),
+    "an office edit is a line, never units in a person's count");
+  A("LOGF.station = 'Glass'; paintStationLog();");
+  assert.ok(/lgoffice/.test(logBody()), "the glass filter keeps glass's office edits");
+  A("STATION_LOG_OK = false; STATION_LOG_WHY = 'the glass log list is missing'; LOGF.station = '';");
+  paintStationLog();
+  assert.ok(logBody().indexOf("Glass: the glass log list is missing") >= 0, "one quiet line for that station");
+  assert.ok(/lgoffice/.test(logBody()), "and what else there is still shows");
+  A("CHANGES = CHANGES_WAS; STATION_LOG_OK = true; STATION_LOG_WHY = '';");
+  REG["lhost"].remove();
+  pass("the Floor log window: office edits marked office, per-station quiet lines, the rest still shown");
 
   /* ---- the poll ---- */
   A("STATION_LOG = " + JSON.stringify(lItems) + "; STATION_LOG_OK = true; STATION_OK = true;");

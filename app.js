@@ -1628,80 +1628,112 @@ function stationNotesReadIfNeeded(then) {
 const DAY_RETRY_MS = 60000;           // a passing failure: the workshop wifi
 const DAY_MISS_RETRY_MS = 300000;     // no such list, or no permission yet
 const DAY_POLL_MS = 20000;            // ... and how often the open window re-reads
-let DAY_ITEMS = null, TARGET_ITEMS = null;
-let DAY_OK = null, DAY_WHY = "";      // null not looked · false missing/refused · true read it
-let TARGET_OK = null, TARGET_WHY = "";
-let DAY_SOFT = 0, DAY_SOFT_MS = 0, DAY_AT = 0;
-let dayReading = null;
-function dayAgain(ms) { DAY_SOFT = Date.now(); DAY_SOFT_MS = ms; }
-const dayDue = () => !DAY_SOFT || Date.now() - DAY_SOFT >= DAY_SOFT_MS;
+/* ONE STATE PER STATION-STAGE (2026-09-28): Cutting and Hotmelting read
+   `Station day sheets` in the workbook's own site, Welding reads the one in
+   `Floor stations`. Each is read only when the window is open on it (or the
+   glass board's week line asks for Cutting), and each fails on its own: a
+   missing welding list says so on Welding and nowhere else. */
+const DAYST = {};                     // id -> that stage's own read state
+let DAYSEL = "";                      // the stage the window is on, "" = the first
+function dayS(id) {
+  const k = id || dayPick() && dayPick().id || "";
+  return DAYST[k] || (DAYST[k] = { items: null, ok: null, why: "", tItems: null, tOk: null, tWhy: "",
+                                   soft: 0, softMs: 0, at: 0, reading: null, rows: null, rowsOf: false });
+}
+function dayAgain(s, ms) { s.soft = Date.now(); s.softMs = ms; }
+const dayDue = s => !s.soft || Date.now() - s.soft >= s.softMs;
 
-/* WHICH STATION-STAGE HAS A DAY SHEET comes off the definition and nothing
-   else: today that is Glass · Cutting, and a second one appears here by being
-   defined rather than by anything in this file changing. */
-const dayStage = () => (typeof ST === "undefined" || !ST.daySheetStages ? ""
-                        : (ST.daySheetStages(ST.GLASS) || [])[0] || "");
-const daySheetNow = () => (dayStage() ? ST.daySheetOf(ST.GLASS, dayStage()) : null);
-const dayCountCols = () => (daySheetNow() || { counts: [] }).counts;
+/* WHICH STATION-STAGES HAVE A DAY SHEET comes off the definitions and nothing
+   else (stationDefs(): glass, welding, glazing, fabrication - only the first
+   two define any). `id` is "<Station>|<stage>", the Day sheets window's own
+   selector value. */
+function dayStages() {
+  if (typeof ST === "undefined" || !ST.daySheetStages) return [];
+  const out = [];
+  stationDefs().forEach(s => (ST.daySheetStages(s.def) || []).forEach(stage => {
+    const word = typeof s.def.stageLabel === "function" ? s.def.stageLabel(stage) : stage;
+    out.push({ id: s.def.name + "|" + stage, key: s.key, def: s.def, stage: stage, word: word });
+  }));
+  return out;
+}
+const dayPick = id => { const all = dayStages(); return all.find(o => o.id === (id || DAYSEL)) || all[0] || null; };
+const dayStage = id => (dayPick(id) || {}).stage || "";
+const daySheetNow = id => { const p = dayPick(id); return p ? ST.daySheetOf(p.def, p.stage) : null; };
+const dayCountCols = id => (daySheetNow(id) || { counts: [] }).counts;
+const dayTargetOn = id => { const p = dayPick(id); return !!p && ST.dayHasTarget(p.def, p.stage); };
+/** The glass board's week line is Cutting's - the first glass stage with a target. */
+const dayBoardId = () => ((dayStages().find(o => o.key === "glass" && ST.dayHasTarget(o.def, o.stage))) || {}).id || "";
 
-function dayTrouble(e) {
+function dayTrouble(s, e) {
   const m = (e && e.message) || String(e || "");
   const consent = /permission needed/.test(m);
   const missing = !!(CW.isMissing && CW.isMissing(e));
-  if (DAY_OK !== true) {
-    DAY_OK = false;
-    DAY_WHY = consent ? STATION_NEED_CONSENT : missing ? ST.DAY_MISSING_OFFICE : ST.DAY_UNREACHABLE;
+  if (s.ok !== true) {
+    s.ok = false;
+    s.why = consent ? STATION_NEED_CONSENT : missing ? ST.DAY_MISSING_OFFICE : ST.DAY_UNREACHABLE;
   }
-  dayAgain(consent || missing ? DAY_MISS_RETRY_MS : DAY_RETRY_MS);
+  dayAgain(s, consent || missing ? DAY_MISS_RETRY_MS : DAY_RETRY_MS);
   console.warn("[station] could not read the day sheets:", m);
 }
-async function readDaySheets() {
+async function readDaySheets(id) {
   if (typeof CW === "undefined" || !CW || typeof CW.listItems !== "function") return null;
-  if (typeof ST === "undefined" || !ST.dayRows || !dayStage()) return null;
+  const p = dayPick(id);
+  if (typeof ST === "undefined" || !ST.dayRows || !p) return null;
+  const s = dayS(p.id);
   try {
     if (CW.hasListConsent && !(await CW.hasListConsent())) {
-      DAY_OK = false; DAY_WHY = STATION_NEED_CONSENT; dayAgain(DAY_MISS_RETRY_MS); return null;
+      s.ok = false; s.why = STATION_NEED_CONSENT; dayAgain(s, DAY_MISS_RETRY_MS); return null;
     }
-    const siteId = await CW.stationSite(glassSite());
-    if (!siteId) { DAY_OK = false; DAY_WHY = STATION_SITE_MISSING; dayAgain(DAY_MISS_RETRY_MS); return null; }
-    const items = await CW.listItems(ST.DAY_LIST, { siteId: siteId, fields: ST.dayFieldsFor(ST.GLASS, dayStage()) });
+    /* the station's own site: glass "own" (the workbook's), welding "floor" */
+    const siteId = await CW.stationSite(p.def.site);
+    if (!siteId) { s.ok = false; s.why = STATION_SITE_MISSING; dayAgain(s, DAY_MISS_RETRY_MS); return null; }
+    const items = await CW.listItems(ST.DAY_LIST, { siteId: siteId, fields: ST.dayFieldsFor(p.def, p.stage) });
     if (items == null) {
-      DAY_OK = false; DAY_WHY = ST.DAY_MISSING_OFFICE; dayAgain(DAY_MISS_RETRY_MS); return null;
+      s.ok = false; s.why = ST.DAY_MISSING_OFFICE; dayAgain(s, DAY_MISS_RETRY_MS); return null;
     }
-    DAY_ITEMS = items; DAY_OK = true; DAY_WHY = ""; DAY_SOFT = 0; DAY_SOFT_MS = 0; DAY_AT = Date.now();
-    /* the target is its own list and can be missing on its own: no target set
-       is a thing the window says in words, not a reason to hide the sheets */
-    const t = await CW.listItems(ST.TARGET_LIST, { siteId: siteId, fields: ST.TARGET_FIELDS });
-    if (t == null) { TARGET_OK = false; TARGET_WHY = ST.TARGET_MISSING_OFFICE; }
-    else { TARGET_ITEMS = t; TARGET_OK = true; TARGET_WHY = ""; }
+    s.items = items; s.ok = true; s.why = ""; s.soft = 0; s.softMs = 0; s.at = Date.now();
+    /* the target is its own list and can be missing on its own - and a stage
+       with no target (`target: false`) never asks for it at all */
+    if (ST.dayHasTarget(p.def, p.stage)) {
+      const t = await CW.listItems(ST.TARGET_LIST, { siteId: siteId, fields: ST.TARGET_FIELDS });
+      if (t == null) { s.tOk = false; s.tWhy = ST.TARGET_MISSING_OFFICE; }
+      else { s.tItems = t; s.tOk = true; s.tWhy = ""; }
+    }
     return items;
   } catch (e) {
-    dayTrouble(e);
+    dayTrouble(s, e);
     return null;
   }
 }
-/** One read shared by every caller, on the same guard the notes channel uses. */
-function dayReadIfNeeded(then) {
-  const retry = !!(DAY_SOFT && Date.now() - DAY_SOFT >= DAY_SOFT_MS);
-  if (DAY_OK !== null && !retry) return;
+/** One read per stage shared by every caller, on the notes channel's guard. */
+function dayReadIfNeeded(then, id) {
+  const p = dayPick(id);
+  if (!p) return;
+  const s = dayS(p.id);
+  const retry = !!(s.soft && Date.now() - s.soft >= s.softMs);
+  if (s.ok !== null && !retry) return;
   if (typeof ST === "undefined" || typeof CW === "undefined" || !CW ||
-      typeof CW.listItems !== "function" || !dayStage()) return;
-  if (retry) { DAY_SOFT = 0; DAY_SOFT_MS = 0; }
-  if (!dayReading)
-    dayReading = readDaySheets().then(r => { dayReading = null; return r; },
-                                      () => { dayReading = null; });
-  dayReading.then(() => { if (then) then(); });
+      typeof CW.listItems !== "function") return;
+  if (retry) { s.soft = 0; s.softMs = 0; }
+  if (!s.reading)
+    s.reading = readDaySheets(p.id).then(r => { s.reading = null; return r; },
+                                         () => { s.reading = null; });
+  s.reading.then(() => { if (then) then(); });
 }
 /* parsed once per version of the list, exactly as the log's rows are */
-let DAYROWS = null, DAYROWS_OF = false;
-function dayRowsNow() {
-  if (DAYROWS_OF === DAY_ITEMS) return DAYROWS;
-  DAYROWS_OF = DAY_ITEMS;
-  DAYROWS = ST.dayRows(DAY_ITEMS || [], dayCountCols(),
-                       { station: ST.STATION_NAME, stage: dayStage() });
-  return DAYROWS;
+function dayRowsNow(id) {
+  const p = dayPick(id);
+  if (!p) return [];
+  const s = dayS(p.id);
+  if (s.rowsOf === s.items) return s.rows;
+  s.rowsOf = s.items;
+  s.rows = ST.dayRows(s.items || [], dayCountCols(p.id), { station: p.def.name, stage: p.stage });
+  return s.rows;
 }
-const dayTargetNow = () => (TARGET_ITEMS ? ST.targetOf(TARGET_ITEMS, ST.STATION_NAME, dayStage()) : null);
+const dayTargetNow = id => {
+  const p = dayPick(id), s = p ? dayS(p.id) : null;
+  return s && s.tItems && ST.dayHasTarget(p.def, p.stage) ? ST.targetOf(s.tItems, p.def.name, p.stage) : null;
+};
 
 /* ---- which notes the office has already been told about ---------------------
    This has to survive a reload, and review finding 1 is why. `CHANGES` is
@@ -2231,12 +2263,16 @@ async function stationPoll() {
        retry clock comes round. Its own try, like the notes: a list that will
        not answer must not be able to stall the glass colours. */
     try {
-      if ($("#dayhost") && DAY_OK === true && Date.now() - DAY_AT >= DAY_POLL_MS) {
-        if (await readDaySheets()) paintDaySheets();
-      } else if (DAY_OK !== true && dayDue()) {
-        dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); });
+      /* the stage the window is on, or the glass board's week line when it is
+         not open - never every stage on every tick */
+      const dsId = $("#dayhost") ? (dayPick() || {}).id : dayBoardId();
+      const ds = dsId ? dayS(dsId) : null;
+      if (ds && $("#dayhost") && ds.ok === true && Date.now() - ds.at >= DAY_POLL_MS) {
+        if (await readDaySheets(dsId)) paintDaySheets();
+      } else if (ds && ds.ok !== true && dayDue(ds)) {
+        dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); }, dsId);
       }
-    } catch (e) { dayTrouble(e); }
+    } catch (e) { console.warn("[station] day sheets poll:", (e && e.message) || e); }
     STATION_ERR = "";
     if (moved) {
       redrawStation();
@@ -6648,10 +6684,17 @@ const stationReportPick = v => stationReportOptions().find(o => o.value === v) |
     screen, exactly as the Default export is. */
 function stationReportData(pick) {
   if (!pick) return {};
+  /* the day sheets of THIS station-stage, as the Day sheets window last read
+     them (a report is made of what is on screen and fetches nothing); a stage
+     with no sheet, or one not read yet, has none */
+  const dayId = pick.def.name + "|" + pick.stage;
+  const dayOf = dayPick(dayId);
+  const days = dayOf && dayOf.id === dayId && dayS(dayId).ok === true ? dayRowsNow(dayId) : [];
+  const target = (function () { const t = dayOf && dayOf.id === dayId ? dayTargetNow(dayId) : null; return t ? t.target : null; })();
   if (pick.key === "welding") {
     return { board: weldRecordsNow().cards, log: weldLogRowsNow(),
              notes: ST.commentRows(WELD_NOTES || [], { station: WELDC.WELD_NAME }),
-             days: [], target: null };
+             days: days, target: null };
   }
   /* glazing has no day sheet and no target: the definition says so (no
      `daySheets` entry), and stationReport leaves those columns out on its own */
@@ -6668,8 +6711,7 @@ function stationReportData(pick) {
   return { board: ST.jobBoard(STATION_ITEMS || []),
            log: STATION_LOG_OK === true ? logRowsNow() : [],
            notes: ST.commentRows(STATION_NOTES || [], { station: ST.STATION_NAME }),
-           days: DAY_OK === true && pick.stage === dayStage() ? dayRowsNow() : [],
-           target: (function () { const t = dayTargetNow(); return t ? t.target : null; })() };
+           days: days, target: target };
 }
 /** The Report chip on a station board: open the export window on this
     template, with that station already picked. */
@@ -8479,10 +8521,48 @@ function wireStationBoard(host) {
    what leaves this dashboard is still governed by export.js and its standing
    test, and the floor's log is not part of it.                              */
 const LOG_PAGE = 200;
-let LOGF = { who: "", stage: "", job: "", day: "", show: LOG_PAGE };
+let LOGF = { station: "", who: "", stage: "", job: "", day: "", show: LOG_PAGE };
 
-function openStationLog(job) {
-  LOGF = { who: "", stage: "", job: job || "", day: "", show: LOG_PAGE };
+/* EVERY STATION, AND THE OFFICE'S OWN EDITS (2026-09-28, docs/specs/2026-09-28-
+   day-sheets-welding-hotmelt-floor-log.md, owner's option B). Each station's
+   `Station log` lines come from the list this page already reads for that
+   station's board (glass in the workbook's site, the other three in `Floor
+   stations`); the office's edits of a floor counter are `Dashboard Log` lines
+   out of CHANGES, which came with the workbook download the page already
+   made. Nothing new is read, and nothing here writes anything. */
+const LOG_BOARD_STATION = { glass: "Glass", welding: "Welding", glazing: "Glazing", fabrication: "Fabrication" };
+/** Each station's lines, as far as they have been read: [{ station, rows, ok, why }]. */
+function floorLogSources() {
+  const out = [{ station: "Glass", ok: STATION_LOG_OK, why: STATION_LOG_WHY || STATION_LOG_MISSING,
+                 rows: STATION_LOG_OK === true ? logRowsNow() : [] }];
+  if (typeof WELDC !== "undefined")
+    out.push({ station: "Welding", ok: WELD_LOG_OK, why: WELD_LOG_WHY, rows: WELD_LOG_OK === true ? weldLogRowsNow() : [] });
+  if (typeof GLZC !== "undefined")
+    out.push({ station: "Glazing", ok: GLZ_LOG_OK, why: GLZ_LOG_WHY, rows: GLZ_LOG_OK === true ? glzLogRowsNow() : [] });
+  if (typeof FABC !== "undefined")
+    out.push({ station: "Fabrication", ok: FABR_LOG_OK, why: FABR_LOG_WHY, rows: FABR_LOG_OK === true ? fabrLogRowsNow() : [] });
+  return out;
+}
+/** Read each station's log the way its own board does, once, if nobody has. */
+function floorLogReadIfNeeded(then) {
+  stationLogReadIfNeeded(then);
+  if (typeof WELDC !== "undefined") weldReadIfNeeded(then);
+  if (typeof GLZC !== "undefined") glzReadIfNeeded(then);
+  if (typeof FABC !== "undefined") fabrReadIfNeeded("log", then);
+}
+/** The merged list for the window's station filter, newest first by time. */
+function floorLogAll() {
+  const src = floorLogSources().map(s => ({ station: s.station, rows: s.rows }));
+  return ST.floorLogMerge(src, ST.officeLogRows(CHANGES || []), LOGF.station);
+}
+const floorLogLabel = r => (r.office && r.stage === "day sheet" ? "Day sheet"
+                            : ST.floorStageLabel(r.station, r.stage) || "—");
+
+/** `station`: "Glass" / "Welding" / "Glazing" / "Fabrication", or "" for all.
+    Left out, it is the board on screen's station, and All from the job list. */
+function openStationLog(job, station) {
+  const st = station != null ? station : (LOG_BOARD_STATION[state.board] || "");
+  LOGF = { station: st, who: "", stage: "", job: job || "", day: "", show: LOG_PAGE };
   renderStationLog();
   stationTick();                 // somebody is looking at the floor now: poll fast
 }
@@ -8493,33 +8573,39 @@ function openStationLog(job) {
 function renderStationLog() {
   let host = $("#lhost");
   if (!host) { host = document.createElement("div"); host.id = "lhost"; document.body.appendChild(host); }
-  /* both reads answer once and are shared: opening this window three times
-     asks SharePoint once, exactly as the drawer does */
-  stationLogReadIfNeeded(() => { if ($("#lhost")) paintStationLog(); });
+  /* every read answers once and is shared: opening this window three times
+     asks SharePoint once, exactly as the drawer does. One station's list that
+     is missing or unreadable is one quiet line; the rest still show */
+  floorLogReadIfNeeded(() => { if ($("#lhost")) paintStationLog(); });
   stationPeopleIfNeeded(() => { if ($("#lhost")) renderStationLog(); });
 
   const names = {};
-  const rowsNow = STATION_LOG_OK === true ? logRowsNow() : [];
-  ST.stationPeople(STATION_PEOPLE || [], ST.STATION_NAME).forEach(p => { names[p.name] = 1; });
+  const rowsNow = floorLogAll();
+  (LOGF.station ? [LOGF.station] : ST.FLOOR_LOG_STATIONS).forEach(st =>
+    ST.stationPeople(STATION_PEOPLE || [], st).forEach(p => { names[p.name] = 1; }));
   rowsNow.forEach(r => { if (r.who) names[r.who] = 1; });
-  /* the stages this station has, plus any the LINES ON SCREEN carry that it no
-     longer does - `glazed`, written before 2026-09-21, is still in the log and
-     a filter that could not name it would be a filter that hides history. It is
-     an option in a dropdown and nothing more: no tap, no seed, no whitelist. */
-  const stages = ST.ALL_STAGES.slice();
-  rowsNow.forEach(r => {
-    if (r.stage && !stages.some(s => s[0] === r.stage)) stages.push([r.stage, ST.stageLabel(r.stage)]);
-  });
+  /* the stages the chosen station has, plus any the LINES ON SCREEN carry that
+     it no longer does - `glazed`, written before 2026-09-21, is still in the
+     glass log and a filter that could not name it would hide history. It is an
+     option in a dropdown and nothing more: no tap, no seed, no whitelist. */
+  const stages = [];
+  const addStage = (k, label) => { if (k && !stages.some(s => s[0] === k)) stages.push([k, label]); };
+  (LOGF.station ? [LOGF.station] : ST.FLOOR_LOG_STATIONS).forEach(st =>
+    (ST.FLOOR_LOG_STAGES[st] || []).forEach(s => addStage(s[0], s[1])));
+  rowsNow.forEach(r => addStage(r.stage, floorLogLabel(r)));
   const opt = (v, label, now) => '<option value="' + esc(v) + '"' + (now === v ? " selected" : "") +
     '>' + esc(label) + '</option>';
 
   host.innerHTML = '<div class="scrim" id="lscrim"></div><div class="logwin">' +
-    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Glass station log</div>' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">' +
+      esc(LOGF.station ? LOGF.station + " station log" : "Floor log") + '</div>' +
       '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px"><span id="lgcount"></span> \u00b7 ' +
       'who moved which counter, and when. ' +
-      'Written by the tablet only \u2014 the Excel file is not involved.</div></div>' +
+      'Written by the tablets, plus the office\u2019s own edits \u2014 the Excel file is not involved.</div></div>' +
       '<button class="ghost" id="lclose">Close</button></div>' +
     '<div class="lgbar">' +
+      '<select class="txt" id="lgstation">' + opt("", "All stations", LOGF.station) +
+        ST.FLOOR_LOG_STATIONS.map(st => opt(st, st, LOGF.station)).join("") + '</select>' +
       '<select class="txt" id="lgwho">' + opt("", "Everyone", LOGF.who) +
         Object.keys(names).sort().map(nm => opt(nm, nm, LOGF.who)).join("") + '</select>' +
       '<select class="txt" id="lgstage">' + opt("", "Every stage", LOGF.stage) +
@@ -8539,11 +8625,14 @@ function renderStationLog() {
      into is never rebuilt and the caret stays where it was put */
   const set = (id, key) => { const el = $(id); if (el) el.onchange = () => { LOGF[key] = el.value; LOGF.show = LOG_PAGE; paintStationLog(); }; };
   set("#lgwho", "who"); set("#lgstage", "stage"); set("#lgday", "day");
+  /* a station changes which stages there are: the bar is rebuilt, the stage let go */
+  const sb = $("#lgstation");
+  if (sb) sb.onchange = () => { LOGF.station = sb.value; LOGF.stage = ""; LOGF.show = LOG_PAGE; renderStationLog(); };
   const jb = $("#lgjob");
   if (jb) jb.oninput = () => { LOGF.job = jb.value; LOGF.show = LOG_PAGE; paintStationLog(); };
   const cl = $("#lgclear");
   if (cl) cl.onclick = () => {
-    LOGF = { who: "", stage: "", job: "", day: "", show: LOG_PAGE };
+    LOGF = { station: LOGF.station, who: "", stage: "", job: "", day: "", show: LOG_PAGE };
     renderStationLog();                                // the bar's own values have changed
   };
   paintStationLog();
@@ -8553,9 +8642,13 @@ function renderStationLog() {
 /** The rows and the counts, and nothing else on the window. */
 function paintStationLog() {
   if (!$("#lhost")) return;
-  const all = STATION_LOG_OK === true ? logRowsNow() : [];
+  const all = floorLogAll();
   const rows = ST.logFilter(all, LOGF);
-  const counts = ST.logCounts(rows);
+  /* the counts are units of the floor's own work: an office edit is a line
+     in the list, never units in a person's total */
+  const counts = ST.logCounts(rows.filter(r => !r.office));
+  const labelOf = {};
+  rows.forEach(r => { if (!(r.stage in labelOf)) labelOf[r.stage] = floorLogLabel(r); });
   const head = $("#lgcount");
   if (head) head.textContent = rows.length + " line" + (rows.length === 1 ? "" : "s");
 
@@ -8566,7 +8659,7 @@ function paintStationLog() {
     (counts.people.length ? '<div class="lgcrow"><span class="kick">Per person</span>' +
       counts.people.map(chip).join("") + '</div>' : "") +
     (counts.stages.length ? '<div class="lgcrow"><span class="kick">Per stage</span>' +
-      counts.stages.map(c => chip({ key: ST.stageLabel(c.key), units: c.units, lines: c.lines })).join("") +
+      counts.stages.map(c => chip({ key: labelOf[c.key] || c.key, units: c.units, lines: c.lines })).join("") +
       '</div>' : "");
 
   /* a job number is only a way into the drawer when the job is still on the
@@ -8575,14 +8668,26 @@ function paintStationLog() {
   const jobCell = j => (byId(j)
     ? '<button class="stn jump" data-j="' + esc(j) + '" style="border:0;cursor:pointer">' + esc(j) + '</button>'
     : '<span class="stn" title="not on the sheet any more">' + esc(j) + '</span>');
-  const body = STATION_LOG_OK === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
-    : STATION_LOG_OK !== true ? '<div class="empty" style="line-height:1.6">' +
-        esc(STATION_LOG_WHY || STATION_LOG_MISSING) + '</div>'
-    : !rows.length ? '<div class="empty">No line on the floor\u2019s log matches that.</div>'
-    : '<div class="lglist">' + rows.slice(0, LOGF.show).map(r =>
-        '<div class="lgrow">' + jobCell(r.job) +
-          '<span class="ell">' + esc(ST.stageLabel(r.stage)) + '</span>' +
-          '<span class="tab">' + r.from + ' \u2192 ' + r.to + '</span>' +
+  /* each station's own state: still reading, or missing - one quiet line each,
+     and the stations that did answer still show */
+  const srcs = floorLogSources().filter(s => !LOGF.station || s.station === LOGF.station);
+  const waiting = srcs.filter(s => s.ok === null);
+  const failed = srcs.filter(s => s.ok === false);
+  const notes = failed.map(s => '<div class="cphint">' + esc((LOGF.station ? "" : s.station + ": ") +
+    (s.why || STATION_LOG_MISSING)) + '</div>').join("");
+  const jobOrDash = r => (r.job ? jobCell(r.job) : '<span class="stn">\u2014</span>');
+  const body = !rows.length && waiting.length && !failed.length
+      ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
+    : !rows.length && failed.length && failed.length === srcs.length
+      ? '<div class="empty" style="line-height:1.6">' + (LOGF.station
+          ? esc(failed[0].why || STATION_LOG_MISSING) : notes) + '</div>'
+    : !rows.length ? notes + '<div class="empty">No line on the floor\u2019s log matches that.</div>'
+    : notes + '<div class="lglist">' + rows.slice(0, LOGF.show).map(r =>
+        '<div class="lgrow">' + jobOrDash(r) +
+          '<span class="ell">' + esc(floorLogLabel(r)) +
+            (!LOGF.station && r.station ? ' <span class="lgst">' + esc(r.station) + '</span>' : "") +
+            (r.office ? '<span class="lgoffice" title="' + esc(r.what) + '">office</span>' : "") + '</span>' +
+          '<span class="tab">' + esc(r.from) + ' \u2192 ' + esc(r.to) + '</span>' +
           '<span class="ell">' + esc(r.who || "\u2014") + '</span>' +
           '<span class="tab lgwhen">' + esc(stWhen(r.at)) + '</span>' +
         '</div>').join("") +
@@ -8624,9 +8729,17 @@ function dayDefaultFilters() {
   const from = ST.dayKey(new Date(Date.parse(mon + "T12:00:00Z") - 7 * 86400000));
   return { from: from, to: today, weekday: "", week: "", who: "", show: DAY_PAGE };
 }
-const dayStageWords = () => (ST.GLASS.stageLabel ? ST.GLASS.stageLabel(dayStage()) : dayStage());
+const dayStageWords = id => (dayPick(id) || {}).word || dayStage(id);
+/* the "(Glass cut)" job column of the two Dashboard Log lines this window
+   writes - the Floor log reads the station back out of it */
+const dayLogJob = () => "(" + ((dayPick() || {}).def || ST.GLASS).name + " " + dayStage() + ")";
 
-function openDaySheets() {
+/** `stage` is a station-stage id ("Welding|weld"); none = the current board's
+    own stage if it has one, else the first (Cutting). */
+function openDaySheets(stage) {
+  const board = (dayStages().find(o => o.key === state.board) || {}).id;
+  DAYSEL = (stage && dayStages().some(o => o.id === stage) ? stage : board) ||
+           ((dayStages()[0] || {}).id || "");
   DAYF = dayDefaultFilters();
   DAYEDIT = "";
   renderDaySheets();
@@ -8640,30 +8753,38 @@ function renderDaySheets() {
   if (!DAYF) DAYF = dayDefaultFilters();
   dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); });
 
-  const rows = DAY_OK === true ? dayRowsNow() : [];
+  const s = dayS();
+  const rows = s.ok === true ? dayRowsNow() : [];
   const names = {}, weeks = {};
   rows.forEach(r => { if (r.who) names[r.who] = 1; if (r.week) weeks[r.week] = r.monday; });
   const opt = (v, label, now) => '<option value="' + esc(v) + '"' + (now === v ? " selected" : "") +
     '>' + esc(label) + '</option>';
   const t = dayTargetNow();
   const unit = (daySheetNow() || {}).unit || "sheets";
+  const pick = dayPick();
 
   host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="logwin">' +
     '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">' +
-      esc(ST.STATION_NAME + " " + dayStageWords().toLowerCase() + " day sheets") + '</div>' +
+      esc(pick.def.name + " " + dayStageWords().toLowerCase() + " day sheets") + '</div>' +
       '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px"><span id="dscount"></span> · ' +
       'filled in on the tablet at the end of each day. The office is the only one who can correct ' +
       'a saved sheet — the Excel file is not involved.</div></div>' +
       '<button class="ghost" id="dsclose">Close</button></div>' +
-    '<div class="lgbar">' +
+    /* WHICH STATION-STAGE (2026-09-28), off the definitions */
+    '<div class="lgbar"><span class="kick">Station</span>' +
+      '<select class="txt" id="dsstage">' + dayStages().map(o =>
+        opt(o.id, o.word, pick.id)).join("") + '</select>' +
+    '</div>' +
+    /* the weekly target, only for a stage that has one */
+    (dayTargetOn() ? '<div class="lgbar">' +
       '<span class="kick">Weekly ' + esc(dayStageWords().toLowerCase()) + ' target</span>' +
       '<input class="txt" id="dstarget" type="number" min="0" step="1" style="width:110px" value="' +
-        esc(t ? String(t.target) : "") + '"' + (TARGET_OK === false ? " disabled" : "") + '>' +
-      '<button class="chip" id="dstsave"' + (TARGET_OK === false ? " disabled" : "") + '>Save target</button>' +
-      '<span style="font-size:12px;color:var(--ink-4)">' + esc(TARGET_OK === false
-        ? (TARGET_WHY || ST.TARGET_MISSING_OFFICE)
+        esc(t ? String(t.target) : "") + '"' + (s.tOk === false ? " disabled" : "") + '>' +
+      '<button class="chip" id="dstsave"' + (s.tOk === false ? " disabled" : "") + '>Save target</button>' +
+      '<span style="font-size:12px;color:var(--ink-4)">' + esc(s.tOk === false
+        ? (s.tWhy || ST.TARGET_MISSING_OFFICE)
         : t ? "set by " + t.by + " on " + String(t.at).slice(0, 10) : "no target set yet") + '</span>' +
-    '</div>' +
+    '</div>' : "") +
     '<div class="lgbar">' +
       '<input class="txt" id="dsfrom" type="date" value="' + esc(DAYF.from || "") + '" aria-label="from">' +
       '<span style="font-size:12px;color:var(--ink-4)">to</span>' +
@@ -8679,7 +8800,7 @@ function renderDaySheets() {
     '</div>' +
     '<div class="logbody" id="dsbody"></div>' +
     '<div class="foot"><span>One sheet per person per day — ' + esc(unit) +
-      ' cut, and anything that got in the way</span>' +
+      ', and anything that got in the way</span>' +
     '<span>Corrections are logged in Dashboard Log</span></div></div>';
 
   $("#dscrim").onclick = closeWin(host);
@@ -8689,6 +8810,11 @@ function renderDaySheets() {
   set("#dsweek", "week"); set("#dswho", "who");
   const cl = $("#dsclear");
   if (cl) cl.onclick = () => { DAYF = dayDefaultFilters(); renderDaySheets(); };
+  const sg = $("#dsstage");
+  if (sg) sg.onchange = () => {
+    DAYSEL = sg.value; DAYEDIT = ""; DAYF = dayDefaultFilters();
+    renderDaySheets();
+  };
   const ts = $("#dstsave");
   if (ts) ts.onclick = () => {
     const box = $("#dstarget");
@@ -8715,10 +8841,17 @@ function paintDaySheets(force) {
      it - which is the one thing that may rebuild the body while one is open */
   if (DAYEDIT && !force) { DAY_PAINT_OWED = true; return; }
   DAY_PAINT_OWED = false;
+  const pick = dayPick(), s = dayS();
   const counts = dayCountCols();
-  const all = DAY_OK === true ? dayRowsNow() : [];
-  const rows = ST.dayRows(DAY_ITEMS || [], counts,
-    { station: ST.STATION_NAME, stage: dayStage(), from: DAYF.from, to: DAYF.to,
+  const hasTarget = dayTargetOn();
+  /* the tablet's own count, read-only beside what was typed (hotmelting) */
+  const counted = !!(daySheetNow() || {}).counted;
+  const countedCell = r => '<span class="dsnum tab" title="counted on the tablet from the taps">' +
+    (r.counted == null ? "—" : r.counted) +
+    (r.counted != null && r.counted !== r.total ? ' <span class="dsdiff">≠ counted</span>' : "") + '</span>';
+  const all = s.ok === true ? dayRowsNow() : [];
+  const rows = ST.dayRows(s.items || [], counts,
+    { station: pick.def.name, stage: pick.stage, from: DAYF.from, to: DAYF.to,
       weekday: DAYF.weekday, week: DAYF.week, who: DAYF.who });
   const live = dayTargetNow();
   const weeks = ST.dayWeeks(rows, counts, live ? live.target : null);
@@ -8733,6 +8866,7 @@ function paintDaySheets(force) {
         cell(r.day + " · " + r.weekday.slice(0, 3), "dsday") + cell(r.who, "dswho") +
         counts.map(c => '<input class="txt dsedit" data-dsc="' + esc(c[0]) + '" type="number" min="0" step="1" ' +
           'value="' + esc(String(r.counts[c[0]] || 0)) + '" aria-label="' + esc(c[1]) + '">').join("") +
+        (counted ? countedCell(r) : "") +
         '<span class="dstot tab">' + r.total + '</span>' +
         '<input class="txt dsedit dsnote" data-dsnote="1" value="' + esc(r.note) + '" ' +
           'maxlength="' + ST.DAY_NOTE_MAX + '" aria-label="note">' +
@@ -8743,6 +8877,7 @@ function paintDaySheets(force) {
     return '<div class="dsrow">' +
       cell(r.day + " · " + r.weekday.slice(0, 3), "dsday") + cell(r.who, "dswho") +
       counts.map(c => '<span class="dsnum tab">' + (r.counts[c[0]] || 0) + '</span>').join("") +
+      (counted ? countedCell(r) : "") +
       '<span class="dstot tab">' + r.total + '</span>' +
       '<span class="dsnotetext">' + esc(r.note) + '</span>' +
       '<span class="dsacts"><span class="dswhen">' + esc(ST.stClock(r.savedAt)) +
@@ -8759,18 +8894,19 @@ function paintDaySheets(force) {
   const headRow = '<div class="dsrow dshead">' +
     cell("Day", "dsday") + cell("Who", "dswho") +
     counts.map(c => '<span class="dsnum">' + esc(ST.dayCountShort(c)) + '</span>').join("") +
+    (counted ? '<span class="dsnum">Counted</span>' : "") +
     '<span class="dstot">Total</span>' +
     '<span class="dsnotetext">Note</span>' +
     '<span class="dsacts">Saved</span></div>';
 
   let shown = 0;
-  const body = DAY_OK === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
-    : DAY_OK !== true ? '<div class="empty" style="line-height:1.6">' +
-        esc(DAY_WHY || ST.DAY_MISSING_OFFICE) + '</div>'
+  const body = s.ok === null ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
+    : s.ok !== true ? '<div class="empty" style="line-height:1.6">' +
+        esc(s.why || ST.DAY_MISSING_OFFICE) + '</div>'
     : !rows.length ? '<div class="empty">No day sheet matches that.</div>'
     /* how many count columns this station's definition has, handed to the CSS
        once: the grid is the same shape for a station with three or with five */
-    : '<div class="dslist" style="--dsn:' + counts.length + '">' + headRow + weeks.map(g => {
+    : '<div class="dslist" style="--dsn:' + (counts.length + (counted ? 1 : 0)) + '">' + headRow + weeks.map(g => {
         const mine = g.rows.slice(0, Math.max(0, DAYF.show - shown));
         shown += mine.length;
         if (!mine.length) return "";
@@ -8780,8 +8916,9 @@ function paintDaySheets(force) {
           '<div class="dssub">' +
             '<span class="dsday">Week total</span><span class="dswho"></span>' +
             counts.map(c => '<span class="dsnum tab">' + g.counts[c[0]] + '</span>').join("") +
+            (counted ? '<span class="dsnum"></span>' : "") +
             '<span class="dstot tab">' + g.total + '</span>' +
-            '<span class="dsnotetext">' + (g.target == null ? "no target set"
+            '<span class="dsnotetext">' + (!hasTarget ? "" : g.target == null ? "no target set"
               : "target " + g.target + " · " +
                 (g.diff >= 0 ? "+" + g.diff : String(g.diff))) + '</span>' +
             '<span class="dsacts"></span></div>';
@@ -8816,7 +8953,7 @@ function paintDaySheets(force) {
 /** The office's weekly target: one upsert of `Station targets`, one log line.
     The office is the only writer of this list, and the tablet reads it. */
 async function saveDayTarget(raw) {
-  if (typeof ST === "undefined" || !CW || !CW.listUpsert || !dayStage()) return false;
+  if (typeof ST === "undefined" || !CW || !CW.listUpsert || !dayStage() || !dayTargetOn()) return false;
   /* A TARGET IS AT LEAST ONE (review, 2026-09-21). Clearing the box and tapping
      Save used to write a target of NOUGHT - which is not "no target": every
      week measured against it reads "+44" as if the week had beaten it, and the
@@ -8833,16 +8970,17 @@ async function saveDayTarget(raw) {
   if (had && had.target === n) return false;         // nothing to say
   dayWriting = true;
   try {
-    const siteId = await CW.stationSite(glassSite());
+    const pick = dayPick();
+    const siteId = await CW.stationSite(pick.def.site);
     if (!siteId) throw new Error(STATION_SITE_MISSING);
-    const title = ST.targetTitle(ST.STATION_NAME, dayStage());
+    const title = ST.targetTitle(pick.def.name, pick.stage);
     await CW.listUpsert(ST.TARGET_LIST, title,
                         ST.targetFields(n, feedWho(), new Date().toISOString()),
                         { siteId: siteId, fields: ST.TARGET_FIELDS });
     dayWriting = false;
     await readDaySheets();
     renderDaySheets();
-    noteChange("(" + ST.STATION_NAME + " " + dayStage() + ")",
+    noteChange(dayLogJob(),
                dayStageWords() + " weekly target", had ? String(had.target) : "", String(n));
     toast("Weekly target saved");
     return true;
@@ -8877,16 +9015,17 @@ async function saveDayEdit(id, got) {
      typed the moment Save was tapped. Only the button is greyed, in place. */
   dayEditBusy(true);
   try {
-    const siteId = await CW.stationSite(glassSite());
+    const pick = dayPick();
+    const siteId = await CW.stationSite(pick.def.site);
     if (!siteId) throw new Error(STATION_SITE_MISSING);
     await CW.listPatch(ST.DAY_LIST, row.id, body,
-                       { siteId: siteId, fields: ST.dayFieldsFor(ST.GLASS, dayStage()) });
+                       { siteId: siteId, fields: ST.dayFieldsFor(pick.def, pick.stage) });
     dayWriting = false;
     DAYEDIT = "";
     await readDaySheets();
     paintDaySheets();
     const after = counts.reduce((n, c) => n + (Number(body[c[0]]) || 0), 0);
-    noteChange("(" + ST.STATION_NAME + " " + dayStage() + ")", "Day sheet corrected",
+    noteChange(dayLogJob(), "Day sheet corrected",
                row.day + " " + row.who + ": " + row.total, String(after));
     toast("Day sheet corrected");
     return true;
@@ -8912,14 +9051,15 @@ function dayEditBusy(on) {
     for the stage that has a day sheet. It is the whole floor's week, not one
     person's: the office reads the station, not the cutter. */
 function dayWeekLineHtml() {
-  if (typeof ST === "undefined" || !dayStage()) return "";
-  dayReadIfNeeded(() => { if (state.board === "glass") redrawStation(); });
-  if (DAY_OK !== true) return "";
+  const id = typeof ST === "undefined" ? "" : dayBoardId();     // Cutting's, not the window's
+  if (!id) return "";
+  dayReadIfNeeded(() => { if (state.board === "glass") redrawStation(); }, id);
+  if (dayS(id).ok !== true) return "";
   const wk = ST.isoWeek(ST.dayKey(new Date()));
-  const done = ST.dayWeekTotal(dayRowsNow(), "", wk.key);
-  const t = dayTargetNow();
-  const unit = (daySheetNow() || {}).unit || "sheets";
-  return '<div class="stweek">' + esc(dayStageWords()) + ' this week: <strong class="tab">' + done +
+  const done = ST.dayWeekTotal(dayRowsNow(id), "", wk.key);
+  const t = dayTargetNow(id);
+  const unit = (daySheetNow(id) || {}).unit || "sheets";
+  return '<div class="stweek">' + esc(dayStageWords(id)) + ' this week: <strong class="tab">' + done +
     '</strong>' + (t ? ' of <strong class="tab">' + t.target + '</strong>' : "") + ' ' + esc(unit) +
     (t ? "" : " · no target set") +
     ' <button class="chip" id="stweekbtn">Day sheets</button></div>';
@@ -9804,7 +9944,7 @@ function renderDrawer() {
   /* the one thing in the Glass station section that can be clicked: the same
      log, unfiltered from this job rather than cut off at twelve lines */
   const full = host.querySelector("[data-stfull]");
-  if (full) full.onclick = () => openStationLog(full.dataset.stfull);
+  if (full) full.onclick = () => openStationLog(full.dataset.stfull, "Glass");   // the glass timeline's own log
   const dtog = $("#datetog");
   if (dtog) dtog.onclick = () => { state.collapsed.dates = state.collapsed.dates ? 0 : 1; saveUi(); renderDrawer(); };
   /* the Alerts section is not part of Edit mode: it never touches the

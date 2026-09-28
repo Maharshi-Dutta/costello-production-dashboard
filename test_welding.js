@@ -104,8 +104,11 @@ const tick = ms => new Promise(r => setTimeout(r, ms == null ? 1 : ms));
 function item(fields, id) {
   return { id: String(id == null ? NEXTID++ : id), fields: Object.assign({}, fields) };
 }
+const DAY_ID = "list-station-day-sheets";           // added 2026-09-28, only for section 12b
+let DAYITEMS = [];
 const storeFor = id => id === WELD_ID ? WITEMS : id === PEOPLE_ID ? PEOPLEITEMS
-                     : id === LOG_ID ? LOGITEMS : id === CMT_ID ? CMTITEMS : null;
+                     : id === LOG_ID ? LOGITEMS : id === CMT_ID ? CMTITEMS
+                     : id === DAY_ID ? DAYITEMS : null;
 
 function routeFlist(method, path, body) {
   const rest = path.slice(FLISTS_PATH.length);
@@ -128,6 +131,9 @@ function routeFlist(method, path, body) {
     return ok({ value: store.map(x => ({ id: x.id, fields: Object.assign({}, x.fields) })) });
   if (FAIL_ONCE && method !== "GET") { FAIL_ONCE--; return { status: 403, body: { error: { code: "accessDenied" } } }; }
   if (method === "POST" && tail === "") {
+    /* enforce-unique-values on a day sheet's Title, as the owner sets it */
+    if (id === DAY_ID && store.some(x => String(x.fields.Title) === String(((body || {}).fields || {}).Title)))
+      return { status: 400, body: { error: { code: "invalidRequest", message: "The value must be unique" } } };
     const made = item((body && body.fields) || {});
     store.push(made);
     return ok({ id: made.id, fields: made.fields });
@@ -950,6 +956,70 @@ JOBS.blockNames = NAMES;
   assert.deepStrictEqual(glassPeople[0].stages, ["cut", "hotmelt"],
     "and omitting the stage list is still the glass station's four");
   pass("the people list is filtered by station and by that station's own stages");
+
+  /* ================= 12b. the end-of-day sheet (2026-09-28) =================
+     The welding tablet itself, in a context of its own as the page runs it:
+     one number (squares), saved once per person per day to `Station day
+     sheets` in the FLOOR STATIONS site, no target, no workbook. */
+  const wpage = src("welding.html");
+  const row1 = wpage.slice(wpage.indexOf('<div class="toprow">'), wpage.lastIndexOf('<div class="toprow">'));
+  assert.ok(row1.indexOf('id="gtotals"') > 0 && row1.indexOf('<button id="daybtn" hidden>End of day</button>') > 0,
+    "End of day is on the header's first row, beside the Frames / Sashes capsules");
+  FLISTS.push({ id: DAY_ID, displayName: "Station day sheets" });
+  CW._resetListIds(); delete mem.cw_listids;
+  SITE_EXISTS = true;
+  DAYITEMS.length = 0;
+  const wsb = {
+    console: console, setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    localStorage: global.localStorage, document: global.document,
+    window: { location: { origin: "http://localhost" }, scrollTo() {} }, location: { reload() {} },
+    fetch: async () => ({ ok: false }),
+    /* the real graph.js, but never signed in: boot() shows the gate and stops */
+    CW: Object.assign(Object.create(CW), { initAuth: async () => null }),
+    ST: ST, STU: STU, WELDC: W, confirm: () => true, alert: () => {}
+  };
+  wsb.globalThis = wsb;
+  vm.createContext(wsb);
+  vm.runInContext(src("welding.js"), wsb, { filename: "welding.js" });
+  const WS = c => vm.runInContext(c, wsb);
+  WS("SITEID = " + JSON.stringify(FSITE) + "; READY = true; PEOPLE_READ = true; " +
+     "PERSON = { name: 'Person C', stages: ['weld'] };");
+  WS("render()");
+  assert.strictEqual(EL["#daybtn"].hidden, false, "the button shows once somebody is signed in");
+  reset();
+  assert.strictEqual(await WS("DAY.read()"), true, "the day sheets are read");
+  assert.ok(REQ.some(r => r.path.indexOf(FLISTS_PATH + "/" + DAY_ID + "/items") === 0),
+    "from the Floor stations site's own `Station day sheets`");
+  assert.strictEqual(WS("DAY.target"), null, "and there is no target to know");
+  WS("DAY.open(); DAY.draftNow().counts.Squares = '41'; DAY.saveDraft();");
+  const wsheet = String(EL["#board"].innerHTML);
+  assert.ok(wsheet.indexOf("Squares welded today") > 0, "one box: squares welded today");
+  assert.ok(wsheet.indexOf("dayweek") < 0 && wsheet.indexOf("no target set") < 0, "and no target line");
+  assert.ok(mem.cw_welddayq !== undefined || mem.cw_welddaydraft !== undefined, "its own storage keys");
+  assert.strictEqual(mem.cw_daysheetdraft, undefined, "never the glass page's draft");
+  reset();
+  assert.strictEqual(await WS("DAY.save()"), true);
+  await settle(200);
+  const wposts = REQ.filter(r => r.method === "POST" && r.path.indexOf(FLISTS_PATH + "/" + DAY_ID) === 0);
+  assert.strictEqual(wposts.length, 1, "one POST, to the Floor stations list");
+  const wf = wposts[0].body.fields;
+  assert.strictEqual(wf.Title, "Welding|weld|" + ST.dayKey(new Date()) + "|Person C");
+  assert.strictEqual(wf.Station, "Welding");
+  assert.strictEqual(wf.Squares, 41);
+  assert.ok(!("WeekTarget" in wf) && !("Counted" in wf), "no WeekTarget, no Counted");
+  reset();
+  assert.strictEqual(await WS("DAY.save()"), false, "a second save the same day is refused");
+  await settle(100);
+  assert.strictEqual(REQ.filter(r => r.method === "POST").length, 0, "with no request at all");
+  assert.ok(String(WS("DAY.html()")).indexOf(ST.DAY_SAVED_WORDS) > 0, "and the sheet reads as saved");
+  WS("switchPerson()");
+  assert.strictEqual(WS("DAY.shown"), false, "switching person closes the sheet");
+  assert.strictEqual(ALLREQ.filter(r => /\/workbook|\/drive/.test(r.path)).length, 0, "no workbook call");
+  assert.ok(REQ.concat(ALLREQ).filter(r => r.path.indexOf(DAY_ID) >= 0).every(r => r.method === "GET" || r.method === "POST"),
+    "the tablet only ever reads or appends the day sheets");
+  FLISTS = FLISTS.filter(l => l.id !== DAY_ID);
+  CW._resetListIds(); delete mem.cw_listids;
+  pass("the welding End of day: one squares box, saved once a day to Floor stations, no target, no workbook");
 
   /* ================= 13. the gates ================= */
   const wsrc = src("welding-core.js") + src("welding.js");

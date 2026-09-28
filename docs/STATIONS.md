@@ -371,24 +371,40 @@ at the end of the day; the office reads it, may correct it, and never deletes.
 
 Like the three lists above it is **every** station's — which stage has a sheet,
 and what is counted on it, is the station **definition**'s business
-(`ST.GLASS.daySheets`), not this list's. Today only `Glass` · `cut` has one.
+(`ST.GLASS.daySheets`, `WELDC.WELD.daySheets`), not this list's. Since
+2026-09-28 ([`docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md`](specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md))
+three stages have one: `Glass` · `cut` (four counts, weekly target),
+`Glass` · `hotmelt` (DG, TG and the tablet's own `Counted`, no target) and
+`Welding` · `weld` (Squares, no target).
+
+**There are two lists of this name**, same columns, `Title` unique on both:
+the glass stages write the one in the **workbook's own site** (where the glass
+lists still live, `ST.GLASS.site = "own"`), welding writes the one in
+**`Floor stations`** (`WELD.site = "floor"`). Each tablet and the office's Day
+sheets window resolve it through the station's own site. A stage with
+`target: false` never reads `Station targets`, so `Floor stations` needs no
+`Station targets` list.
 
 | column | type | written by | meaning |
 |---|---|---|---|
 | Title | text, **unique** | tablet | `<Station>\|<Stage>\|<YYYY-MM-DD>\|<Who>` — the key. A second save for the same key is refused by SharePoint as well as by the page |
-| Station | text | tablet | `Glass` |
-| Stage | text | tablet | `cut` |
+| Station | text | tablet | `Glass` or `Welding` |
+| Stage | text | tablet | `cut`, `hotmelt` or `weld` |
 | Day | text | tablet | `YYYY-MM-DD`, the tablet's **local** date at save |
 | Who | text | tablet | the person signed in at the picker |
-| Clear, KGlass, Satin, Obscure | number | tablet; office on a correction | sheets cut, whole numbers ≥ 0; blank on paper is 0 |
+| Clear, KGlass, Satin, Obscure | number | tablet; office on a correction | cutting: sheets cut, whole numbers ≥ 0; blank on paper is 0 |
+| DG, TG | number | tablet; office on a correction | hotmelting (2026-09-28): DG / TG units hotmelted that day, typed by the person |
+| Counted | number | tablet only | hotmelting: the tablet's own count of this person's hotmelt taps that day (sum of To − From over their `Station log` lines, floor 0) at the moment of saving. Not written when the log could not be read. **The office never corrects it** |
+| Squares | number | tablet; office on a correction | welding (2026-09-28): squares welded that day, from the welding machine's own display |
 | Note | multiple lines of text | tablet; office on a correction | the free-text line, 500 characters at most |
-| WeekTarget | number | tablet | the weekly target in force when the row was saved, so an old week stays true after the target changes. Not written at all when no target is set |
+| WeekTarget | number | tablet | the weekly target in force when the row was saved, so an old week stays true after the target changes. Not written at all when no target is set, nor ever for a stage with `target: false` (hotmelting, welding) |
 | SavedAt | text | tablet | ISO timestamp |
 | EditedBy, EditedAt | text | office | set only when the office corrects the row |
 
 **Append-only from the tablet**: one POST, no PATCH, no DELETE, ever. **The
-office may PATCH `Clear`, `KGlass`, `Satin`, `Obscure`, `Note`, `EditedBy` and
-`EditedAt` and nothing else** — the proof is the shape of
+office may PATCH that stage's own count columns (`Clear`, `KGlass`, `Satin`,
+`Obscure` / `DG`, `TG` / `Squares`), `Note`, `EditedBy` and `EditedAt` and
+nothing else** — never `Counted` — the proof is the shape of
 `ST.dayOfficeFields(counts, e)`, which takes counts, a note, a name and a time,
 so there is no argument that could carry a Day, a Who or a Title in. Every
 correction leaves one `Dashboard Log` line and **no `Station log` line**.
@@ -401,6 +417,10 @@ text**, `Note` as **Multiple lines of text** (plain text), and `Clear`,
 Then turn **enforce unique values on `Title`** — that is what makes a second
 save of the same person-day impossible from two tablets at once. It starts
 empty. Until it exists both screens say so plainly and nothing is written.
+**Since 2026-09-28** both lists also need `DG`, `TG`, `Counted` and `Squares`
+as **Number** (0 decimals) — added by the manager's script, rehearsed first —
+and the second list, in `Floor stations`, is created with every column above.
+A missing column or list is the same quiet explained state.
 
 ### `Station targets`
 
@@ -459,6 +479,21 @@ whole number of one or more, or it is refused with nothing written; it writes
 row opens the counts and the note, and Save logs "Day sheet corrected"; a row
 being edited is left alone by the twenty-second poll until it is saved or
 cancelled. No day sheet is ever deleted, by either side.
+**Since 2026-09-28** the window has a **station-stage selector** at the top
+(Cutting / Hotmelting / Welding, off the definitions), opening on the board's
+own stage or on Cutting; the chip is on every board. Hotmelting shows DG, TG
+and the tablet's **Counted** read-only beside them, with a small "≠ counted"
+where DG + TG differs; neither Hotmelting nor Welding has a target control.
+
+**The Floor log** (since 2026-09-28) covers **every station**: a station filter
+(All / Glass / Welding / Glazing / Fabrication) beside person, stage, job and
+day; opened from a board it starts on that board's station, from the job list
+on All. It merges each station's `Station log` lines (read the way that
+station's own board reads them) with the office's **own edits of a floor
+counter** — `Dashboard Log` lines already in the page's download (CHANGES),
+matched on the exact words the boards write (`ST.OFFICE_FLOOR_EDITS`) and
+marked **office**. Newest first by the moment each names. One station's list
+missing is one quiet line; the rest still show. Read-only.
 
 **Report** (2026-09-21) is the chip beside them on any station's board: it opens
 the Export window on the **Station report** template with that station already
@@ -909,6 +944,13 @@ Frames/Sashes line, then the product group, then the job card.
   (the column name is kept; nothing creates columns), `Stage` = `frames` or
   `sashes`, `From`/`To`/`Who`/`At` as before. **Written by the tablet only.**
 - `Station comments`: `Station` = `Welding`, exactly as for glass.
+- `Station day sheets` (2026-09-28): the **second** list of that name, in
+  `Floor stations`. `Station` = `Welding`, `Stage` = `weld`, one count
+  `Squares`, no `WeekTarget`. The tablet's **End of day** button sits on the
+  header's first row beside the Frames / Sashes capsules (below 900 px the
+  "updated" words give way to it so the row never scrolls sideways). Draft and
+  owed-sheet keys are the page's own (`cw_welddaydraft`, `cw_welddayq`).
+  `Station targets` is not used here.
 
 ### What the office can do, and what it cannot
 

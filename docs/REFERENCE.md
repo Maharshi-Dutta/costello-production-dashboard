@@ -68,6 +68,11 @@ tooling; lessons** — [[overview-and-process]]
 25. **The fabrication station** — [[fabrication-station]] (eligibility per
     group and part, the fourth sanctioned fill, assignments, notifications)
 
+26. **Day sheets for welding and hotmelting; one Floor log for every station**
+    — [[day-sheets-welding-hotmelt-floor-log]] (the sheet moved to
+    `station-ui.js`, hotmelt's own count, the office's stage selector, office
+    edits in the Floor log)
+
 ## See also
 
 - [[ARCHITECTURE]] — the companion index: data flow, module map, invariants

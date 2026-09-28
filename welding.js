@@ -100,12 +100,14 @@ function clearSearch() {
 function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; clearSearch(); touch(); render(); }
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false;
-  clearSearch(); savePerson(); render();
+  /* the day sheet closes with the person: the next name must not be shown the
+     last one's half-typed number (it stays in storage under whose it is) */
+  clearSearch(); DAY.reset(); savePerson(); render();
 }
 function lockIfIdle() {
   if (!PERSON) return;
   if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  PERSON = null; clearSearch(); savePerson(); render();
+  PERSON = null; clearSearch(); DAY.reset(); savePerson(); render();
 }
 function who() { return PERSON ? PERSON.name : ""; }
 /* One stage here, so anybody signed in holds it. canStage is still asked -
@@ -161,6 +163,7 @@ try { LOGQ = cleanLogQ(JSON.parse(localStorage.getItem(LOGQ_KEY) || "{}")); } ca
 function saveQueue() {
   try { localStorage.setItem(QUEUE_KEY, JSON.stringify(QUEUE)); } catch (e) {}
   try { localStorage.setItem(LOGQ_KEY, JSON.stringify(LOGQ)); } catch (e) {}
+  DAY.persist();
 }
 
 /* Who and when belong to the moment of the tap, not to the moment the write
@@ -279,7 +282,7 @@ function currentId(e) {
     owed like any other and never holds a counter up. */
 async function flushQueue() {
   if (flushing) return;
-  if (!Object.keys(QUEUE).length && !Object.keys(LOGQ).length) return;
+  if (!Object.keys(QUEUE).length && !Object.keys(LOGQ).length && !DAY.owing()) return;
   /* no site resolved means no list to write to. Coming back in five seconds is
      the whole of the answer: guessing one would send the tablet at the
      workbook, which is the one thing it must never do. */
@@ -339,12 +342,15 @@ async function flushQueue() {
       saveQueue();
     }
     await flushLog();
+    /* last, on its own clock of failures: a day sheet that will not send never
+       holds up a counter, and a counter never loses somebody's day sheet */
+    await DAY.flush();
   } finally {
     flushing = false;
   }
   render();
   if (wrote) await pollList();                 // the list agrees now: drop back to it
-  if (Object.keys(QUEUE).length || Object.keys(LOGQ).length) armRetry();
+  if (Object.keys(QUEUE).length || Object.keys(LOGQ).length || DAY.owing()) armRetry();
 }
 
 /** One log line per sent write. The queue has already merged a run of quick
@@ -393,6 +399,27 @@ const NOTES = ST.stationComments({
   listItems: (name, o) => CW.listItems(name, o),
   listAdd: (name, fields, o) => CW.listAdd(name, fields, o),
   opts: commentOpts
+});
+
+/* ---- the end-of-day sheet (2026-09-28) ----------------------------------------
+   docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md. One number -
+   the squares the welding machine's own display says were welded today - and a
+   note, saved once per person per day to `Station day sheets` in this
+   station's own site (`Floor stations`). The sheet is the glass cutting page's
+   own, from station-ui.js; what is counted comes off WELDC.WELD.daySheets. No
+   weekly target, so `Station targets` is never asked for here. One POST, no
+   PATCH, no DELETE, nothing near a workbook. */
+const DAY = STU.stuDaySheet({
+  def: W.WELD,
+  stage: () => W.WELD_STAGE,
+  who: () => who(),
+  siteId: () => SITEID,
+  touch: () => touch(),
+  render: () => render(),
+  flush: () => flushQueue(),
+  keys: { q: "cw_welddayq", draft: "cw_welddaydraft" },
+  stageWords: () => "Welding",
+  tag: "[welding]"
 });
 
 /** Everything that can go wrong with a read, decided in one place. Only
@@ -793,7 +820,16 @@ function render() {
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
 
-  const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
+  /* End of day: once somebody has said who they are, on a page that can read */
+  const dy = $("#daybtn");
+  if (dy) {
+    const on = !!DAY.sheet() && !!PERSON && mayWeld() && !PROBLEM;
+    dy.hidden = !on;
+    dy.style.display = on ? "" : "none";
+  }
+  /* the sheet takes the board's place, so the box and the tabs step aside too */
+  const sheet = !PROBLEM && PEOPLE_READ && !!PERSON && READY && DAY.shown && !!DAY.sheet();
+  const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY && !sheet;
   /* the search box and the tabs belong to the board: there is nothing to
      narrow on the picker, and a box over an error message only looks broken */
   const sb = $("#search");
@@ -846,6 +882,14 @@ function render() {
   if (upd) upd.textContent = LASTREAD ? "updated " + STU.stuAgo(LASTREAD) : "";
   const soft = $("#soft");
   if (soft) { soft.textContent = SOFT; soft.hidden = !SOFT; soft.style.display = SOFT ? "" : "none"; }
+
+  if (sheet) {
+    LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    host.innerHTML = DAY.html();
+    DAY.wire(host);
+    return;
+  }
+  if (!DAY.sheet()) DAY.shown = false;
 
   /* Who are you? comes before the board and after any real problem with it */
   if (!boarding) {
@@ -1017,17 +1061,25 @@ async function start() {
   });
   const mb = $("#more");
   if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
+  const dyb = $("#daybtn");
+  if (dyb) dyb.onclick = () => DAY.open();
   render();
   await readPeople();
   await readList();
   /* what has already been said about today's jobs, so a second shift does not
      retype the first shift's note */
   await NOTES.read();
+  /* the day sheets, once: whether today's is already saved */
+  await DAY.read();
   await flushQueue();                            // taps owed from a previous visit
   if (refreshT) clearInterval(refreshT);
   refreshT = setInterval(tickOnce, ST.REFRESH_MS);
   if (peopleT) clearInterval(peopleT);
-  peopleT = setInterval(readPeople, PEOPLE_MS);
+  /* anybody else's sheets ride the ten-minute clock: a sheet moves once a day */
+  peopleT = setInterval(() => {
+    readPeople();
+    DAY.read().then(() => { if (DAY.shown) render(); }, () => {});
+  }, PEOPLE_MS);
   if (lockT) clearInterval(lockT);
   lockT = setInterval(lockIfIdle, 15000);
   if (buildT) clearInterval(buildT);

@@ -201,7 +201,14 @@ const GLASS = {
                     ["KGlass", "K-glass sheets cut", "K-glass"],
                     ["Satin", "Satin sheets cut", "Satin"],
                     ["Obscure", "Other obscure sheets cut", "Obscure"]],
-           unit: "sheets" }
+           unit: "sheets" },
+    /* 2026-09-28 (docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md):
+       the person types the DG / TG split; `counted` has the tablet also save
+       its own count of their hotmelt taps today (`Counted`) so the office can
+       see both. No weekly target yet (owner: "maybe in the future"). */
+    hotmelt: { counts: [["DG", "DG units hotmelted", "DG"],
+                        ["TG", "TG units hotmelted", "TG"]],
+               unit: "units", counted: true, verb: "hotmelted", target: false }
   },
   /* the stages a report may be run for: the two real ones. Tuff is a counter
      the cutter also moves, not a station somebody reports on. */
@@ -1784,10 +1791,35 @@ function daySheetStages(def) {
   const d = stDef(def);
   return (d.stages || []).filter(k => !!daySheetOf(d, k));
 }
-/** The columns of a read: the fixed ones plus this stage's own counts. */
+/** The columns of a read: the fixed ones plus this stage's own counts, plus
+    `Counted` for a stage whose tablet counts its own taps. */
+const DAY_COUNTED_FIELD = "Counted";
 function dayFieldsFor(def, stage) {
   const ds = daySheetOf(def, stage);
-  return DAY_BASE_FIELDS.concat(ds ? ds.counts.map(c => c[0]) : []);
+  return DAY_BASE_FIELDS.concat(ds ? ds.counts.map(c => c[0]) : [])
+                        .concat(ds && ds.counted ? [DAY_COUNTED_FIELD] : []);
+}
+/** Does this stage have a weekly target? `target: false` on the definition
+    says no: no target line, no `Station targets` read, no `WeekTarget`. */
+function dayHasTarget(def, stage) {
+  const ds = daySheetOf(def, stage);
+  return !!ds && ds.target !== false;
+}
+/** What the tablet counted of one person's own work on one LOCAL day at one
+    stage: the sum of (To - From) over their `Station log` lines, so a minus
+    tap takes back what a plus tap gave; never below nought. `rows` are
+    ST.logRows rows (or anything with who/stage/from/to/at). */
+function dayCounted(rows, who, day, stage) {
+  const nm = stTxt(who).trim().toLowerCase(), sg = stTxt(stage).trim().toLowerCase();
+  const want = dayKey(day);
+  let n = 0;
+  (rows || []).forEach(r => {
+    if (!r || stTxt(r.who).trim().toLowerCase() !== nm || stTxt(r.stage).trim().toLowerCase() !== sg) return;
+    const t = new Date(stTxt(r.at));
+    if (isNaN(t.getTime()) || dayKey(t) !== want) return;
+    n += Math.round(stNum(r.to, 0)) - Math.round(stNum(r.from, 0));
+  });
+  return Math.max(0, n);
 }
 /** A LOCAL calendar day as YYYY-MM-DD. Local, deliberately: a sheet saved at
     23:30 belongs to the day the person worked, not to UTC's idea of it. A
@@ -1870,9 +1902,15 @@ function dayFields(def, stage, e) {
   if (bad) return null;
   out.Note = stTxt(e.note).trim().slice(0, DAY_NOTE_MAX);
   /* the target in force when this was saved, so an old week stays true after
-     the office changes it. No target set = the column is not written at all */
+     the office changes it. No target set = the column is not written at all,
+     and a stage with `target: false` never writes one */
   const t = stNum(e.weekTarget, null);
-  if (t != null && isFinite(t)) out.WeekTarget = Math.max(0, Math.round(t));
+  if (ds.target !== false && t != null && isFinite(t)) out.WeekTarget = Math.max(0, Math.round(t));
+  /* the tablet's own count of this person's taps, for a stage that keeps one.
+     Not a count the person typed, so not through dayCount's refusal: unknown
+     (the log could not be read) is simply not written */
+  const k = stNum(e.counted, null);
+  if (ds.counted && k != null && isFinite(k)) out[DAY_COUNTED_FIELD] = Math.max(0, Math.round(k));
   out.SavedAt = stTxt(e.at) || new Date().toISOString();
   return out;
 }
@@ -1946,7 +1984,9 @@ function dayRows(items, counts, f) {
       c[k[0]] = n; total += n;
     });
     const wt = stNum(fl.WeekTarget, null);
+    const ct = stNum(fl[DAY_COUNTED_FIELD], null);
     out.push({ id: stTxt(it.id), title: stTxt(fl.Title), station: st, stage: sg,
+               counted: ct == null ? null : Math.max(0, Math.round(ct)),
                day: day, week: w.key, monday: w.monday, weekday: w.weekday, dow: w.dow,
                who: nm, counts: c, total: total, note: stTxt(fl.Note),
                weekTarget: wt == null || !isFinite(wt) ? null : Math.max(0, Math.round(wt)),
@@ -1996,6 +2036,110 @@ function dayWeeks(rows, counts, liveTarget) {
     g.diff = g.target == null ? null : g.total - g.target;
     return g;
   });
+}
+
+/* ---- one Floor log for every station (2026-09-28) ----------------------------
+   The office's Floor log window reads every station's `Station log` lines and
+   the office's own edits of a floor counter, which are `Dashboard Log` lines
+   (CHANGES) written by noteChange. Which of those lines ARE such an edit is
+   decided here, in one list, off the exact "what" words the boards write:
+     "Glass cutting" / "Glass hotmelting" / "Glass tuff"   GLASS_EDIT_WORDS, app.js
+     "Floor glass counters"                                an office clear of the glass counters
+     "Welding: <job> <group> <part>"                       WELDC.weldLogWords
+     "Glazing: <job>" / "Glazing astragal: <job>"          GLZC.glzLogWords
+     "Fabrication: <job> <group> <part>"                   FABC.fbLogWords
+     "Day sheet corrected", job "(<Station> <stage>)"      the Day sheets window
+   Nothing here reads anything: it is handed rows that are already in memory. */
+const FLOOR_LOG_STAGES = {
+  Glass: [["cut", "Cutting"], ["hotmelt", "Hotmelting"], ["tuff", "Tuff"]],
+  Welding: [["frames", "Frames"], ["sashes", "Sashes"],
+            ["frames-remake", "Frames remade"], ["sashes-remake", "Sashes remade"]],
+  Glazing: [["glaze", "Glazing"], ["astragal", "Astragal"]],
+  Fabrication: [["frames", "Frames"], ["sashes", "Sashes"], ["transoms", "Transoms"]]
+};
+const FLOOR_LOG_STATIONS = Object.keys(FLOOR_LOG_STAGES);
+/** A stage's word for one station's lines; the key itself for anything else. */
+function floorStageLabel(station, stage) {
+  const k = stTxt(stage).trim().toLowerCase();
+  if (!k) return "";
+  const hit = (FLOOR_LOG_STAGES[stTxt(station)] || []).find(s => s[0] === k);
+  return hit ? hit[1] : (stTxt(station) === STATION_NAME ? stageLabel(k) : k);
+}
+const OFFICE_FLOOR_EDITS = [
+  { what: "Glass cutting", station: "Glass", stage: "cut" },
+  { what: "Glass hotmelting", station: "Glass", stage: "hotmelt" },
+  { what: "Glass tuff", station: "Glass", stage: "tuff" },
+  { what: "Floor glass counters", station: "Glass", stage: "" },
+  { prefix: "Welding: ", station: "Welding" },
+  { prefix: "Glazing astragal: ", station: "Glazing", stage: "astragal" },
+  { prefix: "Glazing: ", station: "Glazing", stage: "glaze" },
+  { prefix: "Fabrication: ", station: "Fabrication" },
+  { what: "Day sheet corrected", station: "" }
+];
+/** Is this Dashboard Log line an office edit of a floor counter? {station,
+    stage} or null. station "" = an edit whose station is not known. */
+function officeFloorEdit(what, job) {
+  const w = stTxt(what);
+  const hit = OFFICE_FLOOR_EDITS.find(e => e.what ? w === e.what : w.indexOf(e.prefix) === 0);
+  if (!hit) return null;
+  if (hit.what === "Day sheet corrected") {
+    /* the job column carries "(Glass cut)" / "(Welding weld)" */
+    const m = /^\((\S+)\s+(\S+)\)$/.exec(stTxt(job).trim());
+    const st = m ? FLOOR_LOG_STATIONS.find(s => s.toLowerCase() === m[1].toLowerCase()) : "";
+    return { station: st || "", stage: "day sheet" };
+  }
+  if (hit.stage != null) return { station: hit.station, stage: hit.stage };
+  /* "<job> <group> <part>": the part is the last word */
+  const words = w.slice(hit.prefix.length).trim().split(/\s+/);
+  return { station: hit.station, stage: words.length > 1 ? words[words.length - 1].toLowerCase() : "" };
+}
+/** A time stamp as milliseconds, NaN when it is not one. Takes an ISO stamp,
+    Dashboard Log's own "yyyy-mm-dd hh:mm" (local) and the "dd/mm/yyyy hh:mm"
+    (local) a Date cell is read back as. */
+function logWhenMs(s) {
+  const t = stTxt(s).trim();
+  let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(t);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
+  m = /^(\d{4})-(\d{2})-(\d{2})[ ](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime();
+  const p = Date.parse(t);
+  return isFinite(p) ? p : NaN;
+}
+/** The office's own floor edits out of CHANGES, as log-shaped rows marked
+    `office`. `at` is re-written as an ISO stamp so the day filter and the
+    "when" words treat them exactly like a tablet's line; from/to stay text
+    (a day-sheet correction's "from" is a sentence, not a number). */
+function officeLogRows(changes) {
+  const out = [];
+  (changes || []).forEach((c, i) => {
+    if (!c) return;
+    const hit = officeFloorEdit(c.what, c.job);
+    if (!hit) return;
+    const ms = logWhenMs(c.at);
+    /* a day-sheet correction's job column is "(Glass cut)", not a job */
+    const job = hit.stage === "day sheet" ? "" : stKey(c.job);
+    out.push({ id: "office-" + i, job: job, station: hit.station, stage: hit.stage,
+               from: stTxt(c.from), to: stTxt(c.to), who: stTxt(c.who), office: true,
+               what: stTxt(c.what), at: isFinite(ms) ? new Date(ms).toISOString() : stTxt(c.at), ms: ms });
+  });
+  return out;
+}
+/** Every station's lines and the office's, newest first by the MOMENT each
+    names (not as text: the two stamp shapes do not sort together as strings).
+    `sources` is [{ station, rows }] of ST.logRows output; `station` narrows to
+    one ("" = all). An office line whose station is not known shows under All
+    only. */
+function floorLogMerge(sources, office, station) {
+  const want = stTxt(station).trim();
+  const out = [];
+  (sources || []).forEach(s => {
+    if (!s || (want && s.station !== want)) return;
+    (s.rows || []).forEach(r => out.push(Object.assign({}, r, { station: s.station, ms: Date.parse(r.at) })));
+  });
+  (office || []).forEach(r => { if (!want || r.station === want) out.push(r); });
+  const t = r => (isFinite(r.ms) ? r.ms : -Infinity);
+  out.sort((a, b) => (t(b) - t(a)) || (a.office === b.office ? 0 : a.office ? 1 : -1));
+  return out;
 }
 
 /* ---- the weekly target ---- */
@@ -2077,6 +2221,9 @@ const ST = {
   DAY_LIST, TARGET_LIST, DAY_BASE_FIELDS, TARGET_FIELDS, DAY_NOTE_MAX,
   DAY_MISSING_FLOOR, DAY_MISSING_OFFICE, TARGET_MISSING_OFFICE, DAY_UNREACHABLE, DAY_SAVED_WORDS,
   daySheetOf, daySheetStages, dayFieldsFor, dayCountShort, dayKey, stClock, isoWeek, DAY_NAMES,
+  DAY_COUNTED_FIELD, dayHasTarget, dayCounted,
+  FLOOR_LOG_STAGES, FLOOR_LOG_STATIONS, floorStageLabel, OFFICE_FLOOR_EDITS, officeFloorEdit,
+  logWhenMs, officeLogRows, floorLogMerge,
   dayTitle, dayCount, DAY_COUNT_MAX, dayFields, dayOfficeFields, dayRows, dayWeekTotal, dayWeeks,
   targetTitle, targetFields, targetOf, glassReportJobs, REPORT_CUSTOMER_MAX,
   inProduction, sectionInProduction, glassTotal, tuffTotal, officeSeed, officeComplete,

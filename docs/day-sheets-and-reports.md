@@ -34,7 +34,11 @@ report's day-sheet columns — happens for a stage that answers nothing. There i
 no `if (stage === "cut")` anywhere in `station.js`. Hotmelting or welding get a
 sheet by gaining one line of definition.
 
-### The tablet (Cutting only, today)
+### The tablet (Cutting; hotmelting and welding since 2026-09-28)
+
+Since 2026-09-28 the sheet described here lives in `station-ui.js`
+(`STU.stuDaySheet`) and is shared by the hotmelting and welding tablets —
+see [[day-sheets-welding-hotmelt-floor-log]].
 
 A header button **End of day** opens the sheet in the board's place: one
 full-width column, portrait, 16px boxes (`inputmode="numeric"`), nothing under

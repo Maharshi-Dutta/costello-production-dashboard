@@ -771,8 +771,13 @@ const WELD = {
   site: WELD_SITE,
   stages: [WELD_STAGE],
   stageLabel: () => "Welding",
-  /* no end-of-day sheet here yet: one line of `daySheets` when the owner asks
-     and says which counts they want (spec 2026-09-21, "Not built here") */
+  /* the end-of-day sheet (2026-09-28, docs/specs/2026-09-28-day-sheets-welding-
+     hotmelt-floor-log.md): one number, the squares the welding machine's own
+     display says were welded that day. No weekly target yet. The row goes to
+     `Station day sheets` in this station's site, `Floor stations`. */
+  daySheets: {
+    weld: { counts: [["Squares", "Squares welded today", "Squares"]], unit: "squares", target: false }
+  },
   reportStages: [WELD_STAGE],
   /* THE LINES THIS STATION'S ONE REPORT STAGE IS MADE OF (review, 2026-09-21).
      The tablet logs one `Station log` line per PART - `Stage = frames` and

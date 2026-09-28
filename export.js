@@ -1735,7 +1735,8 @@ function stationReport(def, stage, data, period) {
   const sumCols = ["Week", "Week starting", "Units recorded", "Jobs touched",
                    "Jobs complete at this stage"]
     .concat(counts.map(c => c[1]))
-    .concat(ds ? [xpUpper(unit.slice(0, 1)) + unit.slice(1) + " total", "Target", "Difference"] : []);
+    .concat(ds ? [xpUpper(unit.slice(0, 1)) + unit.slice(1) + " total"] : [])
+    .concat(ds && ds.target !== false ? ["Target", "Difference"] : []);
   order.sort();
   const sumRows = order.map(k => {
     const g = weeks[k];
@@ -1744,8 +1745,9 @@ function stationReport(def, stage, data, period) {
     const line = [g.key, g.monday, g.units, jobs.length,
                   jobs.filter(j => done[j] && done[j].total > 0 && done[j].done >= done[j].total).length]
       .concat(counts.map(c => g.counts[c[0]]));
-    if (ds) line.push(g.total, g.target == null ? "" : g.target,
-                      g.target == null ? "" : g.total - g.target);
+    if (ds) line.push(g.total);
+    if (ds && ds.target !== false) line.push(g.target == null ? "" : g.target,
+                                             g.target == null ? "" : g.total - g.target);
     return line;
   });
   if (!sumRows.length)
@@ -1768,8 +1770,12 @@ function stationReport(def, stage, data, period) {
   days.forEach(r => { dayAt(r.day).sheets.push(r); });
   dayOrder.sort();
   if (dayOrder.length) {
+    /* a stage whose tablet counts its own taps (hotmelting, 2026-09-28) also
+       carries that count, beside what the person typed */
+    const counted = !!(ds && ds.counted);
     const cols = ["Day", "Weekday", "Units recorded", "Who recorded them"]
       .concat(ds ? [].concat(["Who filled the sheet"], counts.map(c => c[1]),
+                             counted ? ["Counted by the tablet"] : [],
                              ["Total", "Note", "Corrected by the office"]) : []);
     const rows = [];
     dayOrder.forEach(day => {
@@ -1777,10 +1783,14 @@ function stationReport(def, stage, data, period) {
       const people = Object.keys(g.people).sort()
         .map(nm => nm + " " + g.people[nm]).join(" · ");
       if (!ds) { rows.push([day, wd, g.units, people]); return; }
-      if (!g.sheets.length) { rows.push([day, wd, g.units, people, "", ...counts.map(() => ""), "", "", ""]); return; }
+      if (!g.sheets.length) {
+        rows.push([day, wd, g.units, people, "", ...counts.map(() => ""), ...(counted ? [""] : []), "", "", ""]);
+        return;
+      }
       g.sheets.forEach(r => {
         rows.push([day, wd, g.units, people, r.who]
           .concat(counts.map(c => r.counts[c[0]] || 0))
+          .concat(counted ? [r.counted == null ? "" : r.counted] : [])
           .concat([r.total, S.stripContact(r.note, S.DAY_NOTE_MAX),
                    r.editedBy ? r.editedBy + " · " + xpStr(r.editedAt).slice(0, 16) : ""]));
       });

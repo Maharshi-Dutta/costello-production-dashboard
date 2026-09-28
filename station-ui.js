@@ -8,19 +8,18 @@
    here so the third station (PA Lam) is a definition and a renderer and not a
    third copy of a page.
 
-   NOTHING IN HERE TOUCHES GRAPH, A LIST OR A WORKBOOK. It is strings, a
-   localStorage key for a theme, and two wiring helpers. Every identifier is
+   NOTHING IN HERE TOUCHES A WORKBOOK. Apart from the end-of-day sheet at the
+   bottom (2026-09-28), which reads and appends to the floor's own day-sheet
+   list, it is strings, a localStorage key for a theme, and two wiring
+   helpers; nothing here touches Graph or a list. Every identifier is
    prefixed `stu`/`STU` so that a page which loads this file beside another
    station's script cannot collide with it - browser scripts share one global
    lexical scope, and a collision there is a page that does not start.
 
-   A NOTE ON glass.html: it loads this file but station.js does not yet call
-   into it. station.js runs inside its own vm context in test_station.js, whose
-   246 checks the welding spec says must pass unchanged, and that harness does
-   not load this file - so moving the glass page onto this shell is a change to
-   that suite, and belongs with the next piece of glass work rather than with
-   this one. The file is on the page so that move is a code change and not an
-   HTML one. See docs/STATIONS.md, "Adding a station".                       */
+   A NOTE ON glass.html: station.js calls into this file for the end-of-day
+   sheet only (since 2026-09-28); its theme, gate and picker are still its
+   own. The test harnesses load this file into station.js's vm context ahead
+   of it, as the page does. See docs/STATIONS.md, "Adding a station".       */
 
 const STU_THEME_KEY = "cw_stationtheme";      // this device's choice, not this person's
 
@@ -136,9 +135,438 @@ function stuWirePicker(host, o) {
   });
 }
 
+/* ---- the end-of-day sheet ---------------------------------------------------
+   Shipped on the glass cutting page 2026-09-21 (docs/specs/2026-09-21-day-
+   sheets-and-station-reports.md); MOVED HERE FROM station.js on 2026-09-28 so
+   the welding page and the hotmelting page have the same sheet without a copy
+   of it (docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md).
+
+   The person's paper sheet, on the tablet: their name, the day, the counts the
+   STATION DEFINITION names for this stage (`def.daySheets[stage]`), a line
+   about anything that got in the way, and - for a stage that has one - this
+   week against the office's target. A stage with no sheet gets no button,
+   reads neither list and sends no request for either.
+
+   THE ONE PART OF THIS FILE THAT TALKS TO A LIST. It reads `Station day
+   sheets` (and `Station targets`, only for a stage with a target; and, only
+   for a stage whose sheet shows the tablet's own count, `Station log`) and
+   makes ONE POST per person per stage per day to `Station day sheets`. No
+   PATCH, no DELETE, nothing else written, and nothing near a workbook: once
+   saved, a mistake is the office's to correct.
+
+   One controller per page, made by stuDaySheet(cfg):
+     def        the station definition (ST.GLASS, WELDC.WELD)
+     stage()    this page's stage key
+     who()      the person signed in, "" for nobody
+     siteId()   the site the station's lists live in, null until resolved
+     touch()    push the idle lock back
+     render()   redraw the page
+     flush()    set the page's own write queue going (it calls .flush())
+     keys       { q, draft } - localStorage keys, one pair PER PAGE so two
+                pages on one tablet never share a draft or an owed sheet
+     stageWords()   the stage in words, for the sheet's heading
+     pendingLog()   optional: this tablet's own log lines not yet sent, as
+                    `Station log` field bags - counted with the rest
+     tag        the console prefix                                          */
+const STU_DAY_REFUSE_MAX = 3;
+function stuDaySheet(cfg) {
+  const def = cfg.def;
+  const tag = cfg.tag || "[station]";
+  const q$ = s => document.querySelector(s);
+  const D = {
+    shown: false,        // the sheet is on screen, in the board's place
+    rows: [],            // this stage's saved sheets, as last read
+    ok: null,            // null not looked · false missing or unreachable · true read it
+    why: "",
+    /* "there is no such list" and "I could not reach the list" are two
+       different answers and only the first is a reason to refuse a save
+       (review, 2026-09-21). `ok` is false for both; this says which. */
+    missing: false,
+    target: null,        // the weekly target in force, or null
+    draft: null,         // { day, stage, who, counts, note, target } typed but not saved
+    bad: "",             // what is wrong with what is typed, in words
+    q: {},               // saved sheets this tablet still owes
+    logItems: null,      // Station log, for a stage that counts its own taps
+    logToken: null
+  };
+  const esc = stuEsc;
+  const stage = () => String(cfg.stage() || "");
+  const who = () => String(cfg.who() || "");
+  const siteId = () => cfg.siteId();
+  D.sheet = () => (typeof ST.daySheetOf === "function" ? ST.daySheetOf(def, stage()) : null);
+  const hasTarget = () => !!D.sheet() && D.sheet().target !== false;
+  const counts = () => (D.sheet() || { counts: [] }).counts;
+  const dayOpts = () => ({ siteId: siteId(), fields: ST.dayFieldsFor(def, stage()) });
+  const today = () => ST.dayKey(new Date());
+
+  /** Whatever is in storage, rebuilt through the row builder - so an edited
+      localStorage can put no column on the wire that a save could not. */
+  function cleanQ(raw) {
+    const out = {};
+    Object.keys(raw || {}).forEach(k => {
+      const e = raw[k], f = (e && e.fields) || null;
+      if (!f || !f.Title) return;
+      const ds = ST.daySheetOf(def, f.Stage);
+      if (!ds) return;
+      const c = {};
+      ds.counts.forEach(x => { c[x[0]] = f[x[0]]; });
+      const rebuilt = ST.dayFields(def, f.Stage, { day: f.Day, who: f.Who, counts: c, note: f.Note,
+        weekTarget: f.WeekTarget, counted: f[ST.DAY_COUNTED_FIELD], at: f.SavedAt });
+      /* how often SharePoint has refused it survives the reload with it */
+      if (rebuilt) out[rebuilt.Title] = { fields: rebuilt, err: 0,
+                                          refused: Math.max(0, Math.round(Number(e.refused) || 0)) };
+    });
+    return out;
+  }
+  try { D.q = cleanQ(JSON.parse(localStorage.getItem(cfg.keys.q) || "{}")); } catch (e) { D.q = {}; }
+  D.persist = () => { try { localStorage.setItem(cfg.keys.q, JSON.stringify(D.q)); } catch (e) {} };
+  D.owing = () => Object.keys(D.q).length;
+
+  /** The day sheets (and the target, and the log, where this stage has them),
+      quietly. A missing list is a state, never an error: the board must not be
+      takeable away by a sheet nobody has opened. */
+  D.read = async function () {
+    if (!D.sheet() || !siteId()) return false;
+    let got = false;
+    try {
+      const items = await CW.listItems(ST.DAY_LIST, dayOpts());
+      if (items == null) { D.ok = false; D.missing = true; D.why = ST.DAY_MISSING_FLOOR; return false; }
+      D.rows = ST.dayRows(items, counts(), { station: def.name, stage: stage() });
+      D.ok = true; D.missing = false; D.why = ""; got = true;
+    } catch (e) {
+      /* a throw is the wifi, a bad gateway, a refused token - never "there is
+         no such list". `missing` is left alone: a save must still be queued
+         through a bad afternoon. */
+      if (D.ok !== true) { D.ok = false; D.why = ST.DAY_UNREACHABLE; }
+      console.warn(tag + " the day sheets could not be read:", (e && e.message) || e);
+      return false;
+    }
+    /* the target is a nicety, and only for a stage that has one: a stage with
+       `target: false` never asks for the list, so a site without it says
+       nothing about it */
+    if (hasTarget()) {
+      try {
+        const t = await CW.listItems(ST.TARGET_LIST, { siteId: siteId(), fields: ST.TARGET_FIELDS });
+        const hit = t == null ? null : ST.targetOf(t, def.name, stage());
+        D.target = hit ? hit.target : null;
+      } catch (e) { /* keep the last one */ }
+    }
+    if (D.sheet().counted) await D.readLog();
+    return got;
+  };
+  /** `Station log`, for the tablet's own count: the delta feed, so opening the
+      sheet a second time asks only for what is new. */
+  D.readLog = async function () {
+    if (!siteId()) return false;
+    const opts = { siteId: siteId(), fields: ST.LOG_FIELDS };
+    try {
+      let d;
+      try { d = await CW.listDelta(ST.LOG_LIST, Object.assign({ token: D.logToken }, opts)); }
+      catch (e) {
+        if (!D.logToken || !CW.isDeltaRestart || !CW.isDeltaRestart(e)) throw e;
+        D.logToken = null; D.logItems = null;
+        d = await CW.listDelta(ST.LOG_LIST, opts);
+      }
+      if (d == null) { D.logItems = null; return false; }
+      D.logItems = ST.mergeDelta(D.logToken ? D.logItems : [], d.items);
+      D.logToken = d.next;
+      return true;
+    } catch (e) {
+      console.warn(tag + " the log could not be read for the day's count:", (e && e.message) || e);
+      return false;
+    }
+  };
+  /** What the tablet counted of this person's taps today, or null when the
+      log has not been read. */
+  D.counted = function (day) {
+    const ds = D.sheet();
+    if (!ds || !ds.counted || D.logItems == null) return null;
+    const mine = (typeof cfg.pendingLog === "function" ? cfg.pendingLog() : [])
+      .map((f, i) => ({ id: "owed-" + i, fields: f }));
+    const rows = ST.logRows(D.logItems.concat(mine), def.name);
+    return ST.dayCounted(rows, who(), day || D.sheetDay(), stage());
+  };
+
+  /* ---- the draft, and WHICH DAY IT IS ABOUT ---------------------------------
+     A DRAFT BELONGS TO THE DAY IT WAS STARTED (review, 2026-09-21), not to
+     whatever day it happens to be when Save is tapped: typing at 23:55 and
+     tapping Save at 00:01 must not file the evening's work under tomorrow, and
+     the same tick must not throw away a draft. So the record carries its own
+     `day`, the form shows THAT day, Save files it under it, and it survives
+     until the end of the FOLLOWING day. It also carries `who`: a draft is one
+     person's writing and the tablet is passed around. The target is stamped
+     on at the same moment for the same reason.                             */
+  function keep(d) {
+    if (!d || d.stage !== stage()) return null;
+    if (String(d.who || "") !== who()) return null;
+    const day = ST.dayKey(String(d.day || ""));
+    if (!day) return null;
+    const age = Math.round((Date.parse(today() + "T12:00:00Z") - Date.parse(day + "T12:00:00Z")) / 86400000);
+    if (!isFinite(age) || age < 0 || age > 1) return null;
+    return { day: day, stage: d.stage, who: String(d.who || ""),
+             counts: d.counts || {}, note: String(d.note || ""),
+             target: d.target == null ? null : Number(d.target) };
+  }
+  function loadDraft() {
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem(cfg.keys.draft) || "null"); } catch (e) { d = null; }
+    return keep(d);
+  }
+  D.draftNow = function () {
+    if (!keep(D.draft))
+      D.draft = loadDraft() || { day: today(), stage: stage(), who: who(), counts: {}, note: "", target: D.target };
+    return D.draft;
+  };
+  D.saveDraft = () => { try { localStorage.setItem(cfg.keys.draft, JSON.stringify(D.draft)); } catch (e) {} };
+  D.clearDraft = () => { D.draft = null; try { localStorage.removeItem(cfg.keys.draft); } catch (e) {} };
+  /** The day the sheet on screen is about: the draft's own. */
+  D.sheetDay = () => D.draftNow().day;
+  /** This person's sheet for that day, if it is already on the list ... */
+  D.saved = day => D.rows.find(r => r.day === day && r.who === who()) || null;
+  /** ... or still owed by this tablet. */
+  D.owed = day => D.q[ST.dayTitle(def.name, stage(), day, who())] || null;
+  /** What is typed now, added up. */
+  D.draftTotal = function () {
+    const ds = D.sheet();
+    if (!ds) return 0;
+    const d = D.draftNow();
+    return ds.counts.reduce((n, c) => n + (ST.dayCount(d.counts[c[0]]) || 0), 0);
+  };
+  /** Is everything typed a whole number within the cap? */
+  D.draftValid = function () {
+    const ds = D.sheet();
+    if (!ds) return false;
+    const d = D.draftNow();
+    return ds.counts.every(c => ST.dayCount(d.counts[c[0]]) != null);
+  };
+  /** Has anybody actually written anything? AN UNTOUCHED FORM IS NOT NOUGHTS
+      (review, 2026-09-21); a note alone ("machine down all day") is a real
+      entry. */
+  D.draftTyped = function () {
+    const ds = D.sheet();
+    if (!ds) return false;
+    const d = D.draftNow();
+    return ds.counts.some(c => String(d.counts[c[0]] == null ? "" : d.counts[c[0]]).trim() !== "") ||
+           String(d.note || "").trim() !== "";
+  };
+  D.draftOk = () => D.draftValid() && D.draftTyped();
+  /** "This week: N of T": this person's saved sheets in the week of the day
+      this sheet is about, plus what is typed now, against the target. */
+  D.weekWords = function (extra) {
+    const wk = ST.isoWeek(D.sheetDay()).key;
+    const target = D.draftNow().target == null ? D.target : D.draftNow().target;
+    const done = ST.dayWeekTotal(D.rows, who(), wk) + (extra || 0);
+    const unit = (D.sheet() || {}).unit || "sheets";
+    return { done: done, target: target,
+             words: target == null ? done + " " + unit + " · no target set" : done + " of " + target + " " + unit,
+             pct: target > 0 ? Math.max(0, Math.min(100, Math.round(done * 100 / target))) : 0 };
+  };
+
+  /** Save the sheet: one row queued, sent by the page's own queue. */
+  D.save = function () {
+    const ds = D.sheet();
+    if (!ds || !who()) return false;
+    const d = D.draftNow();
+    if (D.saved(d.day) || D.owed(d.day)) return false;              // one per person per day
+    if (!D.draftTyped()) { D.bad = "Fill in a number or write a line first."; cfg.render(); return false; }
+    const counted = ds.counted ? D.counted(d.day) : null;
+    const fields = ST.dayFields(def, stage(), {
+      day: d.day, who: who(), counts: d.counts, note: d.note,
+      weekTarget: d.target == null ? D.target : d.target, counted: counted, at: new Date().toISOString() });
+    if (!fields) {
+      D.bad = "Whole numbers only, please — no minus signs, no decimals, nothing over " + ST.DAY_COUNT_MAX + ".";
+      cfg.render(); return false;
+    }
+    /* ONLY A LIST THAT IS NOT THERE refuses the save (review, 2026-09-21): a
+       list that could not be READ is the workshop wifi, and the sheet queues. */
+    if (D.missing) { D.bad = D.why || ST.DAY_MISSING_FLOOR; cfg.render(); return false; }
+    /* the tablet's count against what was typed: said once, in the same
+       question, and never a refusal - the person knows their own day. No taps
+       at all is not a disagreement (owner: the count is a help, not a check) */
+    const typed = ds.counts.reduce((n, c) => n + (fields[c[0]] || 0), 0);
+    const differs = counted != null && counted > 0 && typed !== counted;
+    const ask = (differs ? "You counted " + counted + " taps today and typed " + typed + ". Save anyway? " : "") +
+      "Save the sheet for " + d.day + "? It cannot be changed from the tablet afterwards.";
+    if (typeof confirm === "function" && !confirm(ask)) return false;
+    D.bad = "";
+    D.q[fields.Title] = { fields: fields, err: 0, refused: 0 };
+    D.persist();
+    D.clearDraft();
+    cfg.touch();
+    cfg.render();
+    cfg.flush();
+    return true;
+  };
+  /** Send the owed sheet. A refusal is very often the list's own unique rule
+      catching a second tablet, or a replay of a row that landed and whose
+      answer was lost - both mean ALREADY SAVED, so the list is read back
+      before anything is called a failure. A row SharePoint keeps refusing
+      (a 4xx) stops saying "waiting to send" after STU_DAY_REFUSE_MAX and says
+      to tell the office; it STAYS QUEUED either way. */
+  D.flush = async function () {
+    if (!siteId() || !D.sheet()) return;
+    const keys = Object.keys(D.q);
+    for (let i = 0; i < keys.length; i++) {
+      const e = D.q[keys[i]];
+      if (!e) continue;
+      try {
+        await CW.listAdd(ST.DAY_LIST, e.fields, dayOpts());
+        delete D.q[keys[i]];
+        await D.read();
+      } catch (err) {
+        const landed = (await D.read()) && D.rows.some(r => r.title === e.fields.Title);
+        if (landed) { delete D.q[keys[i]]; D.persist(); continue; }
+        e.err = 1;
+        /* only a refusal counts: a dropped connection is not the list saying no */
+        const refused = !!(CW.isMissing && CW.isMissing(err)) || !!(CW.isRefused && CW.isRefused(err)) ||
+                        /->\s*4\d\d\b/.test((err && err.message) || "");
+        if (refused) e.refused = (Number(e.refused) || 0) + 1;
+        console.warn(tag + " the day sheet is not saved yet" +
+                     (e.refused >= STU_DAY_REFUSE_MAX ? " and has been refused " + e.refused + " times" : "") +
+                     ":", (err && err.message) || err);
+      }
+      D.persist();
+    }
+  };
+  /** What the card says about an owed sheet. */
+  D.owedWords = function (e) {
+    if (e && Number(e.refused) >= STU_DAY_REFUSE_MAX) return "could not be saved — tell the office";
+    if (e && e.err) return "waiting to send — it will go when the tablet is back on the wifi";
+    return "waiting to send…";
+  };
+
+  /* ---- drawn ----
+     One column, full width, portrait, nothing to scroll sideways and nothing
+     tapped under 44 px - the tablet rule of 2026-09-17. It takes the board's
+     place rather than opening over it, and Back is the only way out.       */
+  function lineHtml(r, cs) {
+    return '<div class="dayline"><span class="daylday">' + esc(r.day) + '</span>' +
+      '<span class="dayldow">' + esc(r.weekday.slice(0, 3)) + '</span>' +
+      cs.map(c => '<span class="daylnum tab">' + esc(ST.dayCountShort(c)) + ' ' +
+        (r.counts[c[0]] || 0) + '</span>').join("") +
+      '<span class="dayltot tab">' + r.total + '</span></div>';
+  }
+  function historyHtml(cs) {
+    const mine = D.rows.filter(r => r.who === who()).slice(0, 7);
+    if (!mine.length) return "";
+    return '<div class="dayhist"><div class="kick">Your last ' + mine.length + ' day' +
+      (mine.length === 1 ? "" : "s") + '</div>' + mine.map(r => lineHtml(r, cs)).join("") + '</div>';
+  }
+  /** The tablet's own count, for a stage that keeps one. */
+  function countedHtml(day) {
+    const ds = D.sheet();
+    if (!ds || !ds.counted) return "";
+    const n = D.counted(day);
+    const unit = ds.unit || "units";
+    return '<div class="daycount">' + (n == null
+      ? "Your taps today have not been counted yet — the tablet is still reading its log."
+      : "You " + esc(ds.verb || "recorded") + " " +
+        '<strong class="tab">' + n + '</strong> ' + esc(unit) + " " +
+        (day === today() ? "today" : "on " + esc(ST.isoWeek(day).weekday))) + '</div>';
+  }
+  D.html = function () {
+    const ds = D.sheet();
+    if (!ds || !who()) return '<div class="msg">Nothing to fill in here.</div>';
+    const cs = ds.counts, unit = ds.unit || "sheets";
+    const day = D.sheetDay(), w = ST.isoWeek(day);
+    const carried = day !== today();
+    const head = '<div class="picker daysheet">' +
+      '<div class="pickh">End of day</div>' +
+      '<div class="picksub">' + esc(who() + " · " + w.weekday + " " + day + " · " + cfg.stageWords()) + '</div>' +
+      (carried ? '<div class="daycarry">This is the sheet you started on ' + esc(w.weekday) +
+         ', and it saves under that day.</div>' : "");
+    const back = '<button class="pcancel" data-dayback="1">Back to the board</button></div>';
+    const saved = D.saved(day), owed = D.owed(day);
+    if (saved || owed) {
+      const row = saved || ST.dayRows([{ id: "", fields: owed.fields }], cs)[0];
+      /* the LOCAL clock (ST.stClock), not a slice of the ISO stamp */
+      const when = saved ? "saved " + ST.stClock(saved.savedAt) + " — " + ST.DAY_SAVED_WORDS : D.owedWords(owed);
+      return head +
+        '<div class="dayread">' +
+          cs.map(c => '<div class="dayrow"><span class="dayl">' + esc(c[1]) + '</span>' +
+            '<span class="dayv tab">' + (row.counts[c[0]] || 0) + '</span></div>').join("") +
+          (cs.length > 1 ? '<div class="dayrow"><span class="dayl">Total</span>' +
+            '<span class="dayv tab">' + row.total + '</span></div>' : "") +
+          (row.note ? '<div class="daynote">' + esc(row.note) + '</div>' : "") +
+          '<div class="daysaid' + (owed ? " owed" : "") +
+            (owed && Number(owed.refused) >= STU_DAY_REFUSE_MAX ? " bad" : "") + '">' + esc(when) + '</div>' +
+        '</div>' + historyHtml(cs) + back;
+    }
+    const d = D.draftNow();
+    const wk = D.weekWords(D.draftTotal());
+    return head +
+      (D.ok === false ? '<div class="cphint">' + esc(D.why) + '</div>' : "") +
+      countedHtml(day) +
+      '<div class="dayform">' +
+        cs.map(c => '<label class="dayrow"><span class="dayl">' + esc(c[1]) + '</span>' +
+          '<input class="daybox tab" type="text" inputmode="numeric" pattern="[0-9]*" ' +
+            'data-daycount="' + esc(c[0]) + '" value="' + esc(String(d.counts[c[0]] == null ? "" : d.counts[c[0]])) +
+            '" aria-label="' + esc(c[1]) + '"></label>').join("") +
+        '<label class="dayrow daynoterow"><span class="dayl">Anything that got in the way</span>' +
+          '<textarea class="daytext" data-daynote="1" rows="3" maxlength="' + ST.DAY_NOTE_MAX +
+          '" placeholder="Machine down, waiting on glass, helped on another bench…">\n' +
+          esc(d.note) + '</textarea></label>' +
+        '<div class="daytot">' + esc(carried ? w.weekday : "Today") +
+          ': <strong class="tab" id="daytoday">' + D.draftTotal() + '</strong> ' + esc(unit) + '</div>' +
+        /* the week against its target, only where the stage has one */
+        (hasTarget()
+          ? '<div class="dayweek">This week: <strong class="tab" id="dayweeknum">' + esc(wk.words) + '</strong></div>' +
+            '<div class="daybar"><span id="daybarfill" style="width:' + wk.pct + '%"></span></div>'
+          : "") +
+        (D.bad ? '<div class="daybad">' + esc(D.bad) + '</div>' : "") +
+        '<button class="daysave" id="daysave" data-daysave="1"' +
+          (D.draftOk() ? "" : ' disabled aria-disabled="true"') + '>Save the sheet for ' +
+          esc(carried ? w.weekday : "today") + '</button>' +
+      '</div>' + historyHtml(cs) + back;
+  };
+  /** The sheet's own clicks and keystrokes. The boxes are NOT redrawn as they
+      are typed into - only the totals and the bar - because a card rebuilt on
+      every keystroke is a caret lost on every keystroke. */
+  D.wire = function (host) {
+    if (!host || !host.querySelectorAll) return;
+    const live = () => {
+      const t = D.draftTotal(), wk = D.weekWords(t);
+      const a = q$("#daytoday"); if (a) a.textContent = String(t);
+      const b = q$("#dayweeknum"); if (b) b.textContent = wk.words;
+      const c = q$("#daybarfill"); if (c) c.style.width = wk.pct + "%";
+      const s = q$("#daysave"); if (s) s.disabled = !D.draftOk();
+    };
+    host.querySelectorAll("[data-daycount]").forEach(el => el.oninput = () => {
+      cfg.touch();
+      D.draftNow().counts[el.dataset.daycount] = el.value;
+      D.saveDraft(); live();
+    });
+    host.querySelectorAll("[data-daynote]").forEach(el => el.oninput = () => {
+      cfg.touch();
+      D.draftNow().note = String(el.value || "").slice(0, ST.DAY_NOTE_MAX);
+      D.saveDraft();
+    });
+    host.querySelectorAll("[data-daysave]").forEach(el => el.onclick = () => {
+      if (el.disabled) return;
+      D.save();
+    });
+    host.querySelectorAll("[data-dayback]").forEach(el => el.onclick = () => {
+      D.shown = false; D.bad = ""; cfg.touch(); cfg.render();
+    });
+  };
+  /** The header button: open the sheet and ask the lists once. For a stage
+      that counts its own taps the log is asked every time, so the number is
+      today's and not this morning's. */
+  D.open = function () {
+    if (!D.sheet() || !who()) return;
+    D.shown = true; D.bad = ""; cfg.touch(); cfg.render();
+    const again = D.ok !== true ? D.read() : D.sheet().counted ? D.readLog() : null;
+    if (again) again.then(() => { if (D.shown) cfg.render(); }, () => {});
+  };
+  /** A change of person: the sheet closes and the half-typed draft is let go
+      from memory (it is still in storage under whose it is). */
+  D.reset = function () { D.shown = false; D.bad = ""; D.draft = null; };
+  return D;
+}
+
 const STU = {
-  STU_THEME_KEY,
-  stuEsc, stuAgo, stuThemeNow, stuApplyTheme, stuGate, stuPickerHtml, stuWirePicker
+  STU_THEME_KEY, STU_DAY_REFUSE_MAX,
+  stuEsc, stuAgo, stuThemeNow, stuApplyTheme, stuGate, stuPickerHtml, stuWirePicker, stuDaySheet
 };
 if (typeof window !== "undefined") window.STU = STU;
 else if (typeof globalThis !== "undefined") globalThis.STU = STU;

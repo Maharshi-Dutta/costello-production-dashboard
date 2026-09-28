@@ -174,7 +174,13 @@ the one that first wrote them down.
    station-stage per day — the cutter's end-of-day sheet, append-only from the
    tablet) and **`Station targets`** (one row per station-stage — the weekly
    target, written by the office and read-only on every tablet)
-   ([`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md)) — and one more
+   ([`docs/specs/2026-09-21-day-sheets-and-station-reports.md`](docs/specs/2026-09-21-day-sheets-and-station-reports.md)).
+   Since 2026-09-28 hotmelting (DG / TG, plus the tablet-only `Counted`) and
+   welding (`Squares`) have a day sheet too, with no target; welding's rows go
+   to a **second** `Station day sheets` list in `Floor stations`, resolved
+   through the station's own site, and the office's correction still PATCHes
+   only that stage's counts, `Note`, `EditedBy`, `EditedAt` — never `Counted`
+   ([`docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md`](docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md)) — and one more
    station list, **`Glazing station`** (one row per job, `Floor stations` site)
    ([`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md)).
 
@@ -366,6 +372,7 @@ node test_welding.js
 node test_daysheets.js
 node test_glazing.js
 node test_fabrication.js
+node test_floorlog.js
 node test_pages.js
 
 node verify.js   # dev-only cross-check, see below
