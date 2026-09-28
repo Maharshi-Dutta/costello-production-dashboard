@@ -65,6 +65,9 @@ tooling; lessons** — [[overview-and-process]]
 24. **The glazing station** — [[glazing-station]], continued in
     [[glazing-station-phase-bar]] (the phase bar hears the floor, tests, review)
 
+25. **The fabrication station** — [[fabrication-station]] (eligibility per
+    group and part, the fourth sanctioned fill, assignments, notifications)
+
 ## See also
 
 - [[ARCHITECTURE]] — the companion index: data flow, module map, invariants

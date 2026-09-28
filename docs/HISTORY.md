@@ -63,6 +63,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A33 | 2026-09-23 | **The glazing unit is a window, not windows plus doors.** A job's glazed total is its window count alone; a door-only job leaves the glazing station entirely (no card, no board row); card and board words say "windows" only. | Owner: "if a job has 11 windows and 2 doors the glazing should be 11 and the Total count should also be just all jobs (windows each job)." Doors are not glazed at this station. |
 | A35 | 2026-09-24 | **The welding tablet's "Sent to floor" chip goes; two tabs (On floor / Finished) replace it.** Any job on the `Production` sheet has been sent to the floor, date or not. On floor = Active, Section "In production", not finished. Finished = every other Active card — finished In production jobs and every job in a later section still on the sheet (e.g. Ready to fit) — which the tablet had never shown before. Finished cards stay fully tappable; a remake works on any job and keeps it in Finished. | Owner, 2026-09-24: the welder needs to reach jobs like R3708 in Ready to fit, mainly to record a remake on a job that came back with a fault; the chip was redundant once every sheet job counts as sent. Glass and glazing tablets: "not now." |
 | A36 | 2026-09-24 | **The glass and glazing tablets get the same On floor / Finished tabs as welding**, and all three tablets gain search that reaches across both tabs: typing auto-switches to the other tab when only it matches, shows "N more in …" when both match, and restores the pre-search tab on clearing. Glass's `Active` on `Glass station` keeps meaning "In production" only — the board, drawer, `OfficeDone` lock and colour writer all keep reading it that way; the tablet's own Finished tab covers the rest via new `Section`/`OnSheet` columns. No remake and no "Sent to floor" button on glass or glazing. | Owner, 2026-09-24, approving the brief that followed the welding Finished tab: bring the same tabs to the other two tablets in one push, with the search behaviour spelled out as four rules (switch on single-tab match, "N more" line on both, no save of a search-driven tab, restore on clear). |
+| A37 | 2026-09-25 | **The fourth floor station, fabrication (windows and doors after welding, no glass), and the fourth sanctioned fill.** F/S/T per product group and job, off `Production` alone; everybody sees every line, a person moves only the groups (later, groups and parts) their `Stages` name. The office paints a group's own F/S/T cell lavender `#D9D2E9` (started) / purple `#B4A7D6` (done) — **never lowers the office's own checkpoint record; the office may lower or clear its own record at any time.** Widened 2026-09-28: eligibility is per group **and** part (`Stages` gains `GROUP:parts`), and a job in Ready to fit / Ready, customer won't take / Collect & supply only is shown finished, green, display only. | Owner, 2026-09-25, approving the brief's rule 6 (the fourth fill, "never lowers office but office can lower theirs"); 2026-09-28 demo feedback: *"some people can do frames but not sash or transom and other combinations"* and *"ready to fit, customer won't take but ready, and collect & supply should be green as they are finished in the main excel sheet."* |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -557,6 +558,39 @@ change.
 
 ---
 
+### B32. A colour plan is a proposal, not a decision; a gate must fail closed
+
+**Caught by review, not by a live report** (fabrication Part A and Part B fix
+passes, `3b9b986` and `e587ca038`, 2026-09-25). Two separate mistakes in the
+same feature, both about trusting a snapshot past the moment it was taken:
+
+1. The fabrication colour painter built its plan from a checkpoint record up
+   to ten seconds old and a workbook download around 36 seconds old (the same
+   lag as B14/B15). Nothing re-checked the sheet at write time, so a lavender
+   or purple paint queued before the write could have landed **over** an
+   office yellow or gold that arrived in that gap — and nothing would ever
+   have healed it: the painter never claims a colour it does not own, and the
+   office's hand-paint adopter has no reason to treat lavender or purple as a
+   hand change. Fixed (review B1) by reading the *live* `/format/fill` of
+   every planned cell, plus its two header cells (to catch a moved column),
+   inside the serialised write and right before it, and deciding each cell
+   again from what comes back — an office write in flight, a foreign live
+   colour, a moved header, or a live colour already equal to the want are all
+   left alone.
+2. The Part B tablet gate took a boolean for "does the assignments list
+   exist", with only two states, but a list that simply has not been read yet
+   this session is neither "exists" nor "missing" — and the boolean let that
+   third case fall through as if the list were missing, opening every line
+   Part A's way on jobs that in fact already had assignments restricting
+   them. Fixed (review P1) by making the third state explicit: read (use the
+   index), missing (Part A's rule), or not known yet (nothing may be tapped).
+
+**Lesson:** a writer that decides from a download must re-read the live cell
+inside the serialised write before painting; and a gate must fail closed on
+an unknown read state, never default open for it.
+
+---
+
 ## C. Build log
 
 In order. Each line is one shipped commit.
@@ -721,6 +755,14 @@ zero counters lowered.
 | Commit | What it added |
 |---|---|
 | `6eaf031` brief → `daee2b6` (Part A build) → `036e7d9` (Part A fix pass) → `ec67cad` (Part B build) → `58f0c22` (Part B fix pass) → `b73a120` build stamp, build 20260924-1248 | **Finished tab on glass and glazing, search across all three tablets**, branch `finished-tab-glass-glazing` (`docs/specs/2026-09-24-finished-tab-glass-glazing-search.md`, A36), following the welding Finished tab shipped the same day. **Part A** — glazing: `glzTabs(items)` → `{floor, finished}`, mirroring `weldTabs`; section badge on a non-In-production card; tab key `cw_glztab`. Search, all three tablets: typing filters both tabs; when only the other tab matches, the tablet switches to it and shows the job; when both match, a tappable "N more in …" line appears instead of switching; clearing the search restores the tab that was showing before typing started; a search-driven switch is never saved. Independent review found one minor — a search could leak across a person switch — fixed by calling `clearSearch` on `pickPerson`/`switchPerson`/the idle lock. **Part B** — glass: two new Single-line-text columns on `Glass station` (workbook's site, ProductionProgress), `Section` and `OnSheet`, **added by script before the push** (scratchpad `f16e47b2…/add_glass_section_columns.py`, modes `check`/`rehearse` on throwaway list `GlassColsTest`/`create`; rehearsed, created, verified PRESENT). `glassSlice` now feeds every job with glass still on the sheet, not only In production ones (`Section`/`OnSheet` on every row); `Active` keeps meaning In production only (B31); a job leaving the sheet gets `Active = No` **and** `OnSheet = No` (`GLASS_GONE`/`def.goneFields`) — welding and glazing untouched. Seed rule unchanged: a newly fed later-section row is seeded from the office record only if untouched, and an untouched row never repaints (new glasscolour test). Tablet: `glassTabs` per stage, key `cw_glasstab`; header restructured to welding's two `.toprow` rows; "updated just now" hidden at ≤900px. Office `app.js` drawer gains a third state alongside the usual two: **touched+active** ("Recorded by the floor…"), **touched+inactive** ("Finished on the floor…"), and **untouched+inactive** ("Not on the floor's board — the job is in `<section>`."); the home-row glass chip now shows only when a job is active or floor-touched (review blocker — it had shown on every fed row once the feed widened). Reviews: Part A one minor, fixed; Part B two blockers before ship — the tablet header ran to three rows at 800px, and `app.js` had assumed `g.active` meant "was ever on the floor" rather than "In production now" — both fixed in the Part B fix pass. Suites: pages 4/4, station 273 (was 270), glasscolour 73 (was 72), welding 65 (was 64), glazing 63 (was 56), rest unchanged; browser rigs `tabs_check.js` 32/32, `search_check.js` 46/46, `glass_tabs_check.js` 50/50. No workbook write; rule-2 grep clean. Expected first feed against the local workbook copy (approximate): ~47 new rows in later sections (Ready to fit 20, Collect & supply 16, customer won't take 11), 43 of them arriving `OfficeDone = Yes`; every existing row PATCHed once with `Section`/`OnSheet`. Built by two implementers in parallel on disjoint files in one working tree. |
+
+---
+
+### 2026-09-28 — the fabrication station: the fourth floor page, the fourth sanctioned fill
+
+| Commit | What it added |
+|---|---|
+| `4871dbb` brief → `cca1ef6` (Part A build) → `3b9b986` (Part A fix pass) → `0cbd48d` (Part B build) → `e587ca0` (Part B fix pass) → `8dd3fa4` (feed ARCH ANGLES/TH W/COMPOSITE) → `a47634c` (demo amendments) → `f5a704b` (fix pass) → `34ebe15` build stamp, build 20260928-0959, live | **Fabrication**, the fourth floor station, windows and doors after welding, no glass (`docs/specs/2026-09-25-fabrication-station.md`, A37). New page `fabrication.html` + `fabrication.js` + `fabrication-core.js` (`FABC.FAB`), two new lists in `Floor stations`: `Fabrication station` (one row per job **and** product group, 27 columns) and `Fabrication assignments` (one row per piece of work given to a person, 10 columns), **CREATED BY SCRIPT 2026-09-25** (rehearsed on throwaway lists first, Title made unique through the API, reusing `make_floor_site.py`'s sign-in), plus 12 `Station people` rows (`Station = Fabrication`, no PIN) added 2026-09-28. All three parts (Frames, Sashes, **and Transoms**, unlike welding) off `Production` alone; ARCH ANGLES, TH W and COMPOSITE fed as the sheet names them (`8dd3fa4`, owner's answer); aluminium doors and aluclad sliders left out (no F/S column on the sheet for either). Eligibility per group and, since the 2026-09-28 demo, per **part** (`Stages` gains `GROUP:parts`, `fbEligible(person, group, part)`, A37). **The fourth sanctioned fill**: the office paints a group's own F/S/T cell lavender `#D9D2E9` (started) / purple `#B4A7D6` (done), never lowering the office's own checkpoint record, though the office may lower or clear its own record at any time (repo rule 1, dated). Part B: `Fabrication assignments` (Take, Assign, split, Approve/Refuse, Remove), office Urgent flags at job/group/part, a Who-is-doing-what view, and open-page-only tablet notifications (banner, sound, badge; `cw_fabseen`). 2026-09-28 demo amendment also adds "finished on the sheet" — a job in Ready to fit / Ready, customer won't take / Collect & supply only shown finished, green, display only, not tappable, the painter skipping it outright. **Three independent reviews**, one per stage: Part A (1 blocker + 4 minor: the painter's stale-plan risk was the blocker, fixed as B32's first lesson, `3b9b986`), Part B (1 blocker + 6 minor: the gate's missing third state was the blocker, fixed as B32's second lesson, plus the All/None-only-when-the-whole-line-is-yours rule, an undo when two office screens assign the same line at once, and seen-key pruning, `e587ca0`), and the demo amendments (0 blocker + 3 minor) — all fixed before ship. Suites: fabrication 21 (new), pages 5/5 (`fabrication.html` added), rest unchanged; browser rigs `fab_check.js` 19/19, `fab_check_b.js` 15/15. No workbook write outside the fourth sanctioned fill; rule-2 grep clean; no real name anywhere. |
 
 ---
 

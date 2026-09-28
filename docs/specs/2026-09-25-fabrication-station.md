@@ -1,7 +1,7 @@
 # Fabrication station — brief (2026-09-25)
 
-Status: **approved by the owner 2026-09-25, Part A in build.** Part B follows
-after Part A is reviewed.
+Status: **shipped 2026-09-28, build 20260928-0959, live.** Part A, Part B and
+the demo amendments (below) are all in this build.
 
 Read first: `CLAUDE.md` (repo root of this folder and `web/CLAUDE.md`),
 `docs/STATIONS.md` → "Adding a station" (follow it step by step), the Welding

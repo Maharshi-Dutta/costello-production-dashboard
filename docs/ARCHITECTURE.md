@@ -15,6 +15,8 @@ Last updated 2026-09-22 (split into linked notes; content unchanged).
   [[sheets-and-lists-scope]]
 - **The station feeder and the station page; the welding station** —
   [[station-feeder]]
+- **A fourth station, fabrication: eligibility per group/part, the fourth
+  sanctioned fill, assignments** — [[fabrication-station]]
 - **Module map; key invariants; where state lives** —
   [[module-map-and-invariants]]
 
