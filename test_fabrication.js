@@ -767,6 +767,43 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(A("fabrColourPlan(__SHJ)"), "... and the same job In production would be painted (the skip is the reason)");
   pass("finished on the sheet: the three sections green, full, locked; In production and second hand unchanged; painter skips");
 
+  /* ================= 9b. the Floor log reads every station's LOG (review, 2026-09-28) =====
+     This suite loads all four cores and app.js, so it is where "opening the
+     Floor log from the job list reads welding's, glazing's and fabrication's
+     logs" can be proven. The readers are replaced by recorders (no network in
+     this run): a station whose site is not resolved yet reads its board first,
+     which is what finds the site, and then its log. */
+  const CALLS = [];
+  A("WELD_SITEID = null; GLZ_SITEID = null; FABR_SITEID = null;" +
+    "WELD_LOG_OK = null; GLZ_LOG_OK = null; FABR_LOG_OK = null; WELD_OK = null; GLZ_OK = null; FABR_OK = null;");
+  global.__rec = (name, then, site) => { CALLS.push(name); if (site) A(site); if (then) then(); };
+  A("stationLogReadIfNeeded = t => __rec('glass-log', t);" +
+    "weldReadIfNeeded = t => __rec('weld-board', t, \"WELD_SITEID = 'S'\");" +
+    "weldLogReadIfNeeded = t => __rec('weld-log', t);" +
+    "glzReadIfNeeded = t => __rec('glz-board', t, \"GLZ_SITEID = 'S'\");" +
+    "glzLogReadIfNeeded = t => __rec('glz-log', t);" +
+    "fabrReadIfNeeded = (w, t) => __rec('fabr-' + w, t, w === 'board' ? \"FABR_SITEID = 'S'\" : '');");
+  A("state.board = null;");
+  const lhAt = NULLABLE.indexOf("#lhost"); NULLABLE.splice(lhAt, 1);   // the window opens this time
+  A("openStationLog('')");
+  ["glass-log", "weld-board", "weld-log", "glz-board", "glz-log", "fabr-board", "fabr-log"].forEach(c =>
+    assert.ok(CALLS.indexOf(c) >= 0, "opening the Floor log from the job list calls " + c));
+  assert.ok(CALLS.indexOf("weld-log") > CALLS.indexOf("weld-board"), "the log after the board has found the site");
+  CALLS.length = 0;
+  A("openStationLog('')");                     // sites known now: straight to the logs
+  assert.ok(CALLS.indexOf("weld-log") >= 0 && CALLS.indexOf("weld-board") < 0, "a known site goes straight to its log");
+  /* review fix 2: a station still being read says so, one quiet line each */
+  A("STATION_LOG_OK = true; STATION_LOG = []; WELD_LOG_OK = null; GLZ_LOG_OK = true; GLZ_LOG = [];" +
+    "FABR_LOG_OK = null; FABR_OK = false; FABR_WHY = 'the fabrication site is not there';");
+  A("paintStationLog()");
+  const lg = EL["#lgbody"].innerHTML;
+  assert.ok(lg.indexOf("Welding: still reading…") >= 0, "a station still being read says so");
+  assert.ok(lg.indexOf("Fabrication: the fabrication site is not there") >= 0,
+    "a station whose site failed says its board's reason, never “still reading” for ever");
+  NULLABLE.splice(lhAt, 0, "#lhost");
+  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");   // openStationLog armed the tick
+  pass("the Floor log reads each station's log (board first when its site is unknown), and says who is still reading");
+
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",

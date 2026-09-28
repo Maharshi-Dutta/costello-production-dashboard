@@ -2257,22 +2257,9 @@ async function stationPoll() {
          between. */
       stationNotesReadIfNeeded(() => { if (state.sel && $("#dhost")) renderDrawer(); });
     }
-    /* the day sheets, on the same clock and with the same manners: re-read
-       while their window is open (a sheet is saved once a day, so twenty
-       seconds is plenty), and otherwise simply asked for again when their own
-       retry clock comes round. Its own try, like the notes: a list that will
-       not answer must not be able to stall the glass colours. */
-    try {
-      /* the stage the window is on, or the glass board's week line when it is
-         not open - never every stage on every tick */
-      const dsId = $("#dayhost") ? (dayPick() || {}).id : dayBoardId();
-      const ds = dsId ? dayS(dsId) : null;
-      if (ds && $("#dayhost") && ds.ok === true && Date.now() - ds.at >= DAY_POLL_MS) {
-        if (await readDaySheets(dsId)) paintDaySheets();
-      } else if (ds && ds.ok !== true && dayDue(ds)) {
-        dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); }, dsId);
-      }
-    } catch (e) { console.warn("[station] day sheets poll:", (e && e.message) || e); }
+    /* the day sheets moved out of this poll to dayPoll() (review, 2026-09-28):
+       this function returns early when the GLASS list is unreadable, which
+       froze the window on Welding with it */
     STATION_ERR = "";
     if (moved) {
       redrawStation();
@@ -2360,6 +2347,25 @@ function redrawStation() {
      out from under them */
   if ($("#lhost")) paintStationLog();
 }
+/** The day sheets, on the floor's clock and with the same manners: re-read
+    while their window is open (a sheet is saved once a day, so twenty seconds
+    is plenty), otherwise asked for again when their own retry clock comes
+    round. Only the stage the window is on, or the glass board's week line when
+    it is not open - never every stage on every tick. Its own try in the tick,
+    beside each station's poll: no station's list can stall it, and it can
+    stall none of them. */
+async function dayPoll() {
+  if (typeof ST === "undefined" || typeof CW === "undefined" || !CW) return false;
+  const dsId = $("#dayhost") ? (dayPick() || {}).id : dayBoardId();
+  const ds = dsId ? dayS(dsId) : null;
+  if (!ds) return false;
+  if ($("#dayhost") && ds.ok === true && Date.now() - ds.at >= DAY_POLL_MS) {
+    if (await readDaySheets(dsId)) paintDaySheets();
+    return true;
+  }
+  if (ds.ok !== true && dayDue(ds)) dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); }, dsId);
+  return true;
+}
 /** The poll's own clock. Re-armed after every pass, so changing what is on
     screen changes the rate at the next tick rather than needing two timers. */
 let STATION_TICK_MS = 0;                 // the rate currently armed, for the tests
@@ -2385,6 +2391,7 @@ function stationTick() {
     try { await weldPoll(); } catch (e) { /* ... and so does this one */ }
     try { await glzPoll(); } catch (e) { /* ... and the third */ }
     try { await fabrPoll(); } catch (e) { /* ... and the fourth */ }
+    try { await dayPoll(); } catch (e) { /* ... and the day sheets, on their own */ }
     try { stationCatchUp(); } catch (e) {}
     stationTick();
   }, STATION_TICK_MS);
@@ -6682,6 +6689,14 @@ const stationReportPick = v => stationReportOptions().find(o => o.value === v) |
 /** What this dashboard holds about one station, in the shape stationReport
     takes. Nothing is fetched here: a report is made of what is already on
     screen, exactly as the Default export is. */
+/** Read one stage's day sheets unless they are already in hand - sharing a
+    read already in flight. Only for a stage that has a sheet. */
+async function dayReadForReport(id) {
+  if (!dayStages().some(o => o.id === id)) return;
+  const s = dayS(id);
+  if (s.ok === true) return;
+  try { await (s.reading || readDaySheets(id)); } catch (e) { /* the report goes without them */ }
+}
 function stationReportData(pick) {
   if (!pick) return {};
   /* the day sheets of THIS station-stage, as the Day sheets window last read
@@ -7195,6 +7210,11 @@ async function stationReportDownload() {
   const pick = stationReportPick(XSTATE.station);
   if (!pick) return null;
   const period = xpPeriodNow();
+  /* the stage's day sheets, read now if the Day sheets window never was on
+     that stage (review, 2026-09-28: welding / hotmelt reports went out with
+     their day-sheet columns blank). A list that cannot be read leaves them
+     empty, exactly as before. */
+  await dayReadForReport(pick.def.name + "|" + pick.stage);
   const data = stationReportData(pick);
   const buildEl = $("#build");
   data.who = xpWhoName();
@@ -8533,22 +8553,36 @@ let LOGF = { station: "", who: "", stage: "", job: "", day: "", show: LOG_PAGE }
 const LOG_BOARD_STATION = { glass: "Glass", welding: "Welding", glazing: "Glazing", fabrication: "Fabrication" };
 /** Each station's lines, as far as they have been read: [{ station, rows, ok, why }]. */
 function floorLogSources() {
+  /* a station whose SITE could not be reached never gets as far as its log:
+     its board's own "no" is the answer, rather than "still reading" for ever */
+  const src = (station, logOk, logWhy, boardOk, boardWhy, rows) =>
+    (logOk === null && boardOk === false
+      ? { station: station, ok: false, why: boardWhy, rows: [] }
+      : { station: station, ok: logOk, why: logWhy, rows: logOk === true ? rows() : [] });
   const out = [{ station: "Glass", ok: STATION_LOG_OK, why: STATION_LOG_WHY || STATION_LOG_MISSING,
                  rows: STATION_LOG_OK === true ? logRowsNow() : [] }];
   if (typeof WELDC !== "undefined")
-    out.push({ station: "Welding", ok: WELD_LOG_OK, why: WELD_LOG_WHY, rows: WELD_LOG_OK === true ? weldLogRowsNow() : [] });
+    out.push(src("Welding", WELD_LOG_OK, WELD_LOG_WHY, WELD_OK, WELD_WHY, weldLogRowsNow));
   if (typeof GLZC !== "undefined")
-    out.push({ station: "Glazing", ok: GLZ_LOG_OK, why: GLZ_LOG_WHY, rows: GLZ_LOG_OK === true ? glzLogRowsNow() : [] });
+    out.push(src("Glazing", GLZ_LOG_OK, GLZ_LOG_WHY, GLZ_OK, GLZ_WHY, glzLogRowsNow));
   if (typeof FABC !== "undefined")
-    out.push({ station: "Fabrication", ok: FABR_LOG_OK, why: FABR_LOG_WHY, rows: FABR_LOG_OK === true ? fabrLogRowsNow() : [] });
+    out.push(src("Fabrication", FABR_LOG_OK, FABR_LOG_WHY, FABR_OK, FABR_WHY, fabrLogRowsNow));
   return out;
 }
-/** Read each station's log the way its own board does, once, if nobody has. */
+/** Read each station's LOG, once, if nobody has (review, 2026-09-28: this
+    called the board readers, which never read the log). A station whose site
+    has not been resolved yet reads its board first - that is what finds the
+    site - and its log straight after. */
 function floorLogReadIfNeeded(then) {
   stationLogReadIfNeeded(then);
-  if (typeof WELDC !== "undefined") weldReadIfNeeded(then);
-  if (typeof GLZC !== "undefined") glzReadIfNeeded(then);
-  if (typeof FABC !== "undefined") fabrReadIfNeeded("log", then);
+  const chain = (siteOf, boardRead, logRead) => {
+    if (siteOf()) logRead(then);
+    else boardRead(() => { if (siteOf()) logRead(then); else if (then) then(); });
+  };
+  if (typeof WELDC !== "undefined") chain(() => WELD_SITEID, weldReadIfNeeded, weldLogReadIfNeeded);
+  if (typeof GLZC !== "undefined") chain(() => GLZ_SITEID, glzReadIfNeeded, glzLogReadIfNeeded);
+  if (typeof FABC !== "undefined")
+    chain(() => FABR_SITEID, t => fabrReadIfNeeded("board", t), t => fabrReadIfNeeded("log", t));
 }
 /** The merged list for the window's station filter, newest first by time. */
 function floorLogAll() {
@@ -8674,7 +8708,9 @@ function paintStationLog() {
   const waiting = srcs.filter(s => s.ok === null);
   const failed = srcs.filter(s => s.ok === false);
   const notes = failed.map(s => '<div class="cphint">' + esc((LOGF.station ? "" : s.station + ": ") +
-    (s.why || STATION_LOG_MISSING)) + '</div>').join("");
+    (s.why || STATION_LOG_MISSING)) + '</div>').join("") +
+    /* a station still being read says so, rather than simply being absent */
+    waiting.map(s => '<div class="cphint">' + esc(s.station + ": still reading…") + '</div>').join("");
   const jobOrDash = r => (r.job ? jobCell(r.job) : '<span class="stn">\u2014</span>');
   const body = !rows.length && waiting.length && !failed.length
       ? '<div class="empty">' + esc(STATION_CHECKING) + '</div>'
@@ -8732,7 +8768,7 @@ function dayDefaultFilters() {
 const dayStageWords = id => (dayPick(id) || {}).word || dayStage(id);
 /* the "(Glass cut)" job column of the two Dashboard Log lines this window
    writes - the Floor log reads the station back out of it */
-const dayLogJob = () => "(" + ((dayPick() || {}).def || ST.GLASS).name + " " + dayStage() + ")";
+const dayLogJob = id => "(" + ((dayPick(id) || {}).def || ST.GLASS).name + " " + dayStage(id) + ")";
 
 /** `stage` is a station-stage id ("Welding|weld"); none = the current board's
     own stage if it has one, else the first (Cutting). */
@@ -8966,11 +9002,14 @@ async function saveDayTarget(raw) {
     return false;
   }
   if (dayWriting) return false;
-  const had = dayTargetNow();
+  /* THE STAGE IS TAKEN ONCE, HERE (review, 2026-09-28): the selector can move
+     while the upsert is in the air, and the log line must name the stage that
+     was written, not the one on screen when it lands */
+  const pick = dayPick(), pid = pick.id;
+  const had = dayTargetNow(pid);
   if (had && had.target === n) return false;         // nothing to say
   dayWriting = true;
   try {
-    const pick = dayPick();
     const siteId = await CW.stationSite(pick.def.site);
     if (!siteId) throw new Error(STATION_SITE_MISSING);
     const title = ST.targetTitle(pick.def.name, pick.stage);
@@ -8978,10 +9017,10 @@ async function saveDayTarget(raw) {
                         ST.targetFields(n, feedWho(), new Date().toISOString()),
                         { siteId: siteId, fields: ST.TARGET_FIELDS });
     dayWriting = false;
-    await readDaySheets();
-    renderDaySheets();
-    noteChange(dayLogJob(),
-               dayStageWords() + " weekly target", had ? String(had.target) : "", String(n));
+    await readDaySheets(pid);
+    if ($("#dayhost")) renderDaySheets();
+    noteChange(dayLogJob(pid),
+               dayStageWords(pid) + " weekly target", had ? String(had.target) : "", String(n));
     toast("Weekly target saved");
     return true;
   } catch (e) {
@@ -8999,9 +9038,11 @@ async function saveDayTarget(raw) {
 async function saveDayEdit(id, got) {
   if (typeof ST === "undefined" || !CW || !CW.listPatch || !dayStage()) return false;
   if (dayWriting) return false;
-  const row = dayRowsNow().find(r => r.id === String(id));
+  /* the stage, once (review, 2026-09-28) - see saveDayTarget */
+  const pick = dayPick(), pid = pick.id;
+  const row = dayRowsNow(pid).find(r => r.id === String(id));
   if (!row) return false;
-  const counts = dayCountCols();
+  const counts = dayCountCols(pid);
   const body = ST.dayOfficeFields(counts, { counts: got.counts, note: got.note,
                                             who: feedWho(), at: new Date().toISOString() });
   if (!body) {
@@ -9015,17 +9056,16 @@ async function saveDayEdit(id, got) {
      typed the moment Save was tapped. Only the button is greyed, in place. */
   dayEditBusy(true);
   try {
-    const pick = dayPick();
     const siteId = await CW.stationSite(pick.def.site);
     if (!siteId) throw new Error(STATION_SITE_MISSING);
     await CW.listPatch(ST.DAY_LIST, row.id, body,
                        { siteId: siteId, fields: ST.dayFieldsFor(pick.def, pick.stage) });
     dayWriting = false;
     DAYEDIT = "";
-    await readDaySheets();
+    await readDaySheets(pid);
     paintDaySheets();
     const after = counts.reduce((n, c) => n + (Number(body[c[0]]) || 0), 0);
-    noteChange(dayLogJob(), "Day sheet corrected",
+    noteChange(dayLogJob(pid), "Day sheet corrected",
                row.day + " " + row.who + ": " + row.total, String(after));
     toast("Day sheet corrected");
     return true;

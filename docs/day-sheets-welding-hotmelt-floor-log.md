@@ -36,9 +36,13 @@ owed after it), welding uses `cw_welddayq` / `cw_welddaydraft`.
 **Hotmelting's own count.** `ST.dayCounted(logRows, who, day, stage)` is the
 sum of `To − From` over the person's `Station log` lines at that stage on that
 LOCAL day, never below nought. The hotmelt tablet reads `Station log` through
-the delta feed when the sheet opens (the glass tablet did not read the log
-before), adds its own lines still owed (`LOGQ`), and shows "You hotmelted N
-units today". DG and TG are typed, not prefilled. When DG + TG differs from a
+the delta feed **each time the sheet opens, and at no other time** (not at
+start, not after a flush), adds its own lines still owed (`LOGQ`), and shows
+"You hotmelted N units today". Until that read lands the line says "Counting
+your taps today…" and Save is shut (`DAY.logState` "reading"); if the read
+fails the sheet says so, Save opens, and `Counted` is left off the row.
+An owed sheet of another stage (a tablet switched from cutting) is recognised
+as already saved by its Title, whatever its stage. DG and TG are typed, not prefilled. When DG + TG differs from a
 non-zero N, the one save question starts "You counted N taps today and typed M.
 Save anyway?"; no taps at all is not a disagreement.
 
@@ -55,11 +59,15 @@ glass board's week line asks — `dayBoardId()`). A selector at the top lists
 `dayStages()` off `stationDefs()`; the window opens on the board's own stage or
 on Cutting. Hotmelting shows `Counted` read-only beside DG / TG and a small
 "≠ counted". Corrections and targets write through that stage's definition and
-site; the `Dashboard Log` job column stays `"(<Station> <stage>)"`.
+site; the `Dashboard Log` job column stays `"(<Station> <stage>)"`, taken
+from the stage captured when the write started. The window's refresh is
+`dayPoll()`, its own try in the floor tick beside each station's poll, so an
+unreadable glass list cannot freeze it.
 
 The station report's Days sheet now carries welding's squares and hotmelting's
-DG / TG, plus a "Counted by the tablet" column where the stage counts
-(`stationReportData` passes the stage's own rows, when the window has read them).
+DG / TG, plus a "Counted by the tablet" column where the stage counts.
+`stationReportDownload` reads the stage's day sheets first
+(`dayReadForReport`) when the window never did.
 
 ### The Floor log, every station
 
@@ -67,8 +75,11 @@ DG / TG, plus a "Counted by the tablet" column where the stage counts
 Glazing / Fabrication); from a board it opens on that board's station, from the
 job list on All, from the glass drawer on Glass. Sources are the arrays the
 boards already hold (`STATION_LOG`, `WELD_LOG`, `GLZ_LOG`, `FABR_LOG`, each
-through `ST.logRows(items, name)`), read if needed through the boards' own
-`*ReadIfNeeded`. The office's edits come out of `CHANGES` through
+through `ST.logRows(items, name)`), read if needed through each station's own
+**log** reader (`weldLogReadIfNeeded`, `glzLogReadIfNeeded`,
+`fabrReadIfNeeded("log")`) — after its board read when the station's site is
+not resolved yet. A station still being read says "still reading…"; one whose
+site failed shows its board's reason. The office's edits come out of `CHANGES` through
 `ST.officeLogRows` — the "what" words are matched in one list,
 `ST.OFFICE_FLOOR_EDITS`:
 

@@ -187,7 +187,8 @@ function stuDaySheet(cfg) {
     bad: "",             // what is wrong with what is typed, in words
     q: {},               // saved sheets this tablet still owes
     logItems: null,      // Station log, for a stage that counts its own taps
-    logToken: null
+    logToken: null,
+    logState: ""         // "" not asked · "reading" · "ok" · "failed" - for this opening
   };
   const esc = stuEsc;
   const stage = () => String(cfg.stage() || "");
@@ -251,7 +252,8 @@ function stuDaySheet(cfg) {
         D.target = hit ? hit.target : null;
       } catch (e) { /* keep the last one */ }
     }
-    if (D.sheet().counted) await D.readLog();
+    /* NOT the log (review, 2026-09-28): this runs at start and after every
+       flush, and a full `Station log` read belongs only to opening the sheet */
     return got;
   };
   /** `Station log`, for the tablet's own count: the delta feed, so opening the
@@ -276,11 +278,15 @@ function stuDaySheet(cfg) {
       return false;
     }
   };
-  /** What the tablet counted of this person's taps today, or null when the
-      log has not been read. */
+  /** What the tablet counted of this person's taps today, or null while the
+      log is being read for this opening of the sheet, or could not be read.
+
+      ONLY A LOG READ SINCE THE SHEET OPENED COUNTS (review, 2026-09-28): the
+      copy from an earlier opening misses every tap made since, which made
+      Counted short and asked a false "you counted N and typed M". */
   D.counted = function (day) {
     const ds = D.sheet();
-    if (!ds || !ds.counted || D.logItems == null) return null;
+    if (!ds || !ds.counted || D.logState !== "ok" || D.logItems == null) return null;
     const mine = (typeof cfg.pendingLog === "function" ? cfg.pendingLog() : [])
       .map((f, i) => ({ id: "owed-" + i, fields: f }));
     const rows = ST.logRows(D.logItems.concat(mine), def.name);
@@ -349,7 +355,9 @@ function stuDaySheet(cfg) {
     return ds.counts.some(c => String(d.counts[c[0]] == null ? "" : d.counts[c[0]]).trim() !== "") ||
            String(d.note || "").trim() !== "";
   };
-  D.draftOk = () => D.draftValid() && D.draftTyped();
+  /** still counting this person's taps: Save waits for the count */
+  const counting = () => !!(D.sheet() && D.sheet().counted && D.logState === "reading");
+  D.draftOk = () => D.draftValid() && D.draftTyped() && !counting();
   /** "This week: N of T": this person's saved sheets in the week of the day
       this sheet is about, plus what is typed now, against the target. */
   D.weekWords = function (extra) {
@@ -369,6 +377,11 @@ function stuDaySheet(cfg) {
     const d = D.draftNow();
     if (D.saved(d.day) || D.owed(d.day)) return false;              // one per person per day
     if (!D.draftTyped()) { D.bad = "Fill in a number or write a line first."; cfg.render(); return false; }
+    /* a stage that counts: the count must be fresh, or known to be unavailable */
+    if (ds.counted && D.logState !== "ok" && D.logState !== "failed") {
+      if (D.logState !== "reading") D.open();
+      D.bad = "Still counting your taps — a moment."; cfg.render(); return false;
+    }
     const counted = ds.counted ? D.counted(d.day) : null;
     const fields = ST.dayFields(def, stage(), {
       day: d.day, who: who(), counts: d.counts, note: d.note,
@@ -403,19 +416,33 @@ function stuDaySheet(cfg) {
       before anything is called a failure. A row SharePoint keeps refusing
       (a 4xx) stops saying "waiting to send" after STU_DAY_REFUSE_MAX and says
       to tell the office; it STAYS QUEUED either way. */
+  /** Is a row with this Title on the list already, whatever stage it is? */
+  async function landedAlready(f, opts) {
+    try {
+      const items = await CW.listItems(ST.DAY_LIST, opts);
+      const want = String(f.Title || "").trim().toUpperCase();
+      return !!items && items.some(it => String(((it && it.fields) || {}).Title || "").trim().toUpperCase() === want);
+    } catch (e) { return false; }
+  }
   D.flush = async function () {
-    if (!siteId() || !D.sheet()) return;
+    /* not gated on this page's stage having a sheet: every queued row was
+       rebuilt through its own stage's definition (cleanQ) */
+    if (!siteId() || !D.owing()) return;
     const keys = Object.keys(D.q);
     for (let i = 0; i < keys.length; i++) {
       const e = D.q[keys[i]];
       if (!e) continue;
+      /* the queued row's OWN stage, not the page's: a tablet switched from
+         cutting to hotmelting may still owe a cutting sheet (review, 2026-09-28) */
+      const rowOpts = { siteId: siteId(), fields: ST.dayFieldsFor(def, e.fields.Stage) };
       try {
-        await CW.listAdd(ST.DAY_LIST, e.fields, dayOpts());
+        await CW.listAdd(ST.DAY_LIST, e.fields, rowOpts);
         delete D.q[keys[i]];
         await D.read();
       } catch (err) {
-        const landed = (await D.read()) && D.rows.some(r => r.title === e.fields.Title);
-        if (landed) { delete D.q[keys[i]]; D.persist(); continue; }
+        if (await landedAlready(e.fields, rowOpts)) {
+          delete D.q[keys[i]]; D.persist(); await D.read(); continue;
+        }
         e.err = 1;
         /* only a refusal counts: a dropped connection is not the list saying no */
         const refused = !!(CW.isMissing && CW.isMissing(err)) || !!(CW.isRefused && CW.isRefused(err)) ||
@@ -459,7 +486,9 @@ function stuDaySheet(cfg) {
     const n = D.counted(day);
     const unit = ds.unit || "units";
     return '<div class="daycount">' + (n == null
-      ? "Your taps today have not been counted yet — the tablet is still reading its log."
+      ? (D.logState === "failed"
+          ? "Your taps could not be counted just now — the sheet saves without the tablet’s count."
+          : "Counting your taps today…")
       : "You " + esc(ds.verb || "recorded") + " " +
         '<strong class="tab">' + n + '</strong> ' + esc(unit) + " " +
         (day === today() ? "today" : "on " + esc(ST.isoWeek(day).weekday))) + '</div>';
@@ -554,9 +583,16 @@ function stuDaySheet(cfg) {
       today's and not this morning's. */
   D.open = function () {
     if (!D.sheet() || !who()) return;
-    D.shown = true; D.bad = ""; cfg.touch(); cfg.render();
-    const again = D.ok !== true ? D.read() : D.sheet().counted ? D.readLog() : null;
-    if (again) again.then(() => { if (D.shown) cfg.render(); }, () => {});
+    const counts = !!D.sheet().counted;
+    D.shown = true; D.bad = "";
+    if (counts) D.logState = "reading";                 // the count on screen waits for this read
+    cfg.touch(); cfg.render();
+    const jobs = [];
+    if (D.ok !== true) jobs.push(D.read());
+    if (counts) jobs.push(D.readLog().then(ok => { D.logState = ok ? "ok" : "failed"; },
+                                           () => { D.logState = "failed"; }));
+    const redraw = () => { if (D.shown) cfg.render(); };
+    if (jobs.length) Promise.all(jobs).then(redraw, redraw);
   };
   /** A change of person: the sheet closes and the half-typed draft is let go
       from memory (it is still in storage under whose it is). */

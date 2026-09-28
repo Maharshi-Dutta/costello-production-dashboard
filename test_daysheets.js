@@ -834,19 +834,42 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   H("pickPerson(PEOPLE.find(p => p.name === 'Person B'))");
   assert.strictEqual(H("PAGE_STAGE"), "hotmelt");
   assert.ok(H("!!DAY.sheet()"), "the hotmelting tablet has a day sheet now");
+  const logReq = () => REQ.filter(r => r.path.indexOf("/" + LOG_ID) >= 0);
+  reset();
   assert.strictEqual(await H("DAY.read()"), true, "and reads the day sheets list");
   assert.strictEqual(targetReq().length, 0, "but never the target list: hotmelting has no target");
-  assert.strictEqual(H("DAY.counted()"), 4, "4 units counted: 3 + 2 - 1, Glass lines only");
+  /* review fix 5: reading the day sheets (start, every flush) never reads the log */
+  assert.strictEqual(logReq().length, 0, "DAY.read() does not read Station log");
+  assert.strictEqual(H("DAY.counted()"), null, "so nothing is counted until the sheet is opened");
+  /* review fix 4: opening reads the log afresh; until it lands the count is
+     "counting…" and Save is shut */
   H("DAY.open()");
-  assert.ok(/You hotmelted <strong class="tab">4<\/strong> units today/.test(H("DAY.html()")),
-    "the sheet opens with “You hotmelted 4 units today”");
+  assert.strictEqual(H("DAY.logState"), "reading");
+  assert.ok(H("DAY.html()").indexOf("Counting your taps today") >= 0, "“counting…” while the log is read");
+  H("DAY.draftNow().counts.DG = '1'; DAY.saveDraft();");
+  assert.strictEqual(H("DAY.draftOk()"), false, "Save waits for the count");
+  assert.strictEqual(await H("DAY.save()"), false, "and a save that gets through is turned back");
+  assert.strictEqual(ASKED.length, 0, "without a question");
+  await settle();
+  assert.ok(logReq().length >= 1, "the log is read on opening");
+  assert.strictEqual(H("DAY.logState"), "ok");
+  assert.strictEqual(H("DAY.counted()"), 4, "4 units counted: 3 + 2 - 1, Glass lines only");
+  /* a tap made after the first opening is in the next opening's count */
+  LOGITEMS.push(item({ Title: "R5304", Station: "Glass", GlassType: "DG", Stage: "hotmelt", From: 0, To: 2,
+                       Who: "Person B", At: new Date().toISOString() }));
+  H("DAY.open()");
+  await settle();
+  assert.strictEqual(H("DAY.counted()"), 6, "re-opening the sheet counts what was tapped since");
+  H("DAY.clearDraft(); DAY.draft = null;");
+  assert.ok(/You hotmelted <strong class="tab">6<\/strong> units today/.test(H("DAY.html()")),
+    "the sheet says “You hotmelted 6 units today”");
   assert.ok(H("DAY.html()").indexOf("dayweek") < 0, "and no week-against-target line");
   assert.ok(H("DAY.html()").indexOf('data-daycount="DG"') > 0 && H("DAY.html()").indexOf('data-daycount="TG"') > 0,
     "two boxes, DG and TG");
   assert.strictEqual(H("DAY.draftNow().counts.DG"), undefined, "neither is prefilled");
   H("DAY.draftNow().counts.DG = '5'; DAY.saveDraft();");
   assert.strictEqual(await H("DAY.save()"), false, "Back on the question saves nothing");
-  assert.ok(ASKED[0].indexOf("You counted 4 taps today and typed 5. Save anyway?") === 0,
+  assert.ok(ASKED[0].indexOf("You counted 6 taps today and typed 5. Save anyway?") === 0,
     "one plain question when the typed total is not the count");
   answer = true;
   assert.strictEqual(await H("DAY.save()"), true, "Save anyway saves");
@@ -855,12 +878,47 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   assert.strictEqual(hPosts.length, 1);
   const hb = hPosts[0].body.fields;
   assert.strictEqual(hb.Title, "Glass|hotmelt|" + TODAY_H + "|Person B");
-  assert.strictEqual(hb.DG, 5); assert.strictEqual(hb.TG, 0); assert.strictEqual(hb.Counted, 4);
+  assert.strictEqual(hb.DG, 5); assert.strictEqual(hb.TG, 0); assert.strictEqual(hb.Counted, 6);
   assert.ok(!("WeekTarget" in hb), "no WeekTarget");
   assert.strictEqual(await H("DAY.save()"), false, "and a second save the same day is refused");
   assert.strictEqual(mem.cw_stationdayq === undefined || mem.cw_stationdayq === "{}", true, "nothing left owed");
   assert.strictEqual(targetReq().length, 0, "not one request for the target list in the whole hotmelt run");
   pass("the hotmelting sheet: its own count, DG and TG typed, one question on a mismatch, Counted saved");
+
+  /* review fix 4, the fallback: a log that cannot be read does not stop the
+     sheet - it saves, says so, and writes no Counted */
+  reset();
+  const realDelta = CW.listDelta;
+  CW.listDelta = async () => { throw new Error("GET /x -> 503 unavailable"); };
+  H("PERSON = { name: 'Person F', stages: ['hotmelt'] }; DAY.draft = null; DAY.clearDraft();");
+  H("DAY.open()");
+  await settle();
+  assert.strictEqual(H("DAY.logState"), "failed");
+  assert.ok(H("DAY.html()").indexOf("could not be counted just now") >= 0, "it says the count is missing");
+  H("DAY.draftNow().counts.TG = '2'; DAY.saveDraft();");
+  assert.strictEqual(H("DAY.draftOk()"), true, "and Save is open");
+  ASKED.length = 0;
+  assert.strictEqual(await H("DAY.save()"), true);
+  assert.ok(ASKED[0].indexOf("You counted") < 0, "no mismatch question with nothing to compare");
+  await settle();
+  const fPost = dayReq().filter(r => r.method === "POST")[0].body.fields;
+  assert.strictEqual(fPost.TG, 2);
+  assert.ok(!("Counted" in fPost), "Counted is left out, not written as 0");
+  CW.listDelta = realDelta;
+  pass("review fix 4: a log that cannot be read leaves the sheet saveable, says so, and writes no Counted");
+
+  /* review fix 9: a sheet of ANOTHER stage still owed by this tablet (it was
+     the cutting tablet this morning) whose POST landed but whose answer was
+     lost is found by its Title and let go - not refused for ever */
+  reset();
+  const cutTitle = "Glass|cut|" + TODAY_H + "|Person A";
+  DAYITEMS.push(daySheetRow(TODAY_H, "Person A", [3, 0, 0, 0], {}, "991"));
+  const owedCut = ST.dayFields(ST.GLASS, "cut", { day: TODAY_H, who: "Person A", counts: { Clear: "3" } });
+  H("DAY.q[" + JSON.stringify(cutTitle) + "] = { fields: " + JSON.stringify(owedCut) + ", err: 0, refused: 0 };");
+  await H("DAY.flush()");
+  assert.strictEqual(H("Object.keys(DAY.q).length"), 0, "the cutting sheet is recognised as saved and let go");
+  assert.ok(dayReq().some(r => r.method === "POST"), "after the list refused it as a duplicate");
+  pass("review fix 9: an owed sheet of another stage is matched by its Title and let go");
 
   /* ================= 7. the office ================= */
   reset();
@@ -1102,6 +1160,47 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   A("$('#dayhost').remove(); DAYSEL = '';");
   A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
   pass("the Day sheets window: a selector per station-stage, Counted beside DG/TG, no target where none");
+
+  /* review fix 8: the stage is taken once, when the correction starts - the
+     selector moving while the PATCH is in the air does not move the log line */
+  reset();
+  A("for (const k in DAYST) delete DAYST[k]; DAYSEL = 'Glass|hotmelt';");
+  assert.ok(await A("readDaySheets()"));
+  const racing = A("saveDayEdit('88', { counts: { DG: '5', TG: '1' }, note: '' })");
+  A("DAYSEL = 'Glass|cut';");                      // the selector moves mid-write
+  assert.strictEqual(await racing, true);
+  assert.strictEqual(LOGGED.length, 1);
+  assert.strictEqual(LOGGED[0].job, "(Glass hotmelt)", "the log names the stage that was written");
+  A("DAYSEL = '';");
+  pass("review fix 8: a correction logs the stage it wrote, whatever the selector says by then");
+
+  /* review fix 3: a report of a stage the window was never opened on reads
+     that stage's day sheets first, rather than going out with them blank */
+  reset();
+  A("for (const k in DAYST) delete DAYST[k]; DAYSEL = '';");
+  A("XSTATE = xpNewState(); XSTATE.template = 'station'; XSTATE.format = 'xlsx'; " +
+    "XSTATE.station = 'glass|hotmelt'; XSTATE.period = 'custom'; XSTATE.pfrom = '2026-09-01'; XSTATE.pto = '2026-09-30';");
+  assert.strictEqual(A("dayS('Glass|hotmelt').ok"), null, "nothing read for hotmelting yet");
+  await A("stationReportDownload()");
+  assert.ok(dayReq().some(r => r.method === "GET"), "the report read the day sheets itself");
+  assert.strictEqual(A("dayS('Glass|hotmelt').ok"), true);
+  assert.ok(A("stationReportData(stationReportPick('glass|hotmelt')).days.length") >= 1,
+    "and its Days carry the hotmelt sheet");
+  A("$('#xhost') && $('#xhost').remove();");
+  pass("review fix 3: a station report reads its stage's day sheets before building");
+
+  /* review fix 7: the window's refresh is its own poll, not a passenger of the
+     glass poll - an unreadable glass list does not freeze it */
+  A("openDaySheets('Glass|hotmelt');");
+  await settle();
+  A("STATION_OK = false; dayS('Glass|hotmelt').at = 0;");
+  reset();
+  assert.strictEqual(await A("stationPoll()"), false, "the glass poll stops at the unreadable glass list");
+  await A("dayPoll()");
+  assert.ok(dayReq().some(r => r.method === "GET"), "and the day sheets are re-read all the same");
+  assert.ok(A("stationTick.toString()").indexOf("dayPoll()") >= 0, "dayPoll has its own place in the tick");
+  A("$('#dayhost').remove(); DAYSEL = ''; if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+  pass("review fix 7: the Day sheets window refreshes even when the glass list cannot be read");
 
   reset();
   A("state.board = 'glass'; STATION_OK = true;");
