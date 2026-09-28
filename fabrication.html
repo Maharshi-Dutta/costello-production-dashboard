@@ -19,6 +19,7 @@
     --accent:#6aa9ec; --urgent:#f07a72;
     --lav:#c9bff0; --lav-bg:#2a2638; --lav-line:#5b5280;
     --pur:#b19cf0; --pur-bg:#352a55; --pur-line:#7b66c4;
+    --sht:#7fca7f; --sht-bg:#1c3320; --sht-line:#3d6b42;
   }
   :root[data-theme="light"] {
     --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
@@ -27,6 +28,7 @@
     --accent:#184f95; --urgent:#b3261e;
     --lav:#5e4f9e; --lav-bg:#f1eef9; --lav-line:#d9d2e9;
     --pur:#4b3591; --pur-bg:#e3dcf3; --pur-line:#b4a7d6;
+    --sht:#1f6b2c; --sht-bg:#e8f6e8; --sht-line:#a9d8ac;
   }
   * { box-sizing:border-box }
   [hidden] { display:none !important }
@@ -107,6 +109,15 @@
           padding:13px 14px; animation:rise .22s both }
   .card.c-lavender { border-color:var(--lav-line) }
   .card.c-purple { background:var(--pur-bg); border-color:var(--pur-line) }
+  /* finished on the sheet (Ready to fit, Ready customer won't take, Collect &
+     supply): green, a different sentence from purple "done in fabrication" */
+  .card.c-sheet { background:var(--sht-bg); border-color:var(--sht-line) }
+  .wgrp.c-sheet { border-color:var(--sht-line); border-left-color:var(--sht); background:var(--sht-bg) }
+  .step.c-sheet .wbarfill { background:var(--sht) }
+  .step.c-sheet .stepn { color:var(--sht) }
+  .step.locked.c-sheet .stepmid, .step.locked.c-sheet .stepl { opacity:1 }
+  .csheet { font-size:13px; font-weight:700; color:var(--sht); white-space:nowrap; flex:none;
+            border:1px solid var(--sht-line); border-radius:12px; padding:1px 9px }
   .chead { display:flex; align-items:baseline; gap:12px; margin-bottom:5px; flex-wrap:nowrap }
   .job { font-size:28px; font-weight:700; line-height:1; flex:none }
   .cust { font-size:16px; color:var(--ink-2); flex:1 1 auto; min-width:0;

@@ -188,9 +188,19 @@ function fbColour(done, total) {
 function fbRollUp(colours) {
   const c = (colours || []).filter(x => x != null);
   if (!c.length) return "";
-  if (c.every(x => x === "purple")) return "purple";
+  if (c.every(x => x === "sheet")) return "sheet";
+  if (c.every(x => x === "purple" || x === "sheet")) return "purple";
   return c.some(x => x) ? "lavender" : "";
 }
+/* ---- finished on the sheet (owner, 2026-09-28) -------------------------------
+   "ready to fit, customer won't take but ready, and collect & supply should be
+   green as they are finished in the main excel sheet". Exactly those three
+   sections - not "Can sell as second hand", not In production. A job there is
+   SHOWN finished: every line full, colour "sheet" (green), not tappable. It is
+   display only: the list's counters are untouched (kept on `raw`), nothing is
+   written, and the colour painter skips the job. */
+const FB_SHEET_DONE = [/^READY TO FIT/, /^READY CUSTOMER WON/, /^COLLECT SUPPLY/];
+const fbSheetDone = section => { const k = fbKey(section); return !!k && FB_SHEET_DONE.some(r => r.test(k)); };
 /** One list row as the boards read it. Display clamp only. */
 function fbRecord(it) {
   const f = (it && it.fields) || {};
@@ -201,16 +211,19 @@ function fbRecord(it) {
               doors: fbTxt(f.Doors), seq: fbNum(f.Seq, 99999), section: fbTxt(f.Section).trim(),
               active: fbActive(f), onSheet: fbOnSheet(f), fedAt: fbTxt(f.FedAt),
               doneAt: fbTxt(f.DoneAt), doneBy: fbTxt(f.DoneBy), urgent: fbTxt(f.Urgent),
-              by: {}, at: {}, lines: [] };
+              by: {}, at: {}, lines: [], raw: {} };
+  g.sheetDone = fbSheetDone(g.section);
   let done = 0, total = 0;
   FB_PARTS.forEach(k => {
     const t = Math.max(0, fbInt(f[FB_TOTAL_FIELD[k]], 0));
-    const d = fbClamp(f[FB_DONE_FIELD[k]], t);
+    const real = fbClamp(f[FB_DONE_FIELD[k]], t);
+    const d = g.sheetDone ? t : real;               // shown full; the list is not touched
+    g.raw[k] = real;
     g[k] = d; g[k + "Total"] = t;
     g.by[k] = fbTxt(f[FB_BY_FIELD[k]]); g.at[k] = fbTxt(f[FB_AT_FIELD[k]]);
     if (t > 0) {
       g.lines.push({ part: k, label: FB_PART_LABEL[k], done: d, total: t,
-                     by: g.by[k], at: g.at[k], colour: fbColour(d, t) });
+                     by: g.by[k], at: g.at[k], colour: g.sheetDone ? "sheet" : fbColour(d, t) });
       done += d; total += t;
     }
   });
@@ -251,7 +264,8 @@ function fbCards(items, keep) {
     const c = byJob[j];
     c.groups.sort((a, b) => (a.groupSeq - b.groupSeq) || (a.group < b.group ? -1 : a.group > b.group ? 1 : 0));
     c.colour = fbRollUp(c.groups.map(g => g.colour));
-    c.finished = c.total > 0 && c.done >= c.total;
+    c.sheetDone = c.groups.some(g => g.sheetDone);
+    c.finished = c.sheetDone || (c.total > 0 && c.done >= c.total);
     c.left = Math.max(0, c.total - c.done);
     return c;
   });
@@ -288,23 +302,59 @@ function fbSearchTab(tabs, q, current) {
   return { tab: r.tab, other: r.more };
 }
 
-/* ---- who may move what ------------------------------------------------------
-   `Stages` in `Station people` is a comma list of product group names, typed by
-   hand. Each is put through fbKey before ST.stationPeople reads it, so
-   "Casement  windows" and "CASEMENT WINDOWS" are the same group. */
+/* ---- who may move what (per group AND part, owner 2026-09-28) ----------------
+   `Stages` in `Station people` is a comma list of entries, typed by hand:
+     GROUP               every part of that group   ("PVC DOOR")
+     GROUP:parts         only those parts, joined by +   ("PVC SMART:sashes",
+                         "PVC DOOR:frames+transoms")
+     ALL / ALL:parts     every fed group (the 255-character column fills up)
+   Case and spaces do not matter; the same group twice is the union; an unknown
+   group or part word is ignored. The ":" is split off BEFORE the group is put
+   through fbKey, which would otherwise turn it into a space. */
+function fbParseStages(text) {
+  const out = {};
+  fbTxt(text).split(/[,;]+/).forEach(entry => {
+    const i = entry.indexOf(":");
+    const gk = fbKey(i >= 0 ? entry.slice(0, i) : entry);
+    if (!gk) return;
+    const parts = i < 0 ? FB_PARTS.slice()
+      : entry.slice(i + 1).split(/[+\s]+/).map(fbLow).filter(p => FB_PARTS.indexOf(p) >= 0);
+    if (!parts.length) return;
+    const groups = gk === "ALL" ? FB_GROUP_KEYS : FB_GROUP_KEYS.indexOf(gk) >= 0 ? [gk] : [];
+    groups.forEach(g => {
+      const k = g.toLowerCase(), m = out[k] || (out[k] = {});
+      parts.forEach(p => { m[p] = true; });
+    });
+  });
+  return out;
+}
+/** The people of this station, each with `stages` (the group keys they have
+    any part of, lower case) and `parts` ({ group: { frames, sashes, transoms } }).
+    ST.stationPeople still does the station / Active / PIN / sort work. */
 function fbPeople(items) {
   const S = fbST();
   if (!S) return [];
+  const parsed = {};
   const norm = (items || []).map(it => {
     if (!it || !it.fields) return it;
-    const st = fbTxt(it.fields.Stages).split(/[,;]+/).map(s => fbKey(s).toLowerCase()).filter(Boolean);
-    return { id: it.id, fields: Object.assign({}, it.fields, { Stages: st.join(",") }) };
+    const p = fbParseStages(it.fields.Stages);
+    parsed[fbTxt(it.id)] = p;
+    return { id: it.id, fields: Object.assign({}, it.fields, { Stages: Object.keys(p).join(",") }) };
   });
-  return S.stationPeople(norm, FB_NAME, FB_GROUP_KEYS.map(k => k.toLowerCase()));
+  return S.stationPeople(norm, FB_NAME, FB_GROUP_KEYS.map(k => k.toLowerCase()))
+    .map(p => Object.assign(p, { parts: parsed[p.id] || {} }));
 }
-/** May this person move this group's lines? */
-const fbEligible = (person, group) =>
-  !!person && !!fbKey(group) && (person.stages || []).indexOf(fbKey(group).toLowerCase()) >= 0;
+/** May this person move this group's lines - or, given a part, that part of
+    it? A person object without `parts` (built by hand) holds every part of
+    each group in `stages`, today's meaning. */
+function fbEligible(person, group, part) {
+  if (!person || !fbKey(group)) return false;
+  const g = fbKey(group).toLowerCase();
+  if (!person.parts) return (person.stages || []).indexOf(g) >= 0 && (!part || FB_PARTS.indexOf(fbLow(part)) >= 0);
+  const m = person.parts[g];
+  if (!m) return false;
+  return part ? !!m[fbLow(part)] : FB_PARTS.some(p => m[p]);
+}
 
 /* ---- the writes one tap makes ------------------------------------------------ */
 function fbApplyTap(row, part, delta) {
@@ -394,11 +444,13 @@ function fbReportJobs(data) {
   const S = fbST();
   const cap = (S && S.REPORT_CUSTOMER_MAX) || 60;
   const rows = [], jobs = [];
+  /* the list's own counts (`raw`), never the "finished on the sheet" display */
+  const rawDone = g => FB_PARTS.reduce((n, k) => n + (g[k + "Total"] > 0 ? (g.raw || g)[k] : 0), 0);
   ((data && data.board) || []).forEach(c => {
-    jobs.push({ job: c.job, done: c.done, total: c.total });
-    c.groups.forEach(g => rows.push([c.job, fbStrip(c.customer, cap), c.section, g.group, g.doors,
-      g.frames, g.framesTotal, g.sashes, g.sashesTotal, g.transoms, g.transomsTotal,
-      g.total, g.done, g.left, g.doneBy, g.doneAt, g.finished ? "Yes" : "No"]));
+    jobs.push({ job: c.job, done: c.groups.reduce((n, g) => n + rawDone(g), 0), total: c.total });
+    c.groups.forEach(g => { const r = g.raw || g, d = rawDone(g); rows.push([c.job, fbStrip(c.customer, cap),
+      c.section, g.group, g.doors, r.frames, g.framesTotal, r.sashes, g.sashesTotal, r.transoms, g.transomsTotal,
+      g.total, d, Math.max(0, g.total - d), g.doneBy, g.doneAt, g.total > 0 && d >= g.total ? "Yes" : "No"]); });
   });
   return { columns: ["Job", "Customer", "Section", "Group", "Doors", "Frames done", "Frames",
                      "Sashes done", "Sashes", "Transoms done", "Transoms", "Total", "Done", "Left",
@@ -488,7 +540,7 @@ function fbSplitCheck(idx, job, group, part, total, qty, exceptId) {
               eligible may tap;
       null  - not known yet (never read successfully): nothing may be tapped. */
 function fbCanTap(person, group, part, idx, state, job) {
-  if (!fbEligible(person, group)) return false;
+  if (!fbEligible(person, group, part)) return false;
   if (state === false) return true;
   if (state !== true) return false;
   return fbMine(idx, person, job, group, part) > 0;
@@ -629,7 +681,7 @@ const FABC = {
   fbKey, fbStrip, fbAllowed, fbIsDoorGroup, fbTitle, fbDoorLabels, fbCommentOf,
   fbSlice, fbRowOrder, fbFeederFields, fbSeedFields, fbHashRow,
   fbActive, fbOnSheet, fbColour, fbRollUp, fbRecord, fbCards, fbOfficeBoard, fbJobCard,
-  fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible,
+  fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible, fbParseStages, fbSheetDone,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
   fbCellWord, fbCellWant, fbReportJobs,
   FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,

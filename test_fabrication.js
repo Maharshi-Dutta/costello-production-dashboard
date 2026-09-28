@@ -157,8 +157,38 @@ const pass = m => { n++; console.log("  ok  " + m); };
   const tsrc = src("fabrication.js");
   assert.ok(/!mayTap\(rec, part\) \? "assign"[\s\S]{0,200}if \(why\) \{[\s\S]{0,200}return;[\s\S]{0,300}queueTap/.test(tsrc),
     "tap() refuses a line the gate refuses before queueing (section 13 runs it)");
-  assert.ok(/const mayTap = \(rec, part\) => F\.fbCanTap\(/.test(tsrc), "and the gate is the core's fbCanTap");
+  assert.ok(/const mayTap = \(rec, part\) => !rec\.sheetDone && F\.fbCanTap\(/.test(tsrc), "and the gate is the core's fbCanTap");
   pass("eligibility: a person moves only the groups named in Stages; the tablet's tap() enforces it");
+
+  /* per group AND part (owner, 2026-09-28) */
+  const P = t => F.fbParseStages(t);
+  const all3 = { frames: true, sashes: true, transoms: true };
+  assert.deepStrictEqual(P("PVC DOOR"), { "pvc door": all3 }, "a group alone is every part (today's meaning)");
+  assert.deepStrictEqual(P("PVC SMART:sashes"), { "pvc smart": { sashes: true } });
+  assert.deepStrictEqual(P(" pvc door : Frames + TRANSOMS "), { "pvc door": { frames: true, transoms: true } },
+    "case and spaces do not matter; + joins parts");
+  assert.deepStrictEqual(P("PVC DOOR:frames, pvc door:sashes"), { "pvc door": { frames: true, sashes: true } },
+    "the same group twice is the union");
+  const allS = P("ALL:sashes");
+  assert.strictEqual(Object.keys(allS).length, F.FB_GROUP_KEYS.length, "ALL is every fed group");
+  assert.ok(Object.keys(allS).every(k => JSON.stringify(allS[k]) === '{"sashes":true}'));
+  assert.strictEqual(Object.keys(P("ALL")).length, F.FB_GROUP_KEYS.length);
+  assert.deepStrictEqual(P("NOT A GROUP, PVC DOOR:glass+frames, SIDELIGHTS:nonsense,,:frames"),
+    { "pvc door": { frames: true } }, "unknown groups and part words are ignored; an entry left with no part grants nothing");
+  assert.deepStrictEqual(P("arch & angles:frames"), { "arch angles": { frames: true } }, "the & and the colon both survive keying");
+  const pp = F.fbPeople([{ id: "7", fields: { Title: "Person D", Station: "Fabrication", Active: "Yes",
+                                             Stages: "PVC SMART:sashes, PVC DOOR:frames+transoms" } }])[0];
+  assert.deepStrictEqual(pp.stages.sort(), ["pvc door", "pvc smart"]);
+  assert.ok(F.fbEligible(pp, "PVC SMART", "sashes") && !F.fbEligible(pp, "PVC SMART", "frames"), "per part");
+  assert.ok(F.fbEligible(pp, "PVC SMART") && !F.fbEligible(pp, "SIDELIGHTS"), "group level: any part of it");
+  assert.ok(F.fbEligible(pp, "pvc door", "Transoms") && !F.fbEligible(pp, "pvc door", "sashes"));
+  assert.ok(F.fbCanTap(pp, "PVC DOOR", "frames", {}, false, "X") && !F.fbCanTap(pp, "PVC DOOR", "sashes", {}, false, "X"),
+    "the Part A fallback is per part too");
+  const hold = F.fbAssignIndex(F.fbAssignRows([{ id: "1", fields: { Job: "X", Group: "PVC DOOR", Part: "sashes",
+    Person: "Person D", Qty: 2, Status: "Assigned" } }]));
+  assert.ok(!F.fbCanTap(pp, "PVC DOOR", "sashes", hold, true, "X"), "holding an assignment on a part they do not do: still locked");
+  assert.ok(/words: "not your part"/.test(tsrc) && /Not your part/.test(tsrc), "the tablet says 'not your part'");
+  pass("Stages per group and part: plain, :parts, +, ALL, duplicates, junk; the gate per part");
 
   /* ================= 6. clamp, write bodies, rebase ================= */
   const g0 = F.fbRecord(items[0]);
@@ -442,7 +472,13 @@ const pass = m => { n++; console.log("  ok  " + m); };
   global.__R2 = [row, { id: "2", fields: Object.assign({}, row.fields, { Title: "R9001|PVC DOOR", Group: "PVC DOOR",
     Frames: 3, Sashes: 4, Transoms: 0, DoneAt: "" }) }];
   A("FABR_SITEID = 'site'; FABR_OK = true; FABR_ITEMS = __R2.slice(); FABR_ASSIGN_OK = true; FABR_ASSIGN = [];" +
-    "FABR_PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person A', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows' } }]);");
+    "FABR_PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person A', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows' } }," +
+    " { id: '2', fields: { Title: 'Person B', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows:frames' } }," +
+    " { id: '3', fields: { Title: 'Person C', Station: 'Fabrication', Active: 'Yes', Stages: 'casement windows' } }]);");
+  /* the Assign picker offers only people who do that group AND part */
+  const pick = part => A("fabrAssignHtml(fabrRecordsNow().byId['1'], fabrRecordsNow().byId['1'].lines.find(l => l.part === '" + part + "'))");
+  assert.ok(/Person B/.test(pick("frames")) && !/Person B/.test(pick("sashes")) && /Person A/.test(pick("sashes")),
+    "picker filtered per part: Person B does frames only");
   LOGS.length = 0;
   assert.ok(await A("fabrAssign('1', 'frames', 'Person A', 3)"));
   assert.strictEqual(ADDS.length, 1);
@@ -462,6 +498,14 @@ const pass = m => { n++; console.log("  ok  " + m); };
   await A("fabrDecide('50', 'removed')");
   assert.strictEqual(PATCHES[1].fields.Status, "Removed");
   AITEMS.push({ id: "51", fields: F.fbRequestFields("R9001", "CASEMENT WINDOWS", "sashes", "Person B", 6, "T") });
+  /* Person B does frames only: a request for sashes cannot be approved */
+  const pBeforeB = PATCHES.length;
+  await A("fabrApprove('51', 1)");
+  assert.strictEqual(PATCHES.length, pBeforeB, "approve refused for a part the person does not do");
+  assert.ok(TOASTS.some(t => /Person B does not do CASEMENT WINDOWS sashes/.test(t)), "and said so");
+  const aBeforeB = ADDS.length;
+  await A("fabrAssign('1', 'sashes', 'Person B', 1)");
+  assert.strictEqual(ADDS.length, aBeforeB, "and Assign refuses it too");
   await A("fabrDecide('51', 'refused')");
   assert.deepStrictEqual(Object.keys(PATCHES[2].fields).sort(), ["DecidedAt", "DecidedBy", "Status"],
     "refuse PATCHes Status and the decision stamps, nothing else");
@@ -642,6 +686,59 @@ const pass = m => { n++; console.log("  ok  " + m); };
   await T("flushQueue()"); await settle();
   assert.strictEqual(TW.filter(w => /patch:Fabrication station/.test(w.what)).length, 1, "and sends it once known and held");
   pass("P5: a tap queued before the assignment was removed is dropped at flush and said so");
+
+  /* ================= 14. finished on the sheet: green (owner, 2026-09-28) ===== */
+  ["Ready to fit", "Ready, customer won't take", "Collect & supply only"].forEach(s =>
+    assert.ok(F.fbSheetDone(s), s + " is finished on the sheet"));
+  ["In production", "Can sell as second hand", "", "Ready to deliver"].forEach(s =>
+    assert.ok(!F.fbSheetDone(s), (s || "blank") + " is not"));
+  const shRow = (id, section) => ({ id: id, fields: { Title: "J" + id + "|CASEMENT WINDOWS", Job: "J" + id,
+    Group: "CASEMENT WINDOWS", Frames: 10, Sashes: 4, Transoms: 0, FramesDone: 3, SashesDone: 0,
+    Section: section, Active: /^In production/.test(section) ? "Yes" : "No", OnSheet: "Yes", Seq: Number(id) } });
+  const shItems = [shRow("1", "Ready to fit"), shRow("2", "Ready, customer won't take"),
+                   shRow("3", "Collect & supply only"), shRow("4", "In production"), shRow("5", "Can sell as second hand")];
+  const shCards = F.fbOfficeBoard(shItems);
+  const byJ = {}; shCards.forEach(c => { byJ[c.job] = c; });
+  ["J1", "J2", "J3"].forEach(j => {
+    const c = byJ[j], g = c.groups[0];
+    assert.ok(c.sheetDone && c.finished && c.colour === "sheet", j + ": finished, green");
+    assert.deepStrictEqual(g.lines.map(l => [l.done, l.total, l.colour]), [[10, 10, "sheet"], [4, 4, "sheet"]],
+      j + ": every line drawn full");
+    assert.deepStrictEqual([g.raw.frames, g.raw.sashes], [3, 0], j + ": the list's own counts kept, untouched");
+  });
+  ["J4", "J5"].forEach(j => {
+    const c = byJ[j];
+    assert.ok(!c.sheetDone && c.colour === "lavender" && c.groups[0].lines[0].done === 3, j + ": unchanged");
+  });
+  const shTabs = F.fbTabs(shItems);
+  assert.deepStrictEqual(shTabs.floor.map(c => c.job), ["J4"], "In production is still On floor");
+  assert.ok(["J1", "J2", "J3", "J5"].every(j => shTabs.finished.some(c => c.job === j)), "the three are on the Finished tab");
+  const rep = F.fbReportJobs({ board: [byJ.J1] });
+  assert.strictEqual(rep.rows[0][rep.columns.indexOf("Frames done")], 3, "the report carries the list's own count");
+  /* the tablet: locked, "finished on sheet", a tap refused with the hint */
+  T("ITEMS = " + JSON.stringify(shItems) + "; boardNow(); QUEUE = {}; HINT = {};");
+  setAssign(false);
+  assert.strictEqual(T("lineState(recordById('1'), 'frames').words"), "finished on sheet");
+  assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), false, "not tappable, even under Part A");
+  T("tap('1', 'frames', 1)");
+  assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("HINT['J1'].why")], [0, "sheet"]);
+  assert.strictEqual(T("mayTap(recordById('4'), 'frames')"), true, "In production: tappable as before");
+  assert.ok(/finished on sheet/.test(T("cardInner(boardNow().tabs.finished.find(c => c.job === 'J1'))")));
+  /* the office: no steppers, the word, and the painter skips the job */
+  global.__SH = shItems;
+  A("FABR_ITEMS = __SH.map(x => ({ id: x.id, fields: Object.assign({}, x.fields, { DoneAt: '2026-09-28T10:00:00Z' }) }));");
+  const offRow = A("FABR_OPEN = { J1: 1 }; fabrRowHtml(fabrRecordsNow().byJob['J1'])");
+  assert.ok(/wosheet">finished on sheet/.test(offRow) && !/data-fwact/.test(offRow), "office: the word, no steppers");
+  assert.strictEqual(await A("fabrOfficeEdit('1', 'frames', 1)"), false, "office edit refused");
+  global.__SHJ = { id: "J1", src: { Production: 7 }, done: 0, cat: "prod", blk: 0,
+    prods: [{ n: "casement windows", f: 10, s: 4, t: 0 }], prodsMain: [{ n: "casement windows", f: 10, s: 4, t: 0 }],
+    cp: { win: "", drs: "", glass: {}, prod: {} }, doors: [], glass: {} };
+  Object.keys(FILLS).forEach(k => delete FILLS[k]);   // the download: white cells
+  A("CP_LIST_OK = true; cpSetImportPending(false); cpRowsSet({}); FABR_PAINTED = {};");
+  assert.strictEqual(A("fabrColourPlan(__SHJ)"), null, "the painter skips a job finished on the sheet");
+  A("FABR_ITEMS = FABR_ITEMS.map(it => it.id === '1' ? { id: '1', fields: Object.assign({}, it.fields, { Section: 'In production' }) } : it);");
+  assert.ok(A("fabrColourPlan(__SHJ)"), "... and the same job In production would be painted (the skip is the reason)");
+  pass("finished on the sheet: the three sections green, full, locked; In production and second hand unchanged; painter skips");
 
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");

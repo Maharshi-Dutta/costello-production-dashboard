@@ -222,3 +222,34 @@ anything in this brief you could not do as written.
 seven `Station people` rows — by a script with modes check / rehearse /
 create, rehearsed on a throwaway list first, reusing `make_floor_site.py`'s
 sign-in (scratchpad `82777b7e…`).
+
+## Amendments after the demo (2026-09-28)
+
+Two changes from the owner's demo feedback. Nothing earlier in this brief is
+rewritten; where it disagrees, this section wins.
+
+**A1. Eligibility per group AND part.** Owner: *"some people can do frames but
+not sash or transom and other combinations"*. `Stages` in `Station people`
+becomes a comma list of entries, each `GROUP` (every part — the old meaning,
+still valid) or `GROUP:parts` with parts `frames`, `sashes`, `transoms` joined
+by `+` (`PVC SMART:sashes`, `PVC DOOR:frames+transoms`); `ALL` stands for every
+fed group (`ALL:sashes`), for the column's 255-character limit. Case and
+spaces are tolerated, a repeated group is the union, unknown groups and part
+words are ignored. The ":" is split off before the group is keyed.
+Applied everywhere eligibility is used: the tablet gate (`fbCanTap` now asks
+per part, Part A's fallback too), the line's words ("not your part" when the
+group is theirs but the part is not), Take (only on their parts), the office
+Assign picker (only people who do that group and part) and Approve (refused,
+with a message, for a part the person does not do). Parser: `fbParseStages`;
+`fbEligible(person, group, part)`.
+
+**A2. Later sections show finished, green.** Owner: *"ready to fit, customer
+won't take but ready, and collect & supply should be green as they are
+finished in the main excel sheet"*. A job in exactly one of those three
+sections (`fbSheetDone`; not "Can sell as second hand") is shown finished on
+the tablet (Finished tab), the office board and the drawer line: every line
+drawn full, a green "finished on sheet" colour (new tokens `--sht*`, both
+themes; purple stays "done in fabrication") and label. Display only: no list
+write, counters untouched (kept on the record's `raw`, and the station report
+prints those), not tappable on either screen, a queued tap for such a job is
+dropped and said so, and `fabrColourPlan` skips the job explicitly.

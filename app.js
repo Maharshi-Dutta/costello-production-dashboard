@@ -4339,6 +4339,8 @@ async function fabrOfficeEdit(id, part, act) {
   const k = String(id) + "|" + part;
   if (fabrWriting[k]) return false;
   if (FABC.fbApplyTap(rec, part, act) == null) return false;
+  /* finished on the sheet: shown full, and nothing to record (2026-09-28) */
+  if (rec.sheetDone) { toast(rec.job + " is finished on the sheet — nothing to record.", true); return false; }
   if (FABR_OK !== true) { toast(FABR_WHY || FABR_LIST_MISSING, true); return false; }
   fabrWriting[k] = 1;                              // up before the first await
   redrawFabrication();
@@ -4454,7 +4456,9 @@ async function fabrAssign(gid, part, person, qty) {
   const g = (fabrRecordsNow().byId || {})[String(gid)];
   if (!g || FABR_ASSIGN_OK !== true) return false;
   const p = (FABR_PEOPLE || []).find(x => x.name === person);
-  if (!p || !FABC.fbEligible(p, g.group)) { toast("Pick a person who does " + g.group + ".", true); return false; }
+  if (!p || !FABC.fbEligible(p, g.group, part)) {
+    toast("Pick a person who does " + g.group + " " + part + ".", true); return false;
+  }
   return fabrOfficeAct("assign", async () => {
     await readFabricationAssign();
     const chk = FABC.fbSplitCheck(fabrAssignNow().idx, g.job, g.group, part, g[part + "Total"], qty);
@@ -4489,6 +4493,14 @@ async function fabrApprove(aid, qty) {
     const now = fabrAssignNow();
     const r = now.rows.find(x => x.id === String(aid));
     if (!r || r.status !== "requested") { toast("That request has already been decided.", true); return; }
+    /* per group AND part (2026-09-28): a request for a part the person does
+       not do is refused, whatever the tablet offered at the time */
+    if (!FABR_PEOPLE) await readFabricationPeople();
+    const who = (FABR_PEOPLE || []).find(p => p.name === r.person);
+    if (!who || !FABC.fbEligible(who, r.group, r.part)) {
+      toast(r.person + " does not do " + r.group + " " + r.part + " — refuse the request, or change their Stages.", true);
+      return;
+    }
     const g = fabrGroupRec(r.job, r.group);
     const chk = FABC.fbSplitCheck(now.idx, r.job, r.group, r.part, g ? g[r.part + "Total"] : 0, qty, r.id);
     if (!chk.ok) { toast(chk.msg, true); return; }
@@ -4548,12 +4560,12 @@ const fabrUrgBtn = (on, attrs) => '<button class="wobtn furg' + (on ? " on" : ""
   (fabrAssignWriting ? " disabled" : "") + ' title="urgent">! urgent</button>';
 /** Under one line of an opened job: its assignments, Assign, urgent. */
 function fabrAssignHtml(g, line) {
-  if (FABR_ASSIGN_OK !== true) return "";
+  if (FABR_ASSIGN_OK !== true || g.sheetDone) return "";
   const idx = fabrAssignNow().idx;
   const L = FABC.fbLineOf(idx, g.job, g.group, line.part);
   const free = Math.max(0, line.total - FABC.fbAssignedSum(idx, g.job, g.group, line.part));
   const dis = fabrAssignWriting ? " disabled" : "";
-  const who = (FABR_PEOPLE || []).filter(p => FABC.fbEligible(p, g.group));
+  const who = (FABR_PEOPLE || []).filter(p => FABC.fbEligible(p, g.group, line.part));
   const k = esc(g.id) + "|" + esc(line.part);
   return '<div class="faline">' +
     L.assigned.map(r => '<span class="fachip">' + esc(r.person) + ' <strong class="tab">' + r.qty + '</strong>' +
@@ -4561,7 +4573,7 @@ function fabrAssignHtml(g, line) {
     L.requested.map(r => '<span class="fachip req">' + esc(r.person) + ' asks</span>').join("") +
     (free > 0 ? '<select class="txt" data-fpsel="' + k + '">' + (who.length ? who.map(p =>
         '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>').join("")
-        : '<option value="">nobody does this group</option>') + '</select>' +
+        : '<option value="">nobody does this part</option>') + '</select>' +
       '<input class="txt faqty" type="number" min="1" max="' + free + '" value="' + free + '" data-fqty="' + k + '">' +
       '<button class="wobtn wide" data-fasg="' + k + '"' + dis + '>Assign</button>'
       : '<span class="fafree">all assigned</span>') +
@@ -4579,8 +4591,10 @@ function fabrOfficeLineHtml(g, line) {
     '<span class="wolab">' + ((g.urgentOf || {})[line.part] ? '<span class="urgi">!</span>' : "") + esc(line.label) + '</span>' +
     '<span class="wonum tab">' + line.done + ' / ' + line.total + '</span>' +
     '<span class="worem"></span>' + weldBarHtml(line.done, line.total) +
-    '<span class="wobtns">' + b("&minus;", "-1", "wobtn") + b("+", "1", "wobtn") +
-      b("All", "all", "wobtn wide") + b("None", "none", "wobtn wide") + '</span>' +
+    /* finished on the sheet: no steppers, the word instead (display only) */
+    (g.sheetDone ? '<span class="wobtns wosheet">finished on sheet</span>'
+      : '<span class="wobtns">' + b("&minus;", "-1", "wobtn") + b("+", "1", "wobtn") +
+        b("All", "all", "wobtn wide") + b("None", "none", "wobtn wide") + '</span>') +
     '<span class="wowho">' + stamp + '</span></div>' + fabrAssignHtml(g, line);
 }
 function fabrRowHtml(c) {
@@ -4593,7 +4607,7 @@ function fabrRowHtml(c) {
       '<span class="wotog">' + (open ? "▾" : "▸") + '</span>' +
       '<span class="cond tab stjob">' + (urgent ? '<span class="urgi">!</span>' : "") + esc(c.job) + '</span>' +
       '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
-      '<span class="wosect">' + esc(c.section || "—") + '</span>' +
+      '<span class="wosect">' + esc(c.section || "—") + (c.sheetDone ? ' · finished on sheet' : "") + '</span>' +
       '<span class="wototal tab">' + c.done + ' / ' + c.total + '</span>' +
       weldBarHtml(c.done, c.total) +
       /* a part the sheet has none of is not printed (its cell stays, so the
@@ -4760,7 +4774,8 @@ function fabrDrawerLine(j) {
   if (FABR_OK !== true) return "";
   const c = FABC.fbJobCard(FABR_ITEMS || [], j.id);
   if (!c || !c.total) return "";
-  return '<div class="weldline c-' + (c.colour || "none") + '"><span class="kick">Fabrication</span>' +
+  return '<div class="weldline c-' + (c.colour || "none") + '"><span class="kick">Fabrication' +
+    (c.sheetDone ? " · finished on sheet" : "") + '</span>' +
     '<span class="weldnum tab">' + c.done + ' / ' + c.total + '</span>' +
     /* per part, and only the parts the sheet has */
     '<span class="stwho">' + esc(FABC.FB_PARTS.map(p => { const w = fabrPartWords(c, p);
@@ -4812,6 +4827,9 @@ function fabrColourPlan(j) {
   if (!PRODMAP || !PRODMAP.prod || !cpWritable() || cpImportPending()) return null;
   const card = (fabrRecordsNow().byJob || {})[String(j.id).trim().toUpperCase()];
   if (!card) return null;
+  /* finished on the sheet: its lines are SHOWN full, and the list's own counts
+     are not what the display says - the painter never paints these jobs */
+  if (card.sheetDone || FABC.fbSheetDone(BLOCKNAMES[j.blk])) return null;
   const out = [];
   card.groups.forEach(g => {
     if (!g.doneAt) return;                       // nobody has touched this row

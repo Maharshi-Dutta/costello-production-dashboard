@@ -216,6 +216,13 @@ async function flushQueue() {
          while the person held the line is not theirs to send once the office
          has taken the assignment away. Unknown gate: hold it for now. */
       if (ASSIGN_OK === null) continue;
+      /* a job that has moved on to a finished section on the sheet is shown
+         finished and takes no taps, queued or not */
+      if ((recordById(e.id) || {}).sheetDone) {
+        loseTap(e, "sheet");
+        delete QUEUE[k]; saveQueue();
+        continue;
+      }
       const tapper = PEOPLE.find(p => p.name === whose) || null;
       if (!F.fbCanTap(tapper, e.group, e.part, IDX, ASSIGN_OK, e.job)) {
         loseTap(e, "assign");
@@ -382,7 +389,8 @@ function tap(id, part, delta) {
   /* THE GATE. The button is drawn greyed, and this is the rule: a line of a
      group this person does not do - or, once assignments exist, a part they do
      not hold an Assigned row on - is never queued. It says why. */
-  const why = !mayDo(rec.group) ? "group" : ASSIGN_OK === null ? "checking"
+  const why = rec.sheetDone ? "sheet" : !mayDo(rec.group) ? "group"
+    : !F.fbEligible(PERSON, rec.group, part) ? "part" : ASSIGN_OK === null ? "checking"
     : !mayTap(rec, part) ? "assign" : !mayAct(rec, part, delta) ? "whole" : "";
   if (why) {
     HINT[rec.job] = { group: rec.group, at: Date.now(), why: why };
@@ -435,13 +443,13 @@ async function readAssign() {
 }
 const listOn = () => ASSIGN_OK === true;
 /* three states, failing closed: see fbCanTap (review P1) */
-const mayTap = (rec, part) => F.fbCanTap(PERSON, rec.group, part, IDX, ASSIGN_OK, rec.job);
+const mayTap = (rec, part) => !rec.sheetDone && F.fbCanTap(PERSON, rec.group, part, IDX, ASSIGN_OK, rec.job);
 const mayAct = (rec, part, act) =>
   F.fbActAllowed(PERSON, IDX, ASSIGN_OK, rec.job, rec.group, part, rec[part + "Total"], act);
 let TAKING = {};
 async function take(id, part) {
   const rec = recordById(id);
-  if (!rec || !PERSON || !listOn() || !mayDo(rec.group)) return;
+  if (!rec || !PERSON || !listOn() || rec.sheetDone || !F.fbEligible(PERSON, rec.group, part)) return;
   touch();
   const k = rec.job + "|" + rec.group + "|" + part;
   if (TAKING[k] || F.fbRequested(IDX, PERSON, rec.job, rec.group, part)) return;
@@ -511,7 +519,9 @@ function barHtml(done, total) {
 const URG = '<span class="urg" title="urgent" aria-label="urgent">!</span>';
 /** What the label says under a line's name, and whether it offers Take. */
 function lineState(rec, part) {
+  if (rec.sheetDone) return { can: false, words: "finished on sheet" };
   if (!mayDo(rec.group)) return { can: false, words: "not your line" };
+  if (!F.fbEligible(PERSON, rec.group, part)) return { can: false, words: "not your part" };
   if (ASSIGN_OK === false) return { can: true, words: "" };           // no list: Part A
   if (ASSIGN_OK !== true) return { can: false, words: "checking assignments…" };
   const mine = F.fbMine(IDX, PERSON, rec.job, rec.group, part);
@@ -561,17 +571,21 @@ function cardInner(c) {
       (badge ? '<span class="nbadge" title="new for you">' + badge + '</span>' : "") +
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
       (c.section && !c.active ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
+      (c.sheetDone ? '<span class="csheet">finished on sheet</span>' : "") +
     '</div>' +
     (c.comment ? '<div class="cfacts"><span class="ccmt">“' + esc(c.comment) + '”</span></div>' : "") +
     '<div class="wgroups">' + c.groups.map(groupHtml).join("") + '</div>' +
     (hint ? '<div class="hint">' + (hint.why === "assign"
       ? "Not assigned to you yet — tap Take on the line, and the office approves it."
       : hint.why === "checking" ? "Checking assignments… try again in a moment."
+      : hint.why === "part" ? "Not your part — you do other parts of " + esc(hint.group) + ", not this one."
+      : hint.why === "sheet" ? "Finished on the sheet — this job has moved on, nothing to record here."
       : hint.why === "whole" ? "All/None only when the whole line is yours — use − and +."
       : "Not your line — " + esc(hint.group) + " is not one of your product groups.") + '</div>' : "") +
     (lost ? lost.parts.map(p => '<div class="unsaved">' + esc(p.group + " " + p.part + " " + p.value) +
         (p.why === "assign" ? " was not saved — that line is no longer assigned to " + esc(p.who || "you")
-                            : " was not saved — the office changed this job after that tap") + '</div>').join("") : "") +
+         : p.why === "sheet" ? " was not saved — the job is finished on the sheet"
+                             : " was not saved — the office changed this job after that tap") + '</div>').join("") : "") +
     (bad ? '<div class="unsaved">not saved yet — retrying</div>'
          : owed ? '<div class="saving">saving…</div>' : "") +
     NOTES.html(c.job);

@@ -1160,11 +1160,37 @@ in, what is already there is taken as seen. The delay is the ten-second poll.
 owner's names, matched through the key normaliser. All three parts where the
 sheet's count is > 0. No seed.
 
-**Who may move what.** `Station people`: `Station = Fabrication`, `Stages` = a
-comma list of product group names (`casement windows, pvc door`), matched
-through the same normaliser. Everybody sees every line; a line of a group not
-in the person's `Stages` is drawn greyed, and a tap on it says "not your line"
-and writes nothing.
+**Who may move what — per group and part (owner, 2026-09-28).**
+`Station people`: `Station = Fabrication`, `Stages` = a comma list of entries:
+
+| entry | means |
+|---|---|
+| `PVC DOOR` | every part of that group (frames, sashes, transoms) |
+| `PVC SMART:sashes` | only that part of that group |
+| `PVC DOOR:frames+transoms` | those parts, joined by `+` |
+| `ALL:sashes` / `ALL` | that part of every fed group / everything — for when the 255-character column fills up |
+
+Case and spaces do not matter; the same group twice is the union
+(`PVC DOOR:frames, PVC DOOR:sashes`); an unknown group or part word is ignored,
+and an entry left with no known part grants nothing. Everybody sees every
+line. A line of a group not in the person's `Stages` says "not your line"; a
+line of their group but not their part says "not your part". Either is drawn
+greyed, a tap on it says so and writes nothing, no Take is offered on it, the
+office's Assign picker leaves the person out for that part, and an Approve of
+a request for a part the person does not do is refused with a message. With
+no assignments list (Part A) the same per-part rule is the whole gate.
+
+**Finished on the sheet — green (owner, 2026-09-28).** A job whose section is
+**Ready to fit**, **Ready, customer won't take** or **Collect & supply only**
+(exactly those three; not "Can sell as second hand", not In production) is
+shown finished everywhere fabrication is shown: the tablet's Finished tab, the
+office board and the drawer line. Every line is drawn full (`10 / 10`) in a
+green "finished on the sheet" colour — not purple, which stays "done in
+fabrication" — with a "finished on sheet" label. **Display only**: nothing is
+written, the list's counters are untouched (the station report prints them),
+the lines are not tappable on the tablet or the office board, a queued tap
+for such a job is dropped and said so, and the colour painter never paints
+these jobs.
 
 **Shared lists.** `Station log`: `Station = Fabrication`, `GlassType` = the
 group, `Stage` = `frames` / `sashes` / `transoms` (tablet only).
