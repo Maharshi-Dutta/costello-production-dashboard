@@ -313,10 +313,18 @@ function fbSearchTab(tabs, q, current) {
    through fbKey, which would otherwise turn it into a space. */
 function fbParseStages(text) {
   const out = {};
+  let prev = "";                     // the group the last entry named
   fbTxt(text).split(/[,;]+/).forEach(entry => {
+    /* "+" is the joiner, but "CASEMENT WINDOWS:frames,sashes" is what a hand
+       types (review N2): an entry made only of part words continues the
+       previous entry's group */
+    const words = entry.split(/[+\s]+/).map(fbLow).filter(Boolean);
+    if (prev && entry.indexOf(":") < 0 && words.length && words.every(w => FB_PARTS.indexOf(w) >= 0))
+      entry = prev + ":" + entry;
     const i = entry.indexOf(":");
     const gk = fbKey(i >= 0 ? entry.slice(0, i) : entry);
     if (!gk) return;
+    prev = entry.slice(0, i >= 0 ? i : entry.length);
     const parts = i < 0 ? FB_PARTS.slice()
       : entry.slice(i + 1).split(/[+\s]+/).map(fbLow).filter(p => FB_PARTS.indexOf(p) >= 0);
     if (!parts.length) return;

@@ -1170,6 +1170,9 @@ sheet's count is > 0. No seed.
 | `PVC DOOR:frames+transoms` | those parts, joined by `+` |
 | `ALL:sashes` / `ALL` | that part of every fed group / everything — for when the 255-character column fills up |
 
+`+` is the documented joiner for parts; a comma (or `;`) after a part is
+tolerated too — `CASEMENT WINDOWS:frames,sashes` means frames and sashes,
+because an entry made only of part words continues the group before it.
 Case and spaces do not matter; the same group twice is the union
 (`PVC DOOR:frames, PVC DOOR:sashes`); an unknown group or part word is ignored,
 and an entry left with no known part grants nothing. Everybody sees every

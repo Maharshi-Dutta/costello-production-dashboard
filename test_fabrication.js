@@ -176,6 +176,11 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.deepStrictEqual(P("NOT A GROUP, PVC DOOR:glass+frames, SIDELIGHTS:nonsense,,:frames"),
     { "pvc door": { frames: true } }, "unknown groups and part words are ignored; an entry left with no part grants nothing");
   assert.deepStrictEqual(P("arch & angles:frames"), { "arch angles": { frames: true } }, "the & and the colon both survive keying");
+  /* N2: a comma after a part continues the group, as a hand types it */
+  assert.deepStrictEqual(P("CASEMENT WINDOWS:frames,sashes"), { "casement windows": { frames: true, sashes: true } });
+  assert.deepStrictEqual(P("CASEMENT WINDOWS:frames; sashes + transoms, PVC DOOR:sashes"),
+    { "casement windows": all3, "pvc door": { sashes: true } }, "; too, and a new GROUP: starts a new group");
+  assert.deepStrictEqual(P("frames, PVC SMART"), { "pvc smart": all3 }, "part words with no group before them are ignored");
   const pp = F.fbPeople([{ id: "7", fields: { Title: "Person D", Station: "Fabrication", Active: "Yes",
                                              Stages: "PVC SMART:sashes, PVC DOOR:frames+transoms" } }])[0];
   assert.deepStrictEqual(pp.stages.sort(), ["pvc door", "pvc smart"]);
@@ -724,12 +729,34 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("HINT['J1'].why")], [0, "sheet"]);
   assert.strictEqual(T("mayTap(recordById('4'), 'frames')"), true, "In production: tappable as before");
   assert.ok(/finished on sheet/.test(T("cardInner(boardNow().tabs.finished.find(c => c.job === 'J1'))")));
+  /* N1: a signed-out (idle-locked) tablet still owes a tap on job J4; the job
+     moves to Ready to fit before the flush. The drawn records are stale (they
+     are rebuilt only while somebody is signed in) - the list decides. */
+  await settle();
+  T("READY = false; QUEUE = {}; LOST = {}; boardNow(); tap('4', 'frames', 1); READY = true;");
+  assert.strictEqual(T("Object.keys(QUEUE).length"), 1);
+  T("PERSON = null; ITEMS = ITEMS.map(it => it.id === '4' ? { id: '4', fields: Object.assign({}, it.fields, " +
+    "{ Section: 'Ready to fit', Active: 'No' }) } : it);");
+  TW.length = 0;
+  await T("flushQueue()"); await settle();
+  assert.strictEqual(TW.filter(w => /patch:Fabrication station/.test(w.what)).length, 0, "N1: not sent");
+  assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("LOST['J4'].parts[0].why")], [0, "sheet"],
+    "N1: dropped, and kept on the card as 'finished on the sheet'");
+  T("PERSON = PEOPLE[0];");
   /* the office: no steppers, the word, and the painter skips the job */
   global.__SH = shItems;
   A("FABR_ITEMS = __SH.map(x => ({ id: x.id, fields: Object.assign({}, x.fields, { DoneAt: '2026-09-28T10:00:00Z' }) }));");
   const offRow = A("FABR_OPEN = { J1: 1 }; fabrRowHtml(fabrRecordsNow().byJob['J1'])");
   assert.ok(/wosheet">finished on sheet/.test(offRow) && !/data-fwact/.test(offRow), "office: the word, no steppers");
   assert.strictEqual(await A("fabrOfficeEdit('1', 'frames', 1)"), false, "office edit refused");
+  /* N3: the board's copy says In production, the row as it is NOW says Ready
+     to fit: refused on the fresh read, nothing written */
+  SERVER["4"] = { Section: "Ready to fit", Active: "No" };
+  const pN3 = PATCHES.length;
+  A("FRECS_OF = false;");
+  assert.strictEqual(await A("fabrOfficeEdit('4', 'frames', 1)"), false, "N3: refused on the fresh row");
+  assert.strictEqual(PATCHES.length, pN3, "N3: nothing written");
+  delete SERVER["4"];
   global.__SHJ = { id: "J1", src: { Production: 7 }, done: 0, cat: "prod", blk: 0,
     prods: [{ n: "casement windows", f: 10, s: 4, t: 0 }], prodsMain: [{ n: "casement windows", f: 10, s: 4, t: 0 }],
     cp: { win: "", drs: "", glass: {}, prod: {} }, doors: [], glass: {} };

@@ -218,7 +218,10 @@ async function flushQueue() {
       if (ASSIGN_OK === null) continue;
       /* a job that has moved on to a finished section on the sheet is shown
          finished and takes no taps, queued or not */
-      if ((recordById(e.id) || {}).sheetDone) {
+      /* decided from the list as it is now, not from the drawn records, which
+         are only rebuilt while somebody is signed in (review N1) */
+      const live = ITEMS.find(x => String(x.id) === String(e.id));
+      if ((recordById(e.id) || {}).sheetDone || (live && F.fbSheetDone((live.fields || {}).Section))) {
         loseTap(e, "sheet");
         delete QUEUE[k]; saveQueue();
         continue;

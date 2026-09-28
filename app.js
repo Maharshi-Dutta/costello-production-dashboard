@@ -4359,6 +4359,13 @@ async function fabrOfficeEdit(id, part, act) {
     const now = await CW.listItem(FABC.FB_LIST, rec.id, fabrOpts());
     if (!now || !now.fields) throw new Error(FABR_LIST_MISSING);
     const fresh = FABC.fbRecord({ id: rec.id, fields: now.fields });
+    /* the row as it is now may have moved to a finished section (review N3):
+       its counts are shown full and are not the office's to set */
+    if (fresh.sheetDone) {
+      delete fabrWriting[k]; redrawFabrication();
+      toast(rec.job + " is finished on the sheet — nothing to record.", true);
+      return false;
+    }
     stale = !!fresh.doneAt && fresh.doneAt !== rec.doneAt;
     from = fresh[part];
     value = FABC.fbApplyTap(fresh, part, act);
