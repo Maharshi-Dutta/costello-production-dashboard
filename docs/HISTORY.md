@@ -64,6 +64,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A35 | 2026-09-24 | **The welding tablet's "Sent to floor" chip goes; two tabs (On floor / Finished) replace it.** Any job on the `Production` sheet has been sent to the floor, date or not. On floor = Active, Section "In production", not finished. Finished = every other Active card — finished In production jobs and every job in a later section still on the sheet (e.g. Ready to fit) — which the tablet had never shown before. Finished cards stay fully tappable; a remake works on any job and keeps it in Finished. | Owner, 2026-09-24: the welder needs to reach jobs like R3708 in Ready to fit, mainly to record a remake on a job that came back with a fault; the chip was redundant once every sheet job counts as sent. Glass and glazing tablets: "not now." |
 | A36 | 2026-09-24 | **The glass and glazing tablets get the same On floor / Finished tabs as welding**, and all three tablets gain search that reaches across both tabs: typing auto-switches to the other tab when only it matches, shows "N more in …" when both match, and restores the pre-search tab on clearing. Glass's `Active` on `Glass station` keeps meaning "In production" only — the board, drawer, `OfficeDone` lock and colour writer all keep reading it that way; the tablet's own Finished tab covers the rest via new `Section`/`OnSheet` columns. No remake and no "Sent to floor" button on glass or glazing. | Owner, 2026-09-24, approving the brief that followed the welding Finished tab: bring the same tabs to the other two tablets in one push, with the search behaviour spelled out as four rules (switch on single-tab match, "N more" line on both, no save of a search-driven tab, restore on clear). |
 | A37 | 2026-09-25 | **The fourth floor station, fabrication (windows and doors after welding, no glass), and the fourth sanctioned fill.** F/S/T per product group and job, off `Production` alone; everybody sees every line, a person moves only the groups (later, groups and parts) their `Stages` name. The office paints a group's own F/S/T cell lavender `#D9D2E9` (started) / purple `#B4A7D6` (done) — **never lowers the office's own checkpoint record; the office may lower or clear its own record at any time.** Widened 2026-09-28: eligibility is per group **and** part (`Stages` gains `GROUP:parts`), and a job in Ready to fit / Ready, customer won't take / Collect & supply only is shown finished, green, display only. | Owner, 2026-09-25, approving the brief's rule 6 (the fourth fill, "never lowers office but office can lower theirs"); 2026-09-28 demo feedback: *"some people can do frames but not sash or transom and other combinations"* and *"ready to fit, customer won't take but ready, and collect & supply should be green as they are finished in the main excel sheet."* |
+| A38 | 2026-09-28 | **Day sheets for welding (squares only) and hotmelting (typed DG/TG beside the tablet's own tap count), no weekly target for either; the cutting sheet is unchanged; the Floor log window covers every station and also shows the office's own edits to floor counters, marked office.** | Owner, 2026-09-28, answering the same morning: *"on the top of welding dashboard she can write in a separate box how many squares she welded on a daily basis, her welding machine tells her how many she did daily"* (squares, nothing else); glass cutting's existing sheet already covers the cutter's need, don't touch it; for hotmelting, *"maybe more automated like a counter"* — chose the mix, typed DG/TG beside a tablet-counted total; weekly targets for the two new stages "maybe in the future", not now; *"the floor log should cover fabrication and welding dashboard logs"* — chose option B, office edits included, tagged office. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -591,6 +592,36 @@ an unknown read state, never default open for it.
 
 ---
 
+### B33. Floor log shows only glass lines until a board is opened
+
+**Caught by independent review, not by a live report** (day sheets for
+welding/hotmelting + one Floor log, fix pass `6218f77`, 2026-09-28). The
+brief said the merged Floor log window should read each station's own **log**
+through its existing "read if needed" helper (`weldLogReadIfNeeded`,
+`glzLogReadIfNeeded`, `fabrReadIfNeeded("log")`). The first build instead
+called each station's **board** reader (`weldReadIfNeeded`,
+`glzReadIfNeeded`, `fabrReadIfNeeded()` with no stage) to make sure the
+station's data existed, then read whatever log array that station already
+happened to hold in memory — which is only populated once that station's own
+board has been opened this session. So a fresh office session that opened
+straight to the Floor log from the home list, without ever opening the
+welding, glazing or fabrication boards, saw glass lines only: the other three
+stations' arrays were still empty, and nothing had asked them to fill.
+Fixed (review blocker) by calling each source's own log reader directly
+inside the merge window, the same way the glass source already did, instead
+of piggybacking on a board reader that fills a different array for a
+different reason.
+
+**Lesson:** a merge window that reads from several sources must call each
+source's own reader, not a reader that happens to run first for an unrelated
+screen — "the data exists somewhere in memory" is not the same claim as "this
+window's read populated it." Pure-function tests over an already-populated
+array cannot catch this: every `test_floorlog.js` assertion passed against
+hand-built fixtures while the live path silently skipped three stations; only
+a review that traced which reader actually gets called, and when, found it.
+
+---
+
 ## C. Build log
 
 In order. Each line is one shipped commit.
@@ -766,6 +797,14 @@ zero counters lowered.
 
 ---
 
+### 2026-09-28 — day sheets for welding and hotmelting, one Floor log for every station
+
+| Commit | What it added |
+|---|---|
+| `a6eff05` brief → `8a99bc7` build → `6218f77` fix pass → `91ab2c2` build stamp, build 20260928-1149, live | **End-of-day sheets for welding (squares) and hotmelting (typed DG/TG beside the tablet's own count of that person's taps today, `Counted`), and one Floor log window covering every station** (`docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md`, A38). Neither new stage has a weekly target (`target: false`: no target read, no target line, no `WeekTarget` written, no "Set target" control) — the owner said "maybe in the future"; the existing cutting sheet is untouched. Four new Number columns (`Squares`, `DG`, `TG`, `Counted`) added to `Station day sheets` in the workbook's site, and a second `Station day sheets` list (17 columns, Title unique) created in `Floor stations` for welding — **both by script before the push** (scratchpad `62f30e18…/add_daysheet_columns.py`, modes check/rehearse/create; rehearsed on throwaway list `DaySheetsColsTest` in `Floor stations`, since `FloorStationsTest` returns 403). The tablet day-sheet UI moved out of `station.js` into `station-ui.js` (`STU.stuDaySheet`, one controller shared by `station.js` and `welding.js`) so welding did not need its own copy. Welding gets an End of day button beside the Frames/Sashes capsules, saving to its own `Floor stations` list. The hotmelt tablet (`glass.html?stage=hotmelt`) reads today's own `Station log` lines on opening the sheet (`ST.dayCounted`, net of `−` taps, floor 0, local day boundary) and shows "You hotmelted N units today"; DG/TG are typed, never prefilled, and a mismatch against N asks one plain confirmation before saving. The office's Day sheets window gains a Cutting/Hotmelting/Welding selector (`ST.daySheetStages`), with `Counted` shown read-only beside DG/TG and a small "≠ counted" flag. Station reports carry the new day-sheet columns the same way cutting's do. The Floor log window (`openStationLog`) gains a station filter (All/Glass/Welding/Glazing/Fabrication) and now also shows the office's own edits to floor counters, read from the already-parsed `Dashboard Log`/`CHANGES` (no new workbook read), tagged **office** (`ST.OFFICE_FLOOR_EDITS`, `ST.officeLogRows`, `ST.floorLogMerge` sorting by parsed local time, `dd/mm/yyyy hh:mm` and ISO both). No workbook write anywhere in the feature. Independent review: 1 blocker (B33 — the merge window called each station's *board* reader instead of its *log* reader, so welding/glazing/fabrication taps were invisible until that station's own board had been opened this session) + 8 minors; one fix pass closed the blocker and 7 minors, the 8th (a refused day sheet would retry every 5 s forever) sidestepped by getting the lists created before the push rather than coded around. Suites: pages 5/5, station 274 (was 270), welding 66 (was 65), daysheets 62, fabrication 22 (was 21), `test_floorlog.js` 4 (new), rest unchanged. |
+
+---
+
 ## D. Symptom index
 
 | What you see | Read |
@@ -791,6 +830,7 @@ zero counters lowered.
 | An office edit overwrote what the floor had just done | B19 |
 | The glazing tablet's Sign in does nothing | B29 |
 | Columns on a station board do not line up | B30 |
+| The Floor log window is missing lines from a station | B33 |
 
 ---
 
