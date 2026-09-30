@@ -73,6 +73,9 @@ tooling; lessons** — [[overview-and-process]]
     `station-ui.js`, hotmelt's own count, the office's stage selector, office
     edits in the Floor log)
 
+27. **The Sales page** — [[sales-page]] (`sales.html` on the same `app.js`,
+    customer cells, text colour, delete/restore, delivery date, requests)
+
 ## See also
 
 - [[ARCHITECTURE]] — the companion index: data flow, module map, invariants

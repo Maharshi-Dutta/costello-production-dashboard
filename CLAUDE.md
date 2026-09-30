@@ -32,6 +32,12 @@ Three pages ship from this repo:
   their `Stages`. Its top-level names are `FB_*`/`fb*` (core) and `FABR_*`/`fabr*`
   (in `app.js`): `FAB_*`/`fab*` already belong to `app.js`'s floating button.
 
+- `sales.html` + `sales.js` + `sales-core.js` — the Sales page, 2026-09-30: the
+  office dashboard's shell with customer columns, run by the same `app.js`
+  with `window.CW_PAGE = "sales"` (every branch goes through `isSales()`) —
+  see [`docs/specs/2026-09-30-sales-page.md`](docs/specs/2026-09-30-sales-page.md) and `docs/sales-page.md`.
+  Not a floor station.
+
 Check `docs/specs/README.md` for the status of every spec.
 
 Read `docs/REFERENCE.md` (now a short index into linked topic notes under
@@ -123,6 +129,26 @@ the one that first wrote them down.
      rule itself is `FABC.fbCellWant`).
      Adding a **fifth** reason is a new decision for
      the owner, not a judgement call for a session.
+
+   **The Sales page's three writes** (owner, **2026-09-30**,
+   [`docs/specs/2026-09-30-sales-page.md`](docs/specs/2026-09-30-sales-page.md) decision 2), from
+   `sales.html` only - each one refuses unless `window.CW_PAGE === "sales"`
+   (`salesOnly()` in `graph.js`, `SALESC` guard in `sales-core.js`), so the
+   office page cannot reach them, and each re-reads the row's column C first:
+   - **a row's text colour** - the font colour of `A{r}:CL{r}`: red `#FF0000`
+     urgent, green `#00B050` booked, black `#000000` neither. Never a fill.
+     A backup item (the captured row) is saved and read back first;
+   - **the six customer cells** of the job's own row - Customer, Phone no,
+     Area, Eircode, Office no, Windows colour - located by header through the
+     parser's `m.ident`; phone and eircode written as text;
+   - **deleting a whole row**, only after the full captured row has been saved
+     to `Sales job backups` and read back identical; a **restore** puts it back
+     at the bottom of the section it came from.
+   The Sales page also moves a row with the existing `moveJobsInSheet`, and
+   only for a job the office has marked ready (`j.done`), never into In
+   production or Can sell as second hand. It paints **no fill**: checkpoint
+   writes are off there (`cpWritable()` is false), the colour writers and
+   feeders stand down, and `setFill`/`clearFill` throw on that page.
 2. **No other sheet on the workbook is touched** except the dashboard's own
    sheets, created and owned by the dashboard: `Dashboard Log`,
    `Dashboard Views`, `Dashboard Alerts`. `Dashboard Config` is **read-only**
@@ -183,6 +209,14 @@ the one that first wrote them down.
    ([`docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md`](docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md)) — and one more
    station list, **`Glazing station`** (one row per job, `Floor stations` site)
    ([`docs/specs/2026-09-21-glazing-station.md`](docs/specs/2026-09-21-glazing-station.md)).
+
+   Since 2026-09-30 the Sales page has four lists of its own in the workbook's
+   site ([`docs/specs/2026-09-30-sales-page.md`](docs/specs/2026-09-30-sales-page.md)): `Sales people` (the
+   owner's, by hand), `Sales jobs` (a delivery date per job - never on the
+   sheet), `Sales job backups` (every delete, restore, customer edit and
+   colour change; nothing ever deletes an item) and `Sales requests` (the
+   Sales page writes a request and `ReplySeen`; the office writes only
+   `Reply`, `ReplyBy`, `ReplyAt`).
 
    There are **exactly seven** exceptions, each granted by the owner in a dated
    spec, each for a named case; an **eighth** is a new decision for the owner,
@@ -312,6 +346,11 @@ the one that first wrote them down.
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or
    preset. `export.js` carries a standing test for this — do not weaken it.
+   **One exception** (owner, 2026-09-30, [`docs/specs/2026-09-30-sales-page.md`](docs/specs/2026-09-30-sales-page.md)
+   decision 3): an export made **on the Sales page** carries Phone no (`j.ph`)
+   and Eircode (`j.eir`) beside the customer (`xpSales()` in `export.js`).
+   The office page's exports are unchanged; `test_export.js` proves both.
+   (The John print template's phone number, 2026-09-09, is the older one.)
 5. **Every export is logged**: one `Dashboard Log` line per export, via
    `noteChange`, and nothing else about the exported data is stored anywhere.
 6. **No real address, person's name or company domain in the public repo** —
@@ -354,7 +393,8 @@ node --check parser.js && node --check graph.js && node --check checkpoints.js \
   && node --check station-core.js && node --check station-ui.js && node --check station.js \
   && node --check welding-core.js && node --check welding.js \
   && node --check glazing-core.js && node --check glazing.js \
-  && node --check fabrication-core.js && node --check fabrication.js
+  && node --check fabrication-core.js && node --check fabrication.js \
+  && node --check sales-core.js && node --check sales.js
 
 node test_move.js
 node test_checkpoints.js
@@ -373,6 +413,7 @@ node test_daysheets.js
 node test_glazing.js
 node test_fabrication.js
 node test_floorlog.js
+node test_sales.js
 node test_pages.js
 
 node verify.js   # dev-only cross-check, see below
@@ -393,9 +434,9 @@ python build.py   # stamps a ?v=<timestamp> onto every script tag and writes ver
 `build.py` rewrites the cache-busting query string on every `<script src="…">`
 tag matching `parser`, `graph`, `checkpoints`, `station-core`, `station-ui`,
 `station`, `welding-core`, `welding`, `glazing-core`, `glazing`,
-`fabrication-core`, `fabrication`, `export` or `app` — on **all five** of
-`index.html`, `glass.html`, `welding.html`, `glazing.html` and
-`fabrication.html` — and updates
+`fabrication-core`, `fabrication`, `sales-core`, `sales`, `export` or `app` — on
+**all six** of `index.html`, `glass.html`, `welding.html`, `glazing.html`,
+`fabrication.html` and `sales.html` — and updates
 the `<span id="build">` footer text on each. `glass.html` carries the same
 build stamp as `index.html`, which matters more there than anywhere else: a
 tablet left signed in for weeks is exactly where a stale cached script does
