@@ -277,3 +277,24 @@ and `test_sales.js`.
   2. no `setFill` or `clearFill` is reachable from `sales.js`
   3. no real names
 - anything you could not do, or any place you deviated from this brief
+
+## Amendments after the demo (owner, 2026-09-30)
+
+A. **Sheet-order view on the Sales page.** The Sales page gets the office's
+   View select, including the grouped sheet-order view (sections in sheet
+   order: Can sell as second hand, Collect & supply only, Ready to fit, In
+   production, ...), with the office's collapse/hide per section, the row tick
+   boxes and Select all per section. Selected jobs can be exported.
+B. **Drag and multi-select move on the Sales page** are allowed only for jobs
+   the office has marked ready (`j.done`), to the same allowed targets as the
+   drawer's Move, through the same Sales write queue. Any other job in a
+   selection or drag is refused with "the office has not marked this job
+   ready - send a request"; nothing moves for a refused job.
+C. **Flicker (both pages).** Measured: an open drawer is rebuilt wholesale on
+   every poll that reports a change, replaying the slide/fade and resetting
+   its scroll; a full list read (delta refused) always reports "changed".
+   Fix: `renderDrawer` skips when the HTML is identical, and patches the
+   inside of an already-open drawer for the same job instead of replacing
+   `#dhost` (no animation replay, scroll kept); `renderRows` skips identical
+   HTML; the stations' full-read paths report a change only when the rows
+   differ from what is held. Tablets untouched.
