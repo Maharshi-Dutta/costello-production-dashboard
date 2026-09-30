@@ -909,30 +909,57 @@ function salesOnly() {
     throw new Error("Only the Sales page may do this.");
 }
 const jobText = v => String(v == null ? "" : v).trim().toUpperCase();
-async function salesRowCheck(jobId, row) {
-  salesOnly();
-  const v = await readColumn(PROD_SHEET, "C" + row + ":C" + row);
-  if (jobText(v && v[0] && v[0][0]) !== jobText(jobId))
-    throw new Error("Job " + jobId + " is no longer on row " + row + " - the sheet has moved. Nothing was written; try again.");
-  return row;
+/** One read of A1:K600 - the same 600 rows locateJob/moveJobRow see - giving
+    the sections and every row the job number is on. */
+async function salesSheet(jobId) {
+  const f = await findFile();
+  const r = await call("GET", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='A1:K600')?$select=values");
+  const vals = r.values || [], at = [];
+  vals.forEach((v, i) => { if (jobText(v && v[2]) === jobId) at.push(i + 1); });
+  return { B: blocksFromValues(vals), at };
 }
-/** The job's row right now, checked. */
+/** The job's row right now: refused unless the job number is on the sheet
+    exactly ONCE - a duplicate must never let one row be backed up and
+    another written or deleted. Answers { row, section, prev }. */
 async function salesLocate(jobId) {
   salesOnly();
-  return salesRowCheck(jobId, await rowForJob(PROD_SHEET, jobId));
+  jobId = jobText(jobId);
+  const { B, at } = await salesSheet(jobId);
+  if (at.length !== 1) throw new Error(at.length
+    ? "Job " + jobId + " is on the Production sheet " + at.length + " times (rows " + at.join(", ") + "). Nothing was written - sort it out in Excel first."
+    : "Job " + jobId + " is not on the Production sheet.");
+  let block = null;
+  B.blocks.forEach(b => b.jobs.forEach(j => { if (j.row === at[0]) block = b; }));
+  return { row: at[0], section: block ? block.name : "",
+           prev: block ? block.jobs.filter(j => j.row < at[0]).pop() || null : null };
 }
-/** One customer cell. `asText` (phone, eircode) is written with Excel's own
-    text marker, the apostrophe writeRow already uses, so a leading 0 stays. */
-async function salesSetCell(jobId, row, col, value, asText) {
+/** Still exactly once, and still on the row the caller located? */
+async function salesRowCheck(jobId, row) {
+  const L = await salesLocate(jobId);
+  if (L.row !== row) throw new Error("Job " + jobId + " has moved from row " + row + " to row " + L.row +
+    " since it was read. Nothing was written; try again.");
+  return L;
+}
+const hdrText = v => String(v == null ? "" : v).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** One customer cell, always as text: written through `formulas` with the
+    apostrophe marker exactly as writeRow writes a text cell, so a leading 0
+    stays. `hdr` = { row, label }: the column's header must still read that
+    label, or nothing is written (a column inserted since the download). */
+async function salesSetCell(jobId, row, col, value, hdr) {
   salesOnly();
   await salesRowCheck(jobId, row);
-  const f = await findFile(), v = String(value == null ? "" : value).trim();
-  const out = v === "" ? "" : asText ? guardText(v) : /^\d+$/.test(v) ? Number(v) : guardText(v);
-  return call("PATCH", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='" + A1(col) + row + "')", { values: [[out]] });
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  if (!hdr || !hdr.row || !hdr.label) throw new Error("The column's header is not known - nothing was written.");
+  const h = await call("GET", S + "/range(address='" + A1(col) + hdr.row + "')?$select=values");
+  if (hdrText(h.values && h.values[0] && h.values[0][0]) !== hdrText(hdr.label))
+    throw new Error("Column " + A1(col) + " no longer reads '" + hdr.label + "' - the sheet's columns have changed. Nothing was written; refresh.");
+  const v = String(value == null ? "" : value).trim();
+  return call("PATCH", S + "/range(address='" + A1(col) + row + "')", { formulas: [[v === "" ? "" : guardText(v)]] });
 }
 /** The whole row's font colour, A..CL. Fills are never touched. */
 async function salesSetFont(jobId, row, color) {
   salesOnly();
+  if (["#FF0000", "#00B050", "#000000"].indexOf(color) < 0) throw new Error("Not a Sales text colour: " + color);
   await salesRowCheck(jobId, row);
   const f = await findFile();
   return call("PATCH", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='A" + row + ":" + lastCol + row + "')/format/font", { color });
@@ -940,33 +967,32 @@ async function salesSetFont(jobId, row, color) {
 /** Delete the job's whole row - found again and checked here, whatever the
     caller found earlier - and give the row above its bottom edge back, the way
     moveJobRow does for the row it vacates. */
-async function salesDeleteRow(jobId, tmplFor) {
+async function salesDeleteRow(jobId, expectRow, tmplFor, afterDelete) {
   salesOnly();
   jobId = jobText(jobId);
-  const L = await locateJob(jobId);
-  if (!L.hit) throw new Error("Job " + jobId + " is not on the Production sheet.");
-  const src = await salesRowCheck(jobId, L.hit.row);
+  /* the row that was backed up, and no other: refused if it has moved */
+  const L = await salesRowCheck(jobId, expectRow), src = L.row;
   const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
   await call("POST", S + "/range(address='" + src + ":" + src + "')/delete", { shift: "Up" });
-  const prev = L.hit.block.jobs.filter(j => j.row < src).pop();
-  if (prev && prev.row === src - 1 && typeof tmplFor === "function") await restoreBottomEdge(src - 1, tmplFor(prev.id));
-  return { row: src, section: L.hit.block.name };
+  /* logged straight away: nothing after this may leave the delete unrecorded */
+  if (afterDelete) try { afterDelete(L); } catch (e) {}
+  let edgeError = "";
+  try {
+    if (L.prev && L.prev.row === src - 1 && typeof tmplFor === "function") await restoreBottomEdge(src - 1, tmplFor(L.prev.id));
+  } catch (e) { edgeError = (e && e.message) || String(e); }
+  return { row: src, section: L.section, edgeError };
 }
 /** Put a captured row back at the bottom of the named section. Refuses when the
     job is already on the sheet or the section has nowhere safe to land; if the
     copy cannot be confirmed, the inserted row is taken out again. */
-async function salesInsertRow(jobId, cap, sectionName, tmplFor) {
+async function salesInsertRow(jobId, cap, sectionName, tmplFor, afterInsert) {
   salesOnly();
   jobId = jobText(jobId);
   const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
   const rowOf = n => S + "/range(address='" + n + ":" + n + "')";
-  const count = async () => {
-    const col = await readColumn(PROD_SHEET, "C1:C600"), at = [];
-    col.forEach((v, i) => { if (jobText(v[0]) === jobId) at.push(i + 1); });
-    return at;
-  };
-  if ((await count()).length) throw new Error("Job " + jobId + " is already on the Production sheet - nothing was restored.");
-  const B = await liveBlocks();
+  const count = async () => (await salesSheet(jobId)).at;
+  const first = await salesSheet(jobId), B = first.B;
+  if (first.at.length) throw new Error("Job " + jobId + " is already on the Production sheet - nothing was restored.");
   const tb = B.blocks.find(b => b.name === sectionName);
   if (!tb || !tb.last) throw new Error("The '" + sectionName + "' section has no divider or jobs in Excel right now, so there is nowhere safe to put " + jobId + ". Place one job there in Excel first.");
   const tgt = tb.last + 1;
@@ -977,7 +1003,6 @@ async function salesInsertRow(jobId, cap, sectionName, tmplFor) {
   await call("POST", rowOf(tgt) + "/insert", { shift: "Down" });
   try {
     await writeRow(tgt, cap, tmpl);
-    if (nb) await restoreBottomEdge(tgt - 1, nb);
     const at = await count();
     if (at.length !== 1 || at[0] !== tgt) throw new Error("The sheet changed under " + jobId + " while it was being restored (now at rows " + at.join(", ") + ").");
   } catch (e) {
@@ -995,7 +1020,11 @@ async function salesInsertRow(jobId, cap, sectionName, tmplFor) {
     }
     throw e;
   }
-  return { row: tgt, section: tb.name };
+  /* the row is back and confirmed: logged now, then the cosmetic edge */
+  if (afterInsert) try { afterInsert(); } catch (e) {}
+  let edgeError = "";
+  try { if (nb) await restoreBottomEdge(tgt - 1, nb); } catch (e) { edgeError = (e && e.message) || String(e); }
+  return { row: tgt, section: tb.name, edgeError };
 }
 
 /* ---- SharePoint lists ------------------------------------------------------

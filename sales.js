@@ -24,8 +24,16 @@ function salesWho() { return SALES_WHO; }
 const salesCtx = () => ({
   CW, who: SALES_WHO, note: noteChange,
   tmplFor: id => LASTWB ? templateForJob(LASTWB.getWorksheet("Production"), id) : null,
-  identCol: k => (PRODMAP && PRODMAP.ident && PRODMAP.ident[k]) || null
+  identCol: k => (PRODMAP && PRODMAP.ident && PRODMAP.ident[k]) || null,
+  hdrRow: () => (PRODMAP && PRODMAP.hdr && PRODMAP.hdr[0]) || 0
 });
+/** " disabled" while nobody is picked or any Sales write or move is in flight. */
+const salesDis = () => (!SALES_WHO || SALESC.busy()) ? " disabled" : "";
+/* a write starting or finishing anywhere on the page redraws every control that writes */
+SALESC.onBusy = () => {
+  if (state.sel && $("#dhost")) renderDrawer();
+  salesDeletedPaint();
+};
 const salesSection = j => BLOCKNAMES[j.blk] || "";
 
 /* ---- who is at the desk ---------------------------------------------------- */
@@ -82,15 +90,21 @@ function salesOverlay(list) {
   const now = Date.now(), ids = {};
   (list || []).forEach(j => { ids[j.id] = 1; });
   Object.keys(SALES_GONE).forEach(id => { if (!ids[id] || now - SALES_GONE[id] > SALES_HOLD_MS) delete SALES_GONE[id]; });
+  const put = (j, h) => {
+    const c = Object.assign({}, j);
+    Object.keys(h).forEach(k => { if (k !== "at") c[k] = h[k]; });
+    if ("flag" in h) c.urg = h.flag === "urgent" || (j.urg && j.flag !== "urgent") ? 1 : 0;
+    if ("ph" in h) { const d = String(h.ph).replace(/\D/g, ""); c.ph3 = d.length >= 3 ? d.slice(-3) : ""; }
+    return c;
+  };
   return (list || []).filter(j => !SALES_GONE[j.id]).map(j => {
     const h = SALES_HOLD[j.id];
     if (!h) return j;
     if (now - h.at > SALES_HOLD_MS) { delete SALES_HOLD[j.id]; return j; }
-    const c = Object.assign({}, j);
-    delete c.raw;                   // applyPending must re-apply onto this copy, not undo it
-    Object.keys(h).forEach(k => { if (k !== "at") c[k] = h[k]; });
-    if ("flag" in h) c.urg = h.flag === "urgent" || (j.urg && j.flag !== "urgent") ? 1 : 0;
-    if ("ph" in h) { const d = String(h.ph).replace(/\D/g, ""); c.ph3 = d.length >= 3 ? d.slice(-3) : ""; }
+    const c = put(j, h);
+    /* a move hold keeps its revert data: the parsed job under it gets the
+       same Sales fields, so applyPending re-applying onto it keeps both */
+    if (j.raw) c.raw = put(j.raw, h);
     return c;
   });
 }
@@ -166,11 +180,12 @@ function salesRowHtml(j, i) {
 
 /* ---- the drawer's own sections, above the office's (read only) ones --------- */
 function salesDrawerHtml(j) {
-  const ro = !SALES_WHO, dis = ro ? " disabled" : "", k = s => esc(s + "|" + j.id);
+  const ro = !SALES_WHO, dis = salesDis(), k = s => esc(s + "|" + j.id);
   const d = SALES_DELIV[j.id], flag = SALESC.flagWord(j.flag);
   const reqs = SALESC.newestFirst(SALES_REQS.filter(r => String(r.fields.Job || "").toUpperCase() === j.id));
   const targets = SALESC.moveTargets(BLOCKNAMES, j.blk);
-  return (ro ? '<div class="editbar">Pick your name (top right) to make changes. Until then this page is read only.</div>' : "") +
+  return (ro ? '<div class="editbar">Pick your name (top right) to make changes. Until then this page is read only.</div>'
+    : SALESC.busy() ? '<div class="editbar"><span class="spin"></span> Writing to Excel… changes wait until it has finished.</div>' : "") +
     '<div class="sect"><span class="kick">Customer</span><div class="sform">' +
       SALESC.FIELDS.map(F => '<label>' + esc(F.label) + '<input class="txt" data-keep="' + k(F.key) + '" data-sfield="' + esc(F.key) +
         '" value="' + esc(F.of(j) || "") + '"' + (F.text ? ' inputmode="text"' : "") + dis + '></label>').join("") +
@@ -219,17 +234,23 @@ function salesWireDrawer(host, j) {
     });
     if (!changed.length) throw new Error("Nothing has changed.");
     for (const [F, v] of changed) {
-      await SALESC.saveCustomer(salesCtx(), j, F.key, v);
+      const r = await SALESC.saveCustomer(salesCtx(), j, F.key, v);
       salesHold(j.id, { [F.key === "phone" ? "ph" : F.key]: v });
+      if (r && r.warn) toast(r.warn, true);
     }
     return changed.length;
   }, n => j.id + ": " + n + " customer detail" + (n > 1 ? "s" : "") + " saved in Excel"));
-  const colour = which => salesRun(host, async () => {
+  const colour = async which => {
     const want = SALESC.nextFlag(j.flag, which);
-    await SALESC.setColour(salesCtx(), j, want, salesSection(j));
-    salesHold(j.id, { flag: want, flagHex: want ? SALESC.COLOURS[want] : "" });
-    return want;
-  }, w => j.id + ": text is now " + SALESC.COLOUR_WORD[w].toLowerCase() + " in Excel");
+    /* Trade order (pink) / On hold (blue) is somebody's decision: ask first */
+    const q = SALESC.replaceQuestion(j.flag, want);
+    if (q && !(await salesConfirm(q, "Only the row's text colour changes; the old colour is kept in Sales job backups.", "Replace"))) return;
+    salesRun(host, async () => {
+      await SALESC.setColour(salesCtx(), j, want);
+      salesHold(j.id, { flag: want, flagHex: want ? SALESC.COLOURS[want] : "" });
+      return want;
+    }, w => j.id + ": text is now " + SALESC.COLOUR_WORD[w].toLowerCase() + " in Excel");
+  };
   on("surg", () => colour("urgent"));
   on("sbook", () => colour("booked"));
   const date = host.querySelector("#sdate");
@@ -243,7 +264,9 @@ function salesWireDrawer(host, j) {
   };
   on("smove", async () => {
     const sel = host.querySelector("#smovesel"); if (!sel) return;
-    await moveJobsInSheet([j.id], Number(sel.value));
+    /* in the same queue as every Sales write, so nothing else runs beside it */
+    try { await SALESC.moveJob(salesCtx(), j, Number(sel.value), BLOCKNAMES, moveJobsInSheet); }
+    catch (e) { toast(friendly(e), true); }
   });
   on("sreqmove", () => {
     const k = host.querySelector("#sreqkind"), t = host.querySelector("#sreqtext");
@@ -267,7 +290,8 @@ function salesWireDrawer(host, j) {
       "The whole row is saved first and can be put back from Deleted jobs, at the bottom of " + (section || "its section") + ".",
       "Delete job");
     if (!yes) return;
-    const r = await salesRun(host, () => SALESC.deleteJob(salesCtx(), j, section), j.id + " deleted - it can be restored from Deleted jobs");
+    const r = await salesRun(host, () => SALESC.deleteJob(salesCtx(), j), j.id + " deleted - it can be restored from Deleted jobs");
+    if (r && r.edgeError) toast(j.id + " was deleted, but the border above it could not be redrawn: " + r.edgeError, true);
     if (r) { SALES_GONE[j.id] = Date.now(); ALL = salesOverlay(ALL); ALL.blockNames = BLOCKNAMES; closeDrawer(); renderAll(); scheduleReconcile(); }
   });
 }
@@ -312,7 +336,7 @@ function salesRequestsWindow() {
   salesWindow("sqhost", "Requests", SALESC.unreadReplies(all).length + " new repl" + (SALESC.unreadReplies(all).length === 1 ? "y" : "ies") +
     " from the office", SALES_REQS_OK !== true ? '<div class="empty">The “Sales requests” list is not in SharePoint, or could not be read.</div>'
     : all.length ? all.map(r => salesRequestHtml(r, false)).join("") : '<div class="empty">No requests yet.</div>');
-  if (SALES_REQS_OK !== true || !SALESC.unreadReplies(all).length) return;
+  if (SALES_REQS_OK !== true || !SALES_WHO || !SALESC.unreadReplies(all).length) return;   // no write before a name
   const todo = SALESC.unreadReplies(all);
   SALESC.markSeen(salesCtx(), todo)
     .then(() => { todo.forEach(r => { r.fields.ReplySeen = "Yes"; }); salesReqCount(); })
@@ -351,7 +375,7 @@ function salesDeletedPaint() {
           '<span>' + esc(salesBackupWords(f)) + '</span><span>' + esc(f.Who || "—") + '</span><span class="tab">' + esc(stamp(f.At)) + '</span>' +
           '<span style="font-size:11.5px;color:var(--ink-3)">' + ch.map(c => esc(salesBackupWords(c.fields))).join("<br>") + '</span>' +
           '<span>' + (f.Kind === "delete" && !SALESC.yes(f.Restored)
-            ? '<button class="btn" data-srestore="' + esc(x.id) + '"' + (SALES_WHO ? "" : " disabled") + '>Restore</button>' : "") + '</span></div>'; }).join("") +
+            ? '<button class="btn" data-srestore="' + esc(x.id) + '"' + salesDis() + '>Restore</button>' : "") + '</span></div>'; }).join("") +
       '</div>';
   const host = salesWindow("sdhost", "Deleted jobs", "Every delete, restore and customer change made on the Sales page", body);
   host.querySelectorAll("[data-srestore]").forEach(b => b.onclick = async () => {
@@ -362,6 +386,7 @@ function salesDeletedPaint() {
       Object.assign(it.fields, { Restored: "Yes", RestoredBy: SALES_WHO, RestoredAt: new Date().toISOString() });
       delete SALES_GONE[String(it.fields.Job).toUpperCase()];
       toast(it.fields.Job + " restored to the bottom of " + r.section + " (row " + r.row + ")");
+      if (r.warn || r.edgeError) toast(r.warn || ("The border above the restored row could not be redrawn: " + r.edgeError), true);
       scheduleReconcile(5000);
     } catch (e) { toast(friendly(e), true); }
     setStatus("live");

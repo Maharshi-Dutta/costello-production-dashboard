@@ -5391,7 +5391,7 @@ async function moveJobsInSheet(ids, idx) {
   const name = BLOCKNAMES[idx] || ("section " + idx);
   /* the Sales page moves one job the office has marked ready, and never into
      In production or Can sell as second hand (spec decision 5) */
-  if (isSales() && (typeof SALESC === "undefined" || SALESC.NO_MOVE.indexOf(name) >= 0 ||
+  if (isSales() && (typeof SALESC === "undefined" || !whoAmI() || SALESC.NO_MOVE.indexOf(name) >= 0 ||
       !ids.every(id => SALESC.moveAllowed(byId(id))))) {
     toast("The office has not marked this job ready, or it cannot go to " + name + " from here.", true);
     return 0;
@@ -6868,7 +6868,15 @@ const xpGroup = (title, inner, key) =>
   '<details class="xgrp" id="xg-' + key + '" data-xopen="' + key + '"' + (XSTATE.open[key] ? " open" : "") +
   "><summary>" + esc(title) + '</summary><div class="xgbody">' + inner + "</div></details>";
 
+/** The Sales page exports nothing before a name is picked: the log line
+    must say who made the file. */
+function salesNoName() {
+  if (!isSales() || whoAmI()) return false;
+  toast("Pick your name first (top right) - every export is logged with it.", true);
+  return true;
+}
 function renderExportWindow() {
+  if (salesNoName()) return;
   if (!XSTATE) XSTATE = xpNewState();
   /* opened from the John print sheet view, the window OPENS on that template -
      there is nothing else it could sensibly mean from in there. Only on the way
@@ -7170,7 +7178,7 @@ function xpWire(host) {
     The log line is last on purpose: nothing is claimed to have been exported
     until the bytes have actually been handed over. */
 async function xpDownload() {
-  if (XBUSY) return null;
+  if (XBUSY || salesNoName()) return null;
   if (XSTATE.template === "john") return null;     // that file is built by the notes window
   if (XSTATE.template === "station") return await stationReportDownload();
   const ctx = xpCtxNow(), f = XSTATE.f;
@@ -7221,6 +7229,7 @@ async function xpDownload() {
     on its way into the file) and by there being no column here for a phone
     number, an eircode or an address in the first place. */
 async function stationReportDownload() {
+  if (salesNoName()) return null;
   const pick = stationReportPick(XSTATE.station);
   if (!pick) return null;
   const period = xpPeriodNow();
@@ -7515,7 +7524,7 @@ async function johnDownload(ids, notes) {
 
 /** Print: save what changed, then build the file from what is on screen. */
 async function johnPrint() {
-  if (!NSTATE || NBUSY) return null;
+  if (!NSTATE || NBUSY || salesNoName()) return null;
   NBUSY = true; NSTATE.busy = true; renderNotesWindow();
   const ids = NSTATE.ids.slice();
   const typed = {}, changed = [];
@@ -10219,14 +10228,17 @@ function renderSalesRequests() {
     const text = box ? box.value.trim() : "";
     if (!text) { toast("Write the reply first.", true); return; }
     b.disabled = true;
-    const fields = { Reply: text.slice(0, 1000), ReplyBy: whoAmI(), ReplyAt: new Date().toISOString() };
+    const r = SALES_REQS.find(x => x.id === id);
     try {
       if (CW.listConsent) await CW.listConsent();
-      await CW.listPatch(SALESC.REQUESTS, id, fields);
-      const r = SALES_REQS.find(x => x.id === id); if (r) Object.assign(r.fields, fields);
+      const now = await SALESC.officeReply(CW, id, text, whoAmI());   // refused if someone has replied meanwhile
+      if (r) Object.assign(r.fields, now);
       if (box) box.value = "";
       toast("Reply sent to the Sales page");
-    } catch (e) { toast(friendly(e), true); }
+    } catch (e) {
+      if (e && e.current && r) Object.assign(r.fields, e.current);   // show the reply that got there first
+      toast(friendly(e), true);
+    }
     updateSalesBell(); renderSalesRequests();
   });
   renderFab();

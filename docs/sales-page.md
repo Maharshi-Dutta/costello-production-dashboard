@@ -41,6 +41,21 @@ chain (import, safeguard, feeders, colour writers) is not run at all. The
 boards' write controls are removed before wiring (`viewOnlyBoard`). No
 multi-select, no drag and drop, no grouped views.
 
+**After the review (fix pass, same day).** The locate reads `A1:K600` (the same
+600 rows `moveJobRow` sees, not `rowForJob`'s 400) and refuses unless the
+job is on the sheet exactly once; the row located for the backup is the row
+written or deleted, or nothing happens. The backup's Section is the live
+section. All six customer cells are written as text through `formulas` with
+the apostrophe marker (writeRow's route), after the column's header is read
+and still matches; phone and eircode go into the Dashboard Log as `•••` plus
+the last three characters. Delete and restore are logged the moment the row
+goes or comes back; a failed border step is reported, not a failed write.
+The Sales move runs in `SALESC.serial` with every write, and `SALESC.busy()`
+holds every write control on the page while anything is in flight. A pink
+(Trade order) or blue (On hold) row asks before it is replaced. Nothing is
+written or exported before a name is picked. The office's reply reads the
+request first and refuses if it has been answered.
+
 **The writes** (spec "Writes, exactly"):
 - *Customer cell* - locate by column C, check the one cell, PATCH the cell
   (phone and eircode with Excel's apostrophe text marker, the same one

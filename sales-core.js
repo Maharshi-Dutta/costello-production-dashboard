@@ -27,10 +27,21 @@ const SALESC = (function () {
 
   /* ---- the row's text colour: one colour, so urgent and booked exclude ---- */
   const COLOURS = { urgent: "#FF0000", booked: "#00B050", "": "#000000" };
-  const COLOUR_WORD = { urgent: "Urgent", booked: "Booked", "": "Black" };
+  const COLOUR_WORD = { urgent: "Urgent", booked: "Booked", trade: "Trade order", hold: "On hold", "": "Black" };
+  const INK_WORD = { trade: "pink", hold: "blue" };
   const flagWord = f => (f === "urgent" || f === "booked") ? f : "";
+  /** What the row's text says now, as logged: the real word, Trade order and On hold included. */
+  const fromWord = f => COLOUR_WORD[f] || (f ? String(f) : "Black");
   /** Pressing one toggle: on if it was off (the other one goes), off if it was on. */
   const nextFlag = (cur, which) => flagWord(cur) === which ? "" : which;
+  /** A Trade order / On hold row is somebody else's colour: ask before replacing it. */
+  function replaceQuestion(cur, want) {
+    if (!INK_WORD[cur]) return "";
+    return "This row's text is " + INK_WORD[cur] + " (" + COLOUR_WORD[cur] + "). Replace with " +
+      (want === "urgent" ? "red (Urgent)" : want === "booked" ? "green (Booked)" : "black") + "?";
+  }
+  /** "0871234567" -> "•••567": phone and eircode are never logged whole. */
+  const mask = v => { const s = String(v == null ? "" : v).trim(); return s ? "•••" + s.slice(-3) : ""; };
 
   /* ---- moving: only once the office has marked the job ready ------------- */
   const NO_MOVE = ["In production", "Can sell as second hand"];
@@ -40,13 +51,15 @@ const SALESC = (function () {
     .filter(t => NO_MOVE.indexOf(t.name) < 0 && t.idx !== cur);
 
   /* ---- the six customer cells, located by header through m.ident ---------- */
+  /* hdr: the header the parser located the column by (parser.js IDENT);
+     secret: logged masked (rule 4), whole only in the backups list */
   const FIELDS = [
-    { key: "cust", label: "Customer", of: j => j.cust },
-    { key: "phone", label: "Phone no", of: j => j.ph, text: true },
-    { key: "area", label: "Area", of: j => j.area },
-    { key: "eir", label: "Eircode", of: j => j.eir, text: true },
-    { key: "off", label: "Office no", of: j => j.off },
-    { key: "colour", label: "Windows colour", of: j => j.colour }
+    { key: "cust", label: "Customer", hdr: "customer", of: j => j.cust },
+    { key: "phone", label: "Phone no", hdr: "phone no", of: j => j.ph, secret: true },
+    { key: "area", label: "Area", hdr: "area", of: j => j.area },
+    { key: "eir", label: "Eircode", hdr: "eircode", of: j => j.eir, secret: true },
+    { key: "off", label: "Office no", hdr: "office no", of: j => j.off },
+    { key: "colour", label: "Windows colour", hdr: "windows colour", of: j => j.colour }
   ];
   const fieldOf = key => FIELDS.find(f => f.key === key) || null;
 
@@ -116,12 +129,22 @@ const SALESC = (function () {
   }
 
   /* ---- the writes, one at a time per page -------------------------------- */
-  let chain = Promise.resolve();
+  /* Every Sales write - and the Sales page's move - runs through here, one at
+     a time. `busy()` is true from the moment one is asked for until the last
+     has finished, and `onBusy` hears each change, so the page can hold every
+     write control on every drawer and window while anything is in flight. */
+  let chain = Promise.resolve(), inFlight = 0;
+  const api = { onBusy: null };
+  const busyTell = () => { if (typeof api.onBusy === "function") try { api.onBusy(inFlight > 0); } catch (e) {} };
   function serial(fn) {
+    inFlight++; if (inFlight === 1) busyTell();
     const run = chain.then(fn, fn);
     chain = run.then(() => {}, () => {});
+    const done = () => { inFlight--; if (!inFlight) busyTell(); };
+    run.then(done, done);
     return run;
   }
+  const busy = () => inFlight > 0;
   function need(ctx) {
     guard();
     if (!ctx || !ctx.CW) throw new Error("no Graph layer");
@@ -147,52 +170,55 @@ const SALESC = (function () {
     need(ctx);
     const F = fieldOf(key);
     if (!F) throw new Error("not a customer field: " + key);
-    const col = ctx.identCol(key);
+    const col = ctx.identCol(key), hdrRow = ctx.hdrRow ? ctx.hdrRow() : 0;
     if (!col) throw new Error("The Production sheet has no '" + F.label + "' column.");
     const from = str(F.of(j)), to = str(value).trim();
     return serial(async () => {
-      const r = await ctx.CW.salesLocate(j.id);
-      await ctx.CW.salesSetCell(j.id, r, col, to, !!F.text);
-      ctx.note(j.id, F.label, from, to);
+      const L = await ctx.CW.salesLocate(j.id);
+      await ctx.CW.salesSetCell(j.id, L.row, col, to, { row: hdrRow, label: F.hdr });
+      /* the Dashboard Log never carries a whole phone number or eircode */
+      ctx.note(j.id, F.label, F.secret ? mask(from) : from, F.secret ? mask(to) : to);
       const at = now(ctx);
+      let warn = "";
       try {
         await ctx.CW.listAdd(BACKUPS, { Title: title(j.id, at), Job: j.id, Kind: "edit", Field: F.label,
                                         From: from, To: to, Who: ctx.who, At: at, Restored: "No" });
-      } catch (e) { /* the cell is written and logged; the record is the extra */ }
-      return { row: r, from, to };
+      } catch (e) { warn = "Written and logged, but the Sales job backups record failed: " + ((e && e.message) || e); }
+      return { row: L.row, from, to, warn };
     });
   }
 
   /** The row's text colour (2a): backed up and read back BEFORE the paint. */
-  function setColour(ctx, j, want, sectionName) {
+  function setColour(ctx, j, want) {
     need(ctx);
     want = flagWord(want);
-    const from = COLOUR_WORD[flagWord(j.flag)] || str(j.flag), to = COLOUR_WORD[want];
+    const from = fromWord(j.flag), to = COLOUR_WORD[want];
     return serial(async () => {
-      const r = await ctx.CW.salesLocate(j.id);
-      const cap = await ctx.CW.captureRow(r, ctx.tmplFor ? ctx.tmplFor(j.id) : null);
+      const L = await ctx.CW.salesLocate(j.id);          // the section is the live one, not the download's
+      const cap = await ctx.CW.captureRow(L.row, ctx.tmplFor ? ctx.tmplFor(j.id) : null);
       const at = now(ctx);
-      await backup(ctx, { Title: title(j.id, at), Job: j.id, Kind: "colour", Section: str(sectionName),
-                          From: from, To: to, Row: rowJson(cap, sectionName), Who: ctx.who, At: at, Restored: "No" });
-      await ctx.CW.salesSetFont(j.id, r, COLOURS[want]);
+      await backup(ctx, { Title: title(j.id, at), Job: j.id, Kind: "colour", Section: L.section,
+                          From: from, To: to, Row: rowJson(cap, L.section), Who: ctx.who, At: at, Restored: "No" });
+      await ctx.CW.salesSetFont(j.id, L.row, COLOURS[want]);   // refused if the row has moved since
       ctx.note(j.id, "Text colour", from, to);
-      return { row: r, from, to };
+      return { row: L.row, from, to };
     });
   }
 
-  /** Delete the row (2c), only after its backup has been read back whole. */
-  function deleteJob(ctx, j, sectionName) {
+  /** Delete the row (2c), only after its backup has been read back whole -
+      and only the row that was backed up: refused if it has moved since. */
+  function deleteJob(ctx, j) {
     need(ctx);
     return serial(async () => {
-      const r = await ctx.CW.salesLocate(j.id);
-      const cap = await ctx.CW.captureRow(r, ctx.tmplFor ? ctx.tmplFor(j.id) : null);
-      const json = rowJson(cap, sectionName);            // too big: refused before anything is saved
+      const L = await ctx.CW.salesLocate(j.id);
+      const cap = await ctx.CW.captureRow(L.row, ctx.tmplFor ? ctx.tmplFor(j.id) : null);
+      const json = rowJson(cap, L.section);              // too big: refused before anything is saved
       const at = now(ctx);
-      const made = await backup(ctx, { Title: title(j.id, at), Job: j.id, Kind: "delete", Section: str(sectionName),
+      const made = await backup(ctx, { Title: title(j.id, at), Job: j.id, Kind: "delete", Section: L.section,
                                        Row: json, Who: ctx.who, At: at, Restored: "No" });
-      const d = await ctx.CW.salesDeleteRow(j.id, ctx.tmplFor);   // found and checked again in there
-      ctx.note(j.id, "Deleted", str(sectionName), "");
-      return { itemId: made.id, row: d.row };
+      const d = await ctx.CW.salesDeleteRow(j.id, L.row, ctx.tmplFor,
+        () => ctx.note(j.id, "Deleted", L.section, ""));   // logged straight after the delete itself
+      return { itemId: made.id, row: d.row, section: L.section, edgeError: d.edgeError || "" };
     });
   }
 
@@ -209,12 +235,16 @@ const SALESC = (function () {
       if (!full || !str(full.fields && full.fields.Row)) throw new Error("The backup of " + job + " could not be read.");
       const saved = parseRow(full.fields.Row);
       const section = saved.sectionName || str(f.Section);
-      const put = await ctx.CW.salesInsertRow(job, saved.cap, section, ctx.tmplFor);
+      const put = await ctx.CW.salesInsertRow(job, saved.cap, section, ctx.tmplFor,
+        () => ctx.note(job, "Restored", "", section));    // logged the moment the row is confirmed back
       const at = now(ctx);
-      await ctx.CW.listPatch(BACKUPS, item.id, { Restored: "Yes", RestoredBy: ctx.who, RestoredAt: at });
-      await ctx.CW.listAdd(BACKUPS, { Title: title(job, at), Job: job, Kind: "restore", Section: section,
-                                      Who: ctx.who, At: at, Restored: "No" });
-      ctx.note(job, "Restored", "", section);
+      /* the row is back whatever happens next; a list failure is reported, and
+         a second restore is refused anyway because the job is on the sheet */
+      try {
+        await ctx.CW.listPatch(BACKUPS, item.id, { Restored: "Yes", RestoredBy: ctx.who, RestoredAt: at });
+        await ctx.CW.listAdd(BACKUPS, { Title: title(job, at), Job: job, Kind: "restore", Section: section,
+                                        Who: ctx.who, At: at, Restored: "No" });
+      } catch (e) { put.warn = "Restored and logged, but the backups list was not updated: " + ((e && e.message) || e); }
       return put;
     });
   }
@@ -247,7 +277,7 @@ const SALESC = (function () {
 
   /** The replies on screen that have not been marked seen: ReplySeen = Yes. */
   function markSeen(ctx, reqs) {
-    guard();
+    need(ctx);
     const todo = unreadReplies(reqs);
     return serial(async () => {
       for (let i = 0; i < todo.length; i++) await ctx.CW.listPatch(REQUESTS, todo[i].id, { ReplySeen: "Yes" });
@@ -255,14 +285,42 @@ const SALESC = (function () {
     });
   }
 
-  return {
+  /** The office's reply: Reply, ReplyBy, ReplyAt only - and only if nobody has
+      replied since this screen read the list (read the item first). Answers
+      the item's fields as they are after the write. */
+  async function officeReply(CW, id, text, who, at) {
+    if (isSales()) throw new Error("The office replies from the office page.");
+    const t = str(text).trim().slice(0, 1000);
+    if (!t) throw new Error("Write the reply first.");
+    const cur = await CW.listItem(REQUESTS, id, { fields: REQUEST_FIELDS });
+    if (!cur) throw new Error("That request is no longer in the list.");
+    if (str(cur.fields.Reply).trim()) {
+      const e = new Error("Already answered by " + (str(cur.fields.ReplyBy).split("@")[0] || "someone") + " - nothing was written.");
+      e.current = cur.fields; throw e;
+    }
+    const fields = { Reply: t, ReplyBy: str(who), ReplyAt: at || new Date().toISOString() };
+    await CW.listPatch(REQUESTS, id, fields);
+    return Object.assign({}, cur.fields, fields);
+  }
+
+  /** The Sales page's move (decision 5), in the same queue as every other
+      Sales write. `move(ids, idx)` is app.js's moveJobsInSheet. */
+  function moveJob(ctx, j, idx, names, move) {
+    need(ctx);
+    const name = (names || [])[idx];
+    if (!moveAllowed(j)) throw new Error("The office has not marked " + j.id + " ready yet.");
+    if (!name || NO_MOVE.indexOf(name) >= 0) throw new Error(j.id + " cannot be moved to " + (name || "that section") + " from here.");
+    return serial(() => move([j.id], idx));
+  }
+
+  return Object.assign(api, {
     PEOPLE, JOBS, BACKUPS, REQUESTS, PEOPLE_FIELDS, JOBS_FIELDS, BACKUP_FIELDS, REQUEST_FIELDS, REQUEST_KINDS,
     COLOURS, COLOUR_WORD, NO_MOVE, FIELDS, ROW_MAX,
-    isSales, flagWord, nextFlag, moveAllowed, moveTargets, fieldOf, yes,
+    isSales, flagWord, fromWord, nextFlag, replaceQuestion, mask, moveAllowed, moveTargets, fieldOf, yes,
     slimCap, fullCap, rowJson, parseRow,
     unanswered, unreadReplies, openFor, newestFirst, officeOrder, dayWords, deliveryMap,
-    serial, saveCustomer, setColour, deleteJob, restoreJob, setDelivery, sendRequest, markSeen
-  };
+    serial, busy, saveCustomer, setColour, deleteJob, restoreJob, setDelivery, sendRequest, markSeen, moveJob, officeReply
+  });
 })();
 if (typeof window !== "undefined") window.SALESC = SALESC;
 if (typeof module !== "undefined" && module.exports) module.exports = SALESC;

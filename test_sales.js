@@ -36,10 +36,12 @@ function wideRow(id) {
     r.nf[c] = c % 4 === 0 ? "d-mmm" : c % 4 === 1 ? "0.00" : "General"; }
   return r;
 }
-let SHEET, LOG, FAIL_PATCH_VALUES, MISMATCH_AT, CREADS, FETCHES = 0;
+let SHEET, LOG, FAIL_PATCH_VALUES, ON_READ, READS, FAIL_BORDERS, FETCHES = 0;
 function reset() {
   SHEET = [null,
-    mkRow(["", "", "", "", "", "", "", "", "", "", "8843"]), mkRow(["COMMENT", "OFFICE NO.", "JOB NO."]), mkRow(["", "", "", "SOLD"]),
+    mkRow(["", "", "", "", "", "", "", "", "", "", "8843"]),
+    mkRow(["COMMENT", "OFFICE NO.", "JOB NO.", "", "", "", "", "", "CUSTOMER", "PHONE NO.", "AREA", "EIRCODE", "WINDOWS COLOUR"]),
+    mkRow(["", "", "", "SOLD"]),
     mkRow(["Below is orders ready and customers won't take"]),
     mkRow(["", 7785, "R0001", 46000, "", "", "", "", "Person A", "086", "Cork"], "#FFE699", 30.75),
     mkRow(["Below is collect or supply only orders"]),
@@ -51,7 +53,7 @@ function reset() {
     mkRow(["", 9101, "R0007", 46030, "", "", "", "", "Person A", "087", "Laois"], "#FFFFFF", 30),
     mkRow(["URGENT", 9102, "R0008", 46031, "", "", "", "", "Person B", "086", "Cork"], "#FFFFFF", 30),
     mkRow(["", "", 5293])];
-  LOG = []; FAIL_PATCH_VALUES = 0; MISMATCH_AT = 0; CREADS = 0;
+  LOG = []; FAIL_PATCH_VALUES = 0; ON_READ = null; READS = 0; FAIL_BORDERS = 0;
 }
 const typeOf = v => v === "" || v == null ? "Empty" : typeof v === "number" ? "Double" : typeof v === "boolean" ? "Boolean" : "String";
 function parseAddr(a) {
@@ -78,9 +80,8 @@ function route(method, url, body) {
       return ok(out);
     }
     if (rest.startsWith("/format")) return ok({ rowHeight: SHEET[A.r1] ? SHEET[A.r1].height : 15 });
-    /* the one-cell check of column C: the nth such read can be made to lie */
-    if (A.c1 === 3 && A.c2 === 3 && A.r1 === A.r2) { CREADS++;
-      if (MISMATCH_AT && CREADS === MISMATCH_AT) return ok({ values: [["R9999"]] }); }
+    /* the Sales locate's read of A1:K600: the sheet can be changed just before the nth one */
+    if (A.r1 === 1 && A.r2 === 600 && A.c1 === 1 && A.c2 === 11) { READS++; if (ON_READ) ON_READ(READS); }
     const o = { values: [], valueTypes: [], numberFormat: [], formulas: [] };
     rows().forEach(r => {
       const v = [], t = [], nf = [], f = [];
@@ -103,6 +104,7 @@ function route(method, url, body) {
     }
     if (rest === "/format/fill") { rows().forEach(r => { for (let c = A.c1; c <= A.c2; c++) r.fill[c - 1] = body.color; }); return ok({}); }
     if (rest === "/format/font") { rows().forEach(r => { for (let c = A.c1; c <= A.c2; c++) r.font[c - 1] = Object.assign({}, r.font[c - 1], body); }); return ok({}); }
+    if (rest.startsWith("/format/borders/") && FAIL_BORDERS === A.r1) return { status: 400, body: { error: { code: "BorderRefused" } } };
     if (rest === "/format" || rest.startsWith("/format/borders/")) { rows().forEach(r => { if (body.rowHeight) r.height = body.rowHeight; }); return ok({}); }
   }
   return { status: 404, body: { error: "no route " + method + " " + url } };
@@ -135,7 +137,9 @@ const fakeTmpl = () => ({ row: 0, height: 30, cells: Array.from({ length: N }, (
   bottom: { style: "thin", color: "#000000" }, left: null, right: null, fk: "a", flk: "g" })) });
 const ctx = () => ({ CW: fakeCW, who: "Person A", note: (job, what, from, to) => NOTES.push([job, what, from, to]),
   tmplFor: () => fakeTmpl(), identCol: k => ({ cust: 9, phone: 10, area: 11, off: 2, eir: 12, colour: 13 })[k],
-  now: () => "2026-09-30T10:00:0" + (NEXT % 10) + ".000Z" });
+  hdrRow: () => 2, now: () => "2026-09-30T10:00:0" + (NEXT % 10) + ".000Z" });
+const dupRow = id => { const r = JSON.parse(JSON.stringify(SHEET[rowOf(id)])); SHEET.splice(13, 0, r); };
+const shiftDown = () => SHEET.splice(4, 0, mkRow(["someone inserted a row in Excel"]));
 const jobsInOrder = () => SHEET.slice(1).filter(r => /^[A-Z]{1,2}\d{3,5}$/.test(String(r.v[2]))).map(r => r.v[2]);
 const rowOf = id => SHEET.findIndex(r => r && r.v[2] === id);
 const snapshot = () => JSON.stringify(SHEET.slice(1).map(r => [r.v, r.fill, r.font, r.nf]));
@@ -161,18 +165,33 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.strictEqual(S.nextFlag("trade", "booked"), "booked");
   assert.deepStrictEqual(S.COLOURS, { urgent: "#FF0000", booked: "#00B050", "": "#000000" });
   reset(); resetLists();
-  await S.setColour(ctx(), Object.assign(job("R0006"), { flag: "" }), "urgent", "In production");
+  await S.setColour(ctx(), Object.assign(job("R0006"), { flag: "" }), "urgent");
   const fontW = wrote().filter(l => /format\/font$/.test(l.u));
   assert.strictEqual(fontW.length, 1); assert.strictEqual(fontW[0].u, "range(address='A10:CL10')/format/font");
   assert.deepStrictEqual(fontW[0].b, { color: "#FF0000" }, "font colour only - nothing else in the body");
   assert(!wrote().some(l => /fill/.test(l.u)), "no fill is ever touched");
   assert.strictEqual(ITEMS["1"].fields.Kind, "colour"); assert.strictEqual(ITEMS["1"].fields.To, "Urgent");
+  assert.strictEqual(ITEMS["1"].fields.Section, "Ready to fit", "the live section, found by the locate");
   assert(ITEMS["1"].fields.Row.length > 100, "the colour backup carries the captured row");
   assert.deepStrictEqual(NOTES, [["R0006", "Text colour", "Black", "Urgent"]]);
   reset(); resetLists(); FAIL_ADD = true;
-  await assert.rejects(S.setColour(ctx(), job("R0006"), "booked", "In production"));
+  await assert.rejects(S.setColour(ctx(), job("R0006"), "booked"));
   assert(!wrote().length, "no backup, no paint");
+  await assert.rejects(CW.salesSetFont("R0006", 10, "#FF3399"), /Not a Sales text colour/);
   pass("urgent and booked exclude; the row's font colour is the only thing painted, after its backup");
+
+  /* ---- 2b. Trade order / On hold rows: the real word is logged, and asked about ---- */
+  assert.strictEqual(S.replaceQuestion("trade", "urgent"), "This row's text is pink (Trade order). Replace with red (Urgent)?");
+  assert.strictEqual(S.replaceQuestion("hold", "booked"), "This row's text is blue (On hold). Replace with green (Booked)?");
+  assert.strictEqual(S.replaceQuestion("urgent", "booked"), "", "red/green/black need no question");
+  assert.strictEqual(S.replaceQuestion("", "urgent"), "");
+  reset(); resetLists();
+  await S.setColour(ctx(), Object.assign(job("R0006"), { flag: "trade" }), S.nextFlag("trade", "urgent"));
+  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Text colour", "Trade order", "Urgent"]);
+  assert.strictEqual(ITEMS["1"].fields.From, "Trade order");
+  await S.setColour(ctx(), Object.assign(job("R0006"), { flag: "hold" }), "");
+  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Text colour", "On hold", "Black"]);
+  pass("a pink or blue row: From names Trade order / On hold, and the page asks before replacing it");
 
   /* ---- 3. Row JSON size ---- */
   reset(); SHEET.splice(10, 0, wideRow("R0042"));
@@ -188,27 +207,67 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
 
   /* ---- 4. delete order ---- */
   reset(); resetLists(); let before = snapshot(); FAIL_ADD = true;
-  await assert.rejects(S.deleteJob(ctx(), job("R0006"), "In production"), /list refused/);
+  await assert.rejects(S.deleteJob(ctx(), job("R0006")), /list refused/);
   assert.strictEqual(snapshot(), before); assert(!wrote().some(l => /delete/.test(l.u)));
   resetLists(); BAD_READBACK = true; LOG = [];
-  await assert.rejects(S.deleteJob(ctx(), job("R0006"), "In production"), /read back/);
+  await assert.rejects(S.deleteJob(ctx(), job("R0006")), /read back/);
   assert.strictEqual(snapshot(), before); assert(!wrote().length);
-  resetLists(); LOG = []; CREADS = 0; MISMATCH_AT = 1;
-  await assert.rejects(S.deleteJob(ctx(), job("R0006"), "In production"), /no longer on row/);
-  assert.strictEqual(Object.keys(ITEMS).length, 0, "a row that is not this job: nothing saved, nothing deleted");
-  resetLists(); LOG = []; CREADS = 0; MISMATCH_AT = 2;       // passes the first check, fails the one before the delete
-  await assert.rejects(S.deleteJob(ctx(), job("R0006"), "In production"), /no longer on row/);
-  assert.strictEqual(snapshot(), before); assert(!wrote().length, "column C changed before the delete: nothing deleted");
-  resetLists(); LOG = []; MISMATCH_AT = 0;
+  pass("delete: nothing goes when the backup fails or reads back different");
+
+  /* ---- 4b. (review 1) one row backed up, the same row deleted - or nothing ---- */
+  reset(); resetLists(); dupRow("R0006"); before = snapshot();
+  await assert.rejects(S.deleteJob(ctx(), job("R0006")), /2 times/);
+  await assert.rejects(S.setColour(ctx(), job("R0006"), "urgent"), /2 times/);
+  await assert.rejects(S.saveCustomer(ctx(), job("R0006"), "cust", "x"), /2 times/);
+  assert.strictEqual(snapshot(), before); assert(!wrote().length); assert.strictEqual(Object.keys(ITEMS).length, 0,
+    "a job on the sheet twice: nothing backed up, written or deleted");
+  reset(); resetLists(); before = snapshot();
+  ON_READ = n => { if (n === 2) shiftDown(); };         // rows move between the backup and the delete
+  await assert.rejects(S.deleteJob(ctx(), job("R0006")), /has moved from row 10 to row 11/);
+  assert(!wrote().some(l => /delete$/.test(l.u)), "the row moved after its backup: nothing deleted");
+  assert.strictEqual(rowOf("R0006"), 11, "and it is still there");
+  reset(); resetLists();
+  ON_READ = n => { if (n === 2) dupRow("R0006"); };     // a duplicate appears between backup and delete
+  await assert.rejects(S.deleteJob(ctx(), job("R0006")), /2 times/);
+  assert(!wrote().some(l => /delete$/.test(l.u)));
+  reset(); resetLists();
+  ON_READ = n => { if (n === 2) shiftDown(); };
+  await assert.rejects(S.setColour(ctx(), job("R0006"), "urgent"), /has moved/);
+  assert(!wrote().some(l => /format\/font$/.test(l.u)), "no paint onto a row that moved after its backup");
+  reset(); resetLists();
+  ON_READ = n => { if (n === 2) shiftDown(); };
+  await assert.rejects(S.saveCustomer(ctx(), job("R0006"), "cust", "x"), /has moved/);
+  assert(!wrote().length);
+  /* restore's own duplicate check reads the same 600 rows */
+  reset(); resetLists(); SHEET.push(...Array.from({ length: 440 }, () => mkRow([]))); SHEET.push(mkRow(["", "", "R0099"]));
+  const capX = await CW.captureRow(rowOf("R0005"), null);
+  ITEMS.far = { fields: { Row: S.rowJson(capX, "In production") } };
+  await assert.rejects(S.restoreJob(ctx(), { id: "far", fields: { Kind: "delete", Job: "R0099", Restored: "No" } }), /already on the Production sheet/,
+    "a copy of the job at row " + rowOf("R0099") + " (past row 400) still counts");
+  pass("delete/colour/customer refuse a job on the sheet twice, or a row that moved after its backup");
+
+  /* ---- 4c. (review 3) logged straight after the delete; a border failure is reported, not a failed delete ---- */
+  reset(); resetLists(); FAIL_BORDERS = 9;           // the row above R0006: only restoreBottomEdge writes there
+  const d2 = await S.deleteJob(ctx(), job("R0006"));
+  assert.strictEqual(rowOf("R0006"), -1, "deleted");
+  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Deleted", "Ready to fit", ""], "and logged");
+  assert(/BorderRefused/.test(d2.edgeError), "the border step's failure comes back as a report");
+  FAIL_BORDERS = 9;
+  const r2 = await S.restoreJob(ctx(), { id: d2.itemId, fields: ITEMS[d2.itemId].fields });
+  assert(/BorderRefused/.test(r2.edgeError)); assert.deepStrictEqual(NOTES.pop(), ["R0006", "Restored", "", "Ready to fit"]);
+  pass("delete and restore are logged the moment the row goes or comes back; a border failure is only reported");
+
+  reset(); resetLists(); FAIL_BORDERS = 0;
   const orig = JSON.parse(JSON.stringify(SHEET[rowOf("R0006")]));
-  const del = await S.deleteJob(ctx(), job("R0006"), "In production");
+  const del = await S.deleteJob(ctx(), job("R0006"));
   assert.strictEqual(rowOf("R0006"), -1, "the row is gone");
   assert.deepStrictEqual(jobsInOrder(), ["R0001", "C0003", "R0005", "R0007", "R0008"]);
   const di = wrote().findIndex(l => /delete$/.test(l.u));
   assert(di >= 0 && wrote().slice(0, di).every(l => !/insert|delete/.test(l.u)), "one row delete, nothing structural before it");
   assert.strictEqual(ITEMS[del.itemId].fields.Kind, "delete");
-  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Deleted", "In production", ""]);
-  pass("delete: nothing goes when the backup fails, reads back different, or column C no longer matches");
+  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Deleted", "Ready to fit", ""]);
+  assert.strictEqual(ITEMS[del.itemId].fields.Section, "Ready to fit");
+  pass("delete: the backed-up row is the deleted row, logged with its live section");
 
   /* ---- 5. restore ---- */
   const item = { id: del.itemId, fields: Object.assign({}, ITEMS[del.itemId].fields) };
@@ -216,7 +275,7 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   await assert.rejects(S.restoreJob(ctx(), { id: "x", fields: { Kind: "delete", Job: "R0005" } }), /could not be read/);
   ITEMS.fake = { fields: { Row: S.rowJson(cap, "In production") } };
   await assert.rejects(S.restoreJob(ctx(), { id: "fake", fields: { Kind: "delete", Job: "R0005", Restored: "No" } }), /already on the Production sheet/);
-  ITEMS.gone = { fields: { Row: ITEMS[del.itemId].fields.Row.replace('"In production"', '"No such section"') } };
+  ITEMS.gone = { fields: { Row: ITEMS[del.itemId].fields.Row.replace('"Ready to fit"', '"No such section"') } };
   await assert.rejects(S.restoreJob(ctx(), { id: "gone", fields: { Kind: "delete", Job: "R0006", Restored: "No" } }), /nowhere safe/);
   assert.strictEqual(snapshot(), before, "a refused restore changes nothing");
   FAIL_PATCH_VALUES = 1;
@@ -224,35 +283,50 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.strictEqual(snapshot(), before, "a failed write: the inserted row is taken out again");
   assert.strictEqual(ITEMS[del.itemId].fields.Restored, "No");
   const put = await S.restoreJob(ctx(), item);
-  assert.deepStrictEqual(jobsInOrder(), ["R0001", "C0003", "R0005", "R0007", "R0008", "R0006"], "back at the bottom of its section");
+  assert.deepStrictEqual(jobsInOrder(), ["R0001", "C0003", "R0005", "R0006", "R0007", "R0008"], "back at the bottom of its section");
   assert.strictEqual(put.row, rowOf("R0006"));
   const now6 = SHEET[rowOf("R0006")];
   assert.deepStrictEqual(now6.v, orig.v); assert.deepStrictEqual(now6.fill, orig.fill); assert.deepStrictEqual(now6.nf, orig.nf);
   assert.strictEqual(ITEMS[del.itemId].fields.Restored, "Yes"); assert.strictEqual(ITEMS[del.itemId].fields.RestoredBy, "Person A");
   assert(Object.keys(ITEMS).some(k => ITEMS[k].fields.Kind === "restore"));
-  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Restored", "", "In production"]);
+  assert.deepStrictEqual(NOTES.pop(), ["R0006", "Restored", "", "Ready to fit"]);
   assert.throws(() => S.restoreJob(ctx(), { id: del.itemId, fields: ITEMS[del.itemId].fields }), /already been restored/);
   pass("restore: refused when on the sheet or the section is gone; a failed copy is removed; the row comes back whole");
 
   /* ---- 6. customer cells ---- */
-  reset(); resetLists(); CREADS = 0; MISMATCH_AT = 1;
-  await assert.rejects(S.saveCustomer(ctx(), job("R0005"), "cust", "Person B"), /no longer on row/);
-  assert(!wrote().length, "a row that is not this job: no write");
-  MISMATCH_AT = 0; LOG = [];
+  reset(); resetLists();
   await S.saveCustomer(ctx(), job("R0005"), "phone", "0871234567");
   const pw = wrote().filter(l => l.m === "PATCH");
   assert.strictEqual(pw.length, 1); assert.strictEqual(pw[0].u, "range(address='J9')");
-  assert.deepStrictEqual(pw[0].b, { values: [["'0871234567"]] }, "written as text");
+  /* (review 8) the same route writeRow takes for a text cell: `formulas`, with the apostrophe */
+  assert.deepStrictEqual(pw[0].b, { formulas: [["'0871234567"]] }, "written as text, through formulas");
   assert.strictEqual(SHEET[9].v[9], "0871234567", "the leading 0 is kept");
-  assert.deepStrictEqual(NOTES.pop(), ["R0005", "Phone no", "086", "0871234567"]);
+  const viaWriteRow = []; ["0871234567", "007", "Cork", "TRUE", "A65 F4E2"].forEach(v =>
+    viaWriteRow.push(cellOut({ formulas: [v], values: [v], types: ["String"] }, 0)));
+  assert.deepStrictEqual(viaWriteRow, ["'0871234567", "'007", "Cork", "'TRUE", "A65 F4E2"],
+    "writeRow's own text cells: the same marker, so the two routes agree");
+  /* (review 9) the Dashboard Log gets the last three characters only */
+  assert.deepStrictEqual(NOTES.pop(), ["R0005", "Phone no", "•••086", "•••567"]);
   const ed = Object.keys(ITEMS).map(k => ITEMS[k].fields).find(f => f.Kind === "edit");
-  assert.strictEqual(ed.Field, "Phone no"); assert.strictEqual(ed.From, "086"); assert.strictEqual(ed.To, "0871234567");
-  LOG = []; await S.saveCustomer(ctx(), job("R0005"), "eir", "A65 F4E2");
-  assert.deepStrictEqual(wrote()[0].b, { values: [["A65 F4E2"]] });
+  assert.strictEqual(ed.Field, "Phone no"); assert.strictEqual(ed.From, "086"); assert.strictEqual(ed.To, "0871234567",
+    "the whole value stays in the backups list only");
+  LOG = []; await S.saveCustomer(ctx(), Object.assign(job("R0005"), { eir: "V94 N6PC" }), "eir", "A65 F4E2");
+  assert.deepStrictEqual(wrote()[0].b, { formulas: [["A65 F4E2"]] });
+  assert.deepStrictEqual(NOTES.pop(), ["R0005", "Eircode", "•••6PC", "•••4E2"]);
+  /* (review 6) every one of the six is text: an office no keeps its leading zeros */
+  LOG = []; await S.saveCustomer(ctx(), job("R0005"), "off", "007");
+  assert.deepStrictEqual(wrote()[0].b, { formulas: [["'007"]] }); assert.strictEqual(SHEET[9].v[1], "007");
+  assert.deepStrictEqual(NOTES.pop(), ["R0005", "Office no", "9001", "007"], "not a secret: logged whole");
   LOG = []; await S.saveCustomer(ctx(), job("R0005"), "cust", "=HYPERLINK(1)");
-  assert.deepStrictEqual(wrote()[0].b, { values: [["'=HYPERLINK(1)"]] }, "a customer name is never a formula");
+  assert.deepStrictEqual(wrote()[0].b, { formulas: [["'=HYPERLINK(1)"]] }, "a customer name is never a formula");
+  /* (review 7) the column's header is read first */
+  SHEET[2].v[9] = "MOBILE"; LOG = [];
+  await assert.rejects(S.saveCustomer(ctx(), job("R0005"), "phone", "0861111111"), /no longer reads 'phone no'/);
+  assert(!wrote().length, "a moved column: nothing written");
+  SHEET[2].v[9] = "PHONE NO.";
+  await assert.rejects(S.saveCustomer(Object.assign(ctx(), { hdrRow: () => 0 }), job("R0005"), "phone", "0861111111"), /header is not known/);
   assert.throws(() => S.saveCustomer(ctx(), job("R0005"), "sold", "x"), /not a customer field/);
-  pass("customer cells: refused on a row mismatch; phone and eircode kept as text");
+  pass("customer cells: all six written as text via formulas; header checked; phone/eircode logged masked");
 
   /* ---- 7. not the Sales page: nothing can run ---- */
   window.CW_PAGE = undefined; reset(); resetLists();
@@ -261,9 +335,10 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
     () => S.saveCustomer(ctx(), job("R0005"), "cust", "x"), () => S.setColour(ctx(), job("R0005"), "urgent", "x"),
     () => S.deleteJob(ctx(), job("R0005"), "x"), () => S.restoreJob(ctx(), item),
     () => S.setDelivery(ctx(), job("R0005"), "2026-10-07"), () => S.sendRequest(ctx(), "R0005", "status", "when?"),
-    () => S.markSeen(ctx(), []),
-    () => CW.salesLocate("R0005"), () => CW.salesSetCell("R0005", 9, 9, "x"), () => CW.salesSetFont("R0005", 9, "#FF0000"),
-    () => CW.salesDeleteRow("R0005"), () => CW.salesInsertRow("R0006", cap, "In production")
+    () => S.markSeen(ctx(), []), () => S.moveJob(ctx(), { id: "R0005", done: 1 }, 2, NAMES, async () => 1),
+    () => CW.salesLocate("R0005"), () => CW.salesSetCell("R0005", 9, 9, "x", { row: 2, label: "customer" }),
+    () => CW.salesSetFont("R0005", 9, "#FF0000"),
+    () => CW.salesDeleteRow("R0005", 9), () => CW.salesInsertRow("R0006", cap, "In production")
   ];
   for (const t of tries) {
     let threw = false;
@@ -299,7 +374,66 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
     { id: "8", fields: { Title: "R0006", DeliveryDate: "" } }]), { R0005: { date: "2026-10-07", by: "Person B", at: "", id: "9" } });
   assert.throws(() => S.setDelivery(ctx(), job("R0005"), "07/10/2026"), /YYYY-MM-DD/);
   assert.throws(() => S.sendRequest(Object.assign(ctx(), { who: "" }), "R0005", "status", "x"), /Pick your name/);
+  assert.throws(() => S.markSeen(Object.assign(ctx(), { who: "" }), R), /Pick your name/, "no write at all before a name");
   pass("requests: unread count, ReplySeen marks only the unread; delivery date and request fields");
+
+  /* ---- 9. (review 2) one queue: the move waits for a write in flight, and busy() holds the controls ---- */
+  const events = [], order = [];
+  S.onBusy = b => events.push(b);
+  let release; const gate = new Promise(r => { release = r; });
+  const w1 = S.serial(async () => { order.push("write starts"); await gate; order.push("write ends"); });
+  assert.strictEqual(S.busy(), true, "busy from the moment a write is asked for");
+  let moved = 0;
+  const mv = S.moveJob(ctx(), { id: "R0001", done: 1 }, 2, NAMES, async (ids, idx) => { order.push("move " + ids + "->" + idx); moved++; return 1; });
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepStrictEqual(order, ["write starts"], "the move has not started while the write is in flight");
+  assert.strictEqual(S.busy(), true);
+  release(); await w1; await mv;
+  assert.deepStrictEqual(order, ["write starts", "write ends", "move R0001->2"]);
+  await new Promise(r => setTimeout(r, 0));
+  assert.strictEqual(S.busy(), false, "and free again once both are done");
+  assert.deepStrictEqual(events, [true, false], "the page hears busy once and free once");
+  assert.throws(() => S.moveJob(ctx(), { id: "R0005", done: 0 }, 2, NAMES, async () => 1), /not marked/);
+  assert.throws(() => S.moveJob(ctx(), { id: "R0001", done: 1 }, 4, NAMES, async () => 1), /cannot be moved to In production/);
+  assert.throws(() => S.moveJob(ctx(), { id: "R0001", done: 1 }, 0, NAMES, async () => 1), /Can sell as second hand/);
+  assert.throws(() => S.moveJob(Object.assign(ctx(), { who: "" }), { id: "R0001", done: 1 }, 2, NAMES, async () => 1), /Pick your name/);
+  assert.strictEqual(moved, 1);
+  const failing = S.serial(async () => { throw new Error("boom"); });
+  await assert.rejects(failing, /boom/);
+  await new Promise(r => setTimeout(r, 0));
+  assert.strictEqual(S.busy(), false, "a failed write frees the queue too");
+  S.onBusy = null;
+  pass("the Sales move runs in the same queue as every write; busy() covers the whole time anything is in flight");
+
+  /* ---- 10. (review 12) the office's reply: refused if someone has replied since ---- */
+  window.CW_PAGE = undefined;
+  const RQ = { a: { Reply: "", ReplyBy: "" }, b: { Reply: "Tuesday", ReplyBy: "colleague@example.test" } }, rp = [];
+  const offCW = { listItem: async (l, id) => RQ[id] ? { id, fields: Object.assign({}, RQ[id]) } : null,
+                  listPatch: async (l, id, f) => { rp.push([l, id, f]); Object.assign(RQ[id], f); } };
+  const got = await S.officeReply(offCW, "a", "  Ready Thursday ", "office@example.test", "2026-09-30T12:00:00Z");
+  assert.deepStrictEqual(rp, [["Sales requests", "a", { Reply: "Ready Thursday", ReplyBy: "office@example.test", ReplyAt: "2026-09-30T12:00:00Z" }]],
+    "Reply, ReplyBy, ReplyAt and nothing else");
+  assert.strictEqual(got.Reply, "Ready Thursday");
+  await assert.rejects(S.officeReply(offCW, "b", "Wednesday", "office@example.test"), /Already answered by colleague/);
+  await assert.rejects(S.officeReply(offCW, "a", "again", "office@example.test"), /Already answered/, "a second reply to the same request is refused");
+  await assert.rejects(S.officeReply(offCW, "zz", "x", "office@example.test"), /no longer in the list/);
+  await assert.rejects(S.officeReply(offCW, "a", "   ", "office@example.test"), /Write the reply/);
+  assert.strictEqual(rp.length, 1, "only the first reply was written");
+  window.CW_PAGE = "sales";
+  await assert.rejects(S.officeReply(offCW, "a", "x", "Person A"), /office page/);
+  pass("office reply: read first, refused if already answered, writes only the three reply fields");
+
+  /* ---- 11. (review 13) the Sales hold keeps a move hold's revert data ---- */
+  vm.runInThisContext(fs.readFileSync(__dirname + "/sales.js", "utf8"), { filename: "sales.js" });
+  vm.runInThisContext('SALES_HOLD.R0001 = { flag: "booked", flagHex: "#00B050", at: Date.now() }');
+  const parsedJob = { id: "R0001", blk: 1, flag: "", urg: 0 };
+  const moving = Object.assign({}, parsedJob, { blk: 3, raw: parsedJob });    // applyPending's copy: moved, file not caught up
+  const out = vm.runInThisContext("salesOverlay")([moving])[0];
+  assert.strictEqual(out.flag, "booked"); assert.strictEqual(out.blk, 3, "the move hold is still shown");
+  assert(out.raw, "the revert data is kept");
+  assert.strictEqual(out.raw.blk, 1, "a failed move can still go back to where the file has it");
+  assert.strictEqual(out.raw.flag, "booked", "and going back keeps the Sales colour hold");
+  pass("salesOverlay keeps applyPending's raw (revert) job, with the Sales fields on it too");
 
   console.log("\n" + n + " checks passed");
   process.exit(0);
