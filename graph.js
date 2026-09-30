@@ -894,6 +894,106 @@ async function moveJobRow(jobId, targetIdx, tmplFor, onStep) {
   return { moved: true, from: sb.name, to: tb.name, fromRow: src, row: tgt - (srcNow < tgt ? 1 : 0) };
 }
 
+/* ---- the Sales page's three writes (owner, 2026-09-30) ---------------------
+   docs/specs/2026-09-30-sales-page.md, decision 2: a row's text colour, the six
+   customer cells, and a whole-row delete (with a restore). Every function here
+   refuses unless the page is the Sales page, so the office page cannot reach
+   them, and every one re-reads column C of the row it is about to touch and
+   refuses if the job is not there - rows move in this sheet.               */
+function salesOnly() {
+  if (typeof window === "undefined" || !window || window.CW_PAGE !== "sales")
+    throw new Error("Only the Sales page may do this.");
+}
+const jobText = v => String(v == null ? "" : v).trim().toUpperCase();
+async function salesRowCheck(jobId, row) {
+  salesOnly();
+  const v = await readColumn(PROD_SHEET, "C" + row + ":C" + row);
+  if (jobText(v && v[0] && v[0][0]) !== jobText(jobId))
+    throw new Error("Job " + jobId + " is no longer on row " + row + " - the sheet has moved. Nothing was written; try again.");
+  return row;
+}
+/** The job's row right now, checked. */
+async function salesLocate(jobId) {
+  salesOnly();
+  return salesRowCheck(jobId, await rowForJob(PROD_SHEET, jobId));
+}
+/** One customer cell. `asText` (phone, eircode) is written with Excel's own
+    text marker, the apostrophe writeRow already uses, so a leading 0 stays. */
+async function salesSetCell(jobId, row, col, value, asText) {
+  salesOnly();
+  await salesRowCheck(jobId, row);
+  const f = await findFile(), v = String(value == null ? "" : value).trim();
+  const out = v === "" ? "" : asText ? guardText(v) : /^\d+$/.test(v) ? Number(v) : guardText(v);
+  return call("PATCH", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='" + A1(col) + row + "')", { values: [[out]] });
+}
+/** The whole row's font colour, A..CL. Fills are never touched. */
+async function salesSetFont(jobId, row, color) {
+  salesOnly();
+  await salesRowCheck(jobId, row);
+  const f = await findFile();
+  return call("PATCH", f.base + "/worksheets('" + PROD_SHEET + "')/range(address='A" + row + ":" + lastCol + row + "')/format/font", { color });
+}
+/** Delete the job's whole row - found again and checked here, whatever the
+    caller found earlier - and give the row above its bottom edge back, the way
+    moveJobRow does for the row it vacates. */
+async function salesDeleteRow(jobId, tmplFor) {
+  salesOnly();
+  jobId = jobText(jobId);
+  const L = await locateJob(jobId);
+  if (!L.hit) throw new Error("Job " + jobId + " is not on the Production sheet.");
+  const src = await salesRowCheck(jobId, L.hit.row);
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  await call("POST", S + "/range(address='" + src + ":" + src + "')/delete", { shift: "Up" });
+  const prev = L.hit.block.jobs.filter(j => j.row < src).pop();
+  if (prev && prev.row === src - 1 && typeof tmplFor === "function") await restoreBottomEdge(src - 1, tmplFor(prev.id));
+  return { row: src, section: L.hit.block.name };
+}
+/** Put a captured row back at the bottom of the named section. Refuses when the
+    job is already on the sheet or the section has nowhere safe to land; if the
+    copy cannot be confirmed, the inserted row is taken out again. */
+async function salesInsertRow(jobId, cap, sectionName, tmplFor) {
+  salesOnly();
+  jobId = jobText(jobId);
+  const f = await findFile(), S = f.base + "/worksheets('" + PROD_SHEET + "')";
+  const rowOf = n => S + "/range(address='" + n + ":" + n + "')";
+  const count = async () => {
+    const col = await readColumn(PROD_SHEET, "C1:C600"), at = [];
+    col.forEach((v, i) => { if (jobText(v[0]) === jobId) at.push(i + 1); });
+    return at;
+  };
+  if ((await count()).length) throw new Error("Job " + jobId + " is already on the Production sheet - nothing was restored.");
+  const B = await liveBlocks();
+  const tb = B.blocks.find(b => b.name === sectionName);
+  if (!tb || !tb.last) throw new Error("The '" + sectionName + "' section has no divider or jobs in Excel right now, so there is nowhere safe to put " + jobId + ". Place one job there in Excel first.");
+  const tgt = tb.last + 1;
+  const aboveId = tb.jobs.length ? tb.jobs[tb.jobs.length - 1].id : null;
+  const nb = aboveId && typeof tmplFor === "function" ? tmplFor(aboveId) : null;
+  /* the section's own formatting for alignment and borders, the row's own height */
+  const tmpl = nb ? Object.assign({}, nb, { height: null }) : null;
+  await call("POST", rowOf(tgt) + "/insert", { shift: "Down" });
+  try {
+    await writeRow(tgt, cap, tmpl);
+    if (nb) await restoreBottomEdge(tgt - 1, nb);
+    const at = await count();
+    if (at.length !== 1 || at[0] !== tgt) throw new Error("The sheet changed under " + jobId + " while it was being restored (now at rows " + at.join(", ") + ").");
+  } catch (e) {
+    try {
+      const at = await count();
+      let victim = at.length === 1 ? at[0] : null;
+      if (!at.length) {
+        const probe = await call("GET", S + "/range(address='A" + tgt + ":K" + tgt + "')?$select=values");
+        if (((probe.values && probe.values[0]) || []).every(v => v === "" || v == null)) victim = tgt;
+      }
+      if (victim == null) throw new Error("could not tell which row is the copy");
+      await call("POST", rowOf(victim) + "/delete", { shift: "Up" });
+    } catch (e2) {
+      throw new Error(e.message + " Could not tidy up (" + e2.message + ") - check the Production sheet near row " + tgt + ".");
+    }
+    throw e;
+  }
+  return { row: tgt, section: tb.name };
+}
+
 /* ---- SharePoint lists ------------------------------------------------------
    The hand-set phases are shared through a SharePoint list in the same site,
    NOT through the workbook: nothing in this block addresses a worksheet, a
@@ -1490,6 +1590,7 @@ window.CW = {
   listConsent, hasListConsent, LIST_SCOPES, SCOPES,
   stationSite, forgetStationSite, isMissing, isRefused, stationSiteMoves, STATION_SITE_NAME,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
+  salesLocate, salesSetCell, salesSetFont, salesDeleteRow, salesInsertRow,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   /* tests only: forget which dashboard sheets have been seen, so the creation
      branch of the ensure*Sheet functions can be exercised again */
