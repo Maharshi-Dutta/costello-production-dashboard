@@ -2707,7 +2707,13 @@ try { WELD_FEED = JSON.parse(localStorage.getItem(WELD_FEED_KEY) || "null") || W
 function saveWeldFeed() { try { localStorage.setItem(WELD_FEED_KEY, JSON.stringify(WELD_FEED)); } catch (e) {} }
 /* which job rows on the board are expanded, what is in its search box, and
    which section it is narrowed to. Screen state: nothing is written anywhere. */
-let WELD_OPEN = {}, WELD_Q = "", WELD_SECT = "";
+let WELD_OPEN = {}, WELD_SECT = "";
+/* The boards filter by the top bar's search (state.q), one search for the
+   list and every board (2026-09-30). A board left empty by it says so. */
+function boardQueryEmptyHtml() {
+  const q = String(state.q || "").trim();
+  return q ? '<div class="empty">No job matches “' + esc(q) + '”</div>' : "";
+}
 let weldWriting = {};           // item id|part -> an office write in flight
 
 /** Is the welding station's code even on this page? index.html loads
@@ -3227,7 +3233,7 @@ function weldSections(cards) {
 }
 function weldCardsShown() {
   const all = weldRecordsNow().cards;
-  let rows = WELDC.weldFilter(all, String(WELD_Q || "").trim());
+  let rows = WELDC.weldFilter(all, String(state.q || "").trim());
   if (WELD_SECT) rows = rows.filter(c => c.section === WELD_SECT);
   return rows;
 }
@@ -3304,15 +3310,15 @@ function weldBoardHtml() {
   const trouble = WELD_ERR ? '<div class="sttrouble">' + esc(WELD_ERR) + '</div>' : "";
   const sects = weldSections(weldRecordsNow().cards);
   const bar = '<div class="wofilt">' +
-    '<input class="txt" id="wq" placeholder="Find a job, a customer or a group" value="' + esc(WELD_Q) + '">' +
     '<select class="txt" id="wsect"><option value="">Every section</option>' +
       sects.map(s => '<option value="' + esc(s) + '"' + (WELD_SECT === s ? " selected" : "") + '>' +
         esc(s) + '</option>').join("") + '</select>' +
     '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
     '</div>';
   const body = !cards.length
-    ? '<div class="empty" style="line-height:1.6">No welding jobs on the floor’s board yet. ' +
-      'Jobs appear here once this dashboard has fed them across.</div>'
+    ? (boardQueryEmptyHtml() ||
+      '<div class="empty" style="line-height:1.6">No welding jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(weldRowHtml).join("");
   return trouble + bar + '<div class="wolist">' + body + '</div>' + weldLogPanelHtml();
 }
@@ -3356,14 +3362,6 @@ function weldLogPanelHtml() {
 /** Wire the board: the expanders, the two filters and the office's steppers. */
 function wireWeldBoard(host) {
   if (!host || !host.querySelector) return;
-  const q = host.querySelector("#wq");
-  if (q) q.oninput = () => {
-    WELD_Q = q.value || "";
-    const at = q.selectionStart;
-    renderRows();
-    const n2 = $("#wq");
-    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
-  };
   const se = host.querySelector("#wsect");
   if (se) se.onchange = () => { WELD_SECT = se.value || ""; renderRows(); };
   (host.querySelectorAll("[data-wtog]") || []).forEach(el => {
@@ -3457,7 +3455,7 @@ try { GLZ_FEED = JSON.parse(localStorage.getItem(GLZ_FEED_KEY) || "null") || GLZ
 function saveGlzFeed() { try { localStorage.setItem(GLZ_FEED_KEY, JSON.stringify(GLZ_FEED)); } catch (e) {} }
 /* what is in the board's search box and which section it is narrowed to.
    Screen state: nothing is written anywhere. */
-let GLZ_Q = "", GLZ_SECT = "";
+let GLZ_SECT = "";
 let glzWriting = {};            // item id -> an office write in flight
 
 /** Is the glazing station's code even on this page? index.html loads
@@ -3892,7 +3890,7 @@ function glzSections(cards) {
 }
 function glzCardsShown() {
   const all = glzRecordsNow().cards;
-  let rows = GLZC.glzFilter(all, String(GLZ_Q || "").trim());
+  let rows = GLZC.glzFilter(all, String(state.q || "").trim());
   if (GLZ_SECT) rows = rows.filter(c => c.section === GLZ_SECT);
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
      own screen: the two boards are read side by side over the phone. A job whose
@@ -3975,15 +3973,15 @@ function glzBoardHtml() {
   const trouble = GLZ_ERR ? '<div class="sttrouble">' + esc(GLZ_ERR) + '</div>' : "";
   const sects = glzSections(glzRecordsNow().cards);
   const bar = '<div class="wofilt">' +
-    '<input class="txt" id="zq" placeholder="Find a job or a customer" value="' + esc(GLZ_Q) + '">' +
     '<select class="txt" id="zsect"><option value="">Every section</option>' +
       sects.map(s => '<option value="' + esc(s) + '"' + (GLZ_SECT === s ? " selected" : "") + '>' +
         esc(s) + '</option>').join("") + '</select>' +
     '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
     '</div>';
   const body = !cards.length
-    ? '<div class="empty" style="line-height:1.6">No glazing jobs on the floor’s board yet. ' +
-      'Jobs appear here once this dashboard has fed them across.</div>'
+    ? (boardQueryEmptyHtml() ||
+      '<div class="empty" style="line-height:1.6">No glazing jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(glzRowHtml).join("");
   return trouble + bar + '<div class="wolist">' + body + '</div>' + glzLogPanelHtml();
 }
@@ -4028,14 +4026,6 @@ function glzLogPanelHtml() {
     way into the job drawer. */
 function wireGlzBoard(host) {
   if (!host || !host.querySelector) return;
-  const q = host.querySelector("#zq");
-  if (q) q.oninput = () => {
-    GLZ_Q = q.value || "";
-    const at = q.selectionStart;
-    renderRows();
-    const n2 = $("#zq");
-    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
-  };
   const se = host.querySelector("#zsect");
   if (se) se.onchange = () => { GLZ_SECT = se.value || ""; renderRows(); };
   (host.querySelectorAll("[data-zact]") || []).forEach(el => {
@@ -4114,7 +4104,7 @@ let FABR_FEED = { hash: "", at: 0 }, FABR_FEED_ERR = "";
 const FABR_FEED_KEY = "cw_fabfeed";
 try { FABR_FEED = JSON.parse(localStorage.getItem(FABR_FEED_KEY) || "null") || FABR_FEED; } catch (e) {}
 function saveFabrFeed() { try { localStorage.setItem(FABR_FEED_KEY, JSON.stringify(FABR_FEED)); } catch (e) {} }
-let FABR_OPEN = {}, FABR_Q = "", FABR_SECT = "";
+let FABR_OPEN = {}, FABR_SECT = "";
 let fabrWriting = {};           // item id|part -> an office write in flight
 
 const fabrOn = () => typeof FABC !== "undefined" && !!FABC && typeof ST !== "undefined";
@@ -4462,7 +4452,7 @@ function fabrPartWords(c, part) {
   return { done: done, total: total };
 }
 function fabrCardsShown() {
-  let rows = FABC.fbFilter(fabrRecordsNow().cards, String(FABR_Q || "").trim());
+  let rows = FABC.fbFilter(fabrRecordsNow().cards, String(state.q || "").trim());
   if (FABR_SECT) rows = rows.filter(c => c.section === FABR_SECT);
   return rows;
 }
@@ -4699,7 +4689,6 @@ function fabrBoardHtml() {
   const bar = '<div class="wofilt">' +
     '<span class="faview"><button class="wobtn wide' + (FABR_VIEW === "board" ? " on" : "") + '" data-fview="board">Board</button>' +
     '<button class="wobtn wide' + (FABR_VIEW === "who" ? " on" : "") + '" data-fview="who">Who is doing what</button></span>' +
-    '<input class="txt" id="fq" placeholder="Find a job, a customer or a group" value="' + esc(FABR_Q) + '">' +
     '<select class="txt" id="fsect"><option value="">Every section</option>' +
       sects.map(s => '<option value="' + esc(s) + '"' + (FABR_SECT === s ? " selected" : "") + '>' + esc(s) + '</option>').join("") +
     '</select><span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span></div>';
@@ -4707,8 +4696,9 @@ function fabrBoardHtml() {
     : FABR_ASSIGN_OK === true ? fabrRequestsHtml() : "";
   if (FABR_VIEW === "who") return trouble + bar + assign + fabrWhoHtml();
   const body = !cards.length
-    ? '<div class="empty" style="line-height:1.6">No fabrication jobs on the floor’s board yet. ' +
-      'Jobs appear here once this dashboard has fed them across.</div>'
+    ? (boardQueryEmptyHtml() ||
+      '<div class="empty" style="line-height:1.6">No fabrication jobs on the floor’s board yet. ' +
+      'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(fabrRowHtml).join("");
   return trouble + bar + assign + '<div class="wolist">' + body + '</div>' + fabrLogPanelHtml();
 }
@@ -4772,14 +4762,6 @@ function fabrLogPanelHtml() {
 }
 function wireFabrBoard(host) {
   if (!host || !host.querySelector) return;
-  const q = host.querySelector("#fq");
-  if (q) q.oninput = () => {
-    FABR_Q = q.value || "";
-    const at = q.selectionStart;
-    renderRows();
-    const n2 = $("#fq");
-    if (n2) { n2.focus(); if (n2.setSelectionRange) n2.setSelectionRange(at, at); }
-  };
   const se = host.querySelector("#fsect");
   if (se) se.onchange = () => { FABR_SECT = se.value || ""; renderRows(); };
   (host.querySelectorAll("[data-fwtog]") || []).forEach(el => {
@@ -8477,9 +8459,12 @@ function stationBoardHtml() {
   if (!board.length)
     return trouble + '<div class="empty" style="line-height:1.6">No glass jobs on the floor\u2019s board yet. ' +
            'Jobs appear here once this dashboard has fed them across.</div>';
+  /* the top bar's search, the tablet's own match rule (job or customer) */
+  const shown = ST.boardFilter(board, state.q);
+  if (!shown.length) return trouble + dayWeekLineHtml() + boardQueryEmptyHtml();
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
      own screen: the two boards are read side by side over the phone */
-  const order = board.slice().sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
+  const order = shown.sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
   notesUnreadFresh();                  // the cards carry the same icon the rows do
   return trouble + dayWeekLineHtml() + order.map(g => {
     const last = ST.logLast(log, g.job);
@@ -9165,7 +9150,7 @@ function renderRows() {
     host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
     wireNotesIcons(host);              // the card's note icon opens the job, as the row's does
     wireStationBoard(host);            // ... and the office's steppers and the card head
-    const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.jobBoard(STATION_ITEMS || []).length : 0;
+    const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.boardFilter(ST.jobBoard(STATION_ITEMS || []), state.q).length : 0;
     $("#count").textContent = n ? "Showing " + n + " job" + (n > 1 ? "s" : "") + " on the Glass station board"
                                 : "Glass station";
     return;
