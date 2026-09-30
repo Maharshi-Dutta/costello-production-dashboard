@@ -11,7 +11,7 @@ front of `station-core.js` and leave `-core.js` unstamped."""
 import io, re, time
 BUILD = time.strftime("%Y%m%d-%H%M")
 SCRIPTS = (r'(?:parser|graph|checkpoints|station-core|station-ui|station'
-           r'|welding-core|welding|glazing-core|glazing|fabrication-core|fabrication|export|app)')
+           r'|welding-core|welding|glazing-core|glazing|fabrication-core|fabrication|sales-core|sales|export|app)')
 
 def stamp(name):
     h = io.open(name, encoding='utf8').read()
@@ -27,5 +27,6 @@ stamp('glass.html')
 stamp('welding.html')
 stamp('glazing.html')
 stamp('fabrication.html')
+stamp('sales.html')
 io.open('version.json', 'w', encoding='utf8').write('{"build":"' + BUILD + '"}\n')   # checkBuild() polls this
 print("stamped build " + BUILD)

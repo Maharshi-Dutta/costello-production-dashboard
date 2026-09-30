@@ -1298,6 +1298,22 @@ function pdfRunsPerPage(buf) {
     "and no flag at all when the field is not ticked");
   pass("Flag is a Default field like any other: a word, its colour, and only when it is ticked");
 
+  /* the Sales page's exception (2026-09-30): Phone and Eircode beside the
+     customer there, and only there - the office path is unchanged */
+  const names = rows => exportColumns(rows, ["job", "cust", "county"]).map(c => c.name);
+  const officeRows = exportRows([A], ["job", "cust", "county"], CTX());
+  assert.deepStrictEqual(names(officeRows), ["Job no", "Customer", "Area"], "office: neither column");
+  assertNoValues(strings(officeRows), "an office row");
+  window.CW_PAGE = "sales";
+  try {
+    const salesRows = exportRows([A], ["job", "cust", "county"], CTX());
+    assert.deepStrictEqual(names(salesRows), ["Job no", "Customer", "Phone no", "Eircode", "Area"], "sales: both columns");
+    assert.strictEqual(salesRows[0].phone, PHONE); assert.strictEqual(salesRows[0].eir, EIR);
+    assert.strictEqual(exportCell(salesRows[0], { key: "phone", kind: "text" }).v, PHONE);
+    assert.deepStrictEqual(Object.keys(exportRows([A], ["job"], CTX())[0]), ["id"], "and only with the customer ticked");
+  } finally { delete window.CW_PAGE; }
+  pass("the Sales page's export carries Phone and Eircode; the office's never does");
+
   /* ---- 16. the standing assertions ---- */
   assert.strictEqual(FETCHES, 0, "no fetch() happened anywhere in this run");
   const keys = Object.keys(mem);

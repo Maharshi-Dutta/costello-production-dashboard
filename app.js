@@ -5304,8 +5304,7 @@ async function load(reason, force) {
        must run BEFORE the feeder, because OfficeDone and the floor's seed are
        derived from the record and the import is what puts it there. */
     /* The Sales page runs none of it: it feeds no list and paints nothing. */
-    if (isSales()) { if (typeof salesAfterLoad === "function") salesAfterLoad(); }
-    else cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
+    if (!isSales()) cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
       /* before the safeguard, always: an unrecorded door cell is the doors
          import's until it has drained, not a hand-paint (amendment 2) */
       .then(() => cpDoorImportRun(), () => {})

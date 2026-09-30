@@ -17,7 +17,9 @@
      into its Phone no column, because that is the sheet John prints and works
      from. The Default template - `exportRows`, `exportColumns`, `exportCell`,
      the workbook and the PDF built from them - carries neither, and there is no
-     field, no option and no preset that can turn either back on. (What somebody
+     field, no option and no preset that can turn either back on - except on
+     the Sales page (owner, 2026-09-30, see xpSales below), whose Default export
+     carries both beside the customer. (What somebody
      typed into a Comment is their text and is exported as written; the rule is
      about the two columns.)
    - No network. The export works entirely on the jobs already in memory; the
@@ -343,14 +345,20 @@ function exportCheckpoints(j) {
 /** Plain row objects holding only the ticked fields. This is the one place a
     job object is read; everything after this point sees rows, never jobs, so
     a field that is not ticked cannot leak into a workbook or a PDF. */
+/* THE SALES PAGE'S EXCEPTION (owner, 2026-09-30, docs/specs/2026-09-30-sales-page.md
+   decision 3): an export made on the Sales page carries the phone number and
+   the eircode, beside the customer. Only there - the office page never sets
+   CW_PAGE, and its exports are exactly what they were. Still one log line. */
+const xpSales = () => typeof window !== "undefined" && !!window && window.CW_PAGE === "sales";
 function exportRows(jobs, fields, ctx) {
-  const F = xpFieldSet(fields), c = xpContext(ctx);
+  const F = xpFieldSet(fields), c = xpContext(ctx), sales = xpSales();
   return (jobs || []).map(j => {
     /* the job number is the row's key, not one of its fields: the Comments and
        Checkpoints sheets are meaningless without it. Whether a "Job no" column
        appears in the Jobs sheet or on a card is still the picker's decision. */
     const r = { id: xpStr(j.id) };
     if (F.cust) r.cust = xpStr(j.cust);
+    if (sales && F.cust) { r.phone = xpStr(j.ph); r.eir = xpStr(j.eir); }
     if (F.county) r.area = xpStr(j.area);
     if (F.section) r.section = xpStr(c.sections[j.blk] || "");
     if (F.ready) r.ready = !!j.done;
@@ -564,6 +572,7 @@ function exportColumns(rows, fields) {
   if (F.job) add("id", "Job no", 11, "job");
   if (F.dates) XP_DATE_STEPS.forEach(p => add("date:" + p[0], p[1], 13, "date"));
   if (F.cust) add("cust", "Customer", 24, "text");
+  if (F.cust && xpSales()) { add("phone", "Phone no", 14, "text"); add("eir", "Eircode", 10, "text"); }
   if (F.county) add("area", "Area", 15, "text");
   if (F.section) add("section", "Section", 22, "text");
   if (F.ready) add("ready", "Ready to deliver", 16, "yesno");

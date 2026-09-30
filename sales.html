@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Costello Production</title>
+<title>Costello Sales</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪟</text></svg>">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -94,6 +94,35 @@
   .sreply { margin-top:8px; padding-top:6px; border-top:1px dashed var(--line) }
   .sreq textarea { width:100%; margin-top:8px; border:1px solid var(--line); border-radius:5px; padding:7px 9px;
                    background:var(--surface); color:var(--ink); font:inherit; font-size:13px }
+  /* ---- the Sales page's own (sales.js) ---- */
+  .card .thead, .card .row.srow { grid-template-columns:78px minmax(110px,1.4fr) minmax(80px,1fr) 86px 112px 72px 66px minmax(150px,1.3fr) 92px }
+  .row.srow.s-urgent { color:var(--urgent) }
+  .row.srow.s-urgent .jid, .row.srow.s-booked .jid { color:inherit }
+  .row.srow.s-booked { color:var(--green) }
+  @media (max-width:800px){
+    .card .thead, .card .row.srow { grid-template-columns:70px minmax(90px,1fr) minmax(120px,1.2fr) }
+    .card .thead > :nth-child(n+3):not(:nth-child(8)), .card .row.srow > :nth-child(n+3):not(:nth-child(8)) { display:none }
+  }
+  #spick { position:fixed; inset:0; background:var(--brand); color:var(--onbrand); z-index:85;
+           display:flex; align-items:center; justify-content:center }
+  #spick .gatebox h1 { font-family:"Barlow Condensed",sans-serif; font-size:44px; margin:0 0 6px; text-transform:uppercase }
+  .spnames { display:flex; flex-direction:column; gap:10px; margin-top:12px }
+  .sform { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 12px }
+  .sform label { display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:var(--ink-3) }
+  @media (max-width:560px){ .sform { grid-template-columns:1fr } }
+  .stog.urgent[aria-pressed="true"] { background:var(--urgent); border-color:var(--urgent); color:#fff }
+  .stog.booked[aria-pressed="true"] { background:var(--green); border-color:var(--green); color:#fff }
+  .chip.sdanger { color:var(--urgent); border-color:var(--urgent) }
+  .sdangerbtn { background:var(--urgent) }
+  #sreqtext { border:1px solid var(--line); border-radius:5px; padding:7px 9px; background:var(--surface);
+              color:var(--ink); font:inherit; font-size:13px }
+  .sdialog { position:fixed; inset:0; margin:auto; z-index:90; width:min(460px,92vw); height:fit-content;
+             background:var(--surface); color:var(--ink); border-radius:6px; padding:18px 20px; box-shadow:0 12px 40px rgba(0,0,0,.3) }
+  #sconfirm .scrim { z-index:89 }
+  .sdrow { display:grid; grid-template-columns:78px minmax(160px,1.4fr) 100px 110px minmax(140px,1fr) 90px; gap:10px;
+           align-items:center; padding:8px 4px; border-bottom:1px solid var(--line-soft); font-size:12.5px }
+  .sdrow.sdhead { border-bottom:1.5px solid var(--ink) }
+  @media (max-width:700px){ .sdrow { grid-template-columns:70px 1fr 80px } .sdrow > :nth-child(n+4):not(:last-child) { display:none } }
   .dot { width:7px; height:7px; border-radius:50%; background:#6dbf4b; display:inline-block }
   .dot.busy { background:#e8c000; animation:pulse 1s ease-in-out infinite }
   .dot.err { background:#f07a72 }
@@ -854,7 +883,7 @@
 
 <div id="gate">
   <div class="gatebox">
-    <h1>Production</h1>
+    <h1>Sales</h1>
     <p>Live view of the Costello Windows production sheet. Sign in with your Costello
        account &mdash; you'll see exactly the jobs you can already open in Excel.</p>
     <button class="signin" id="signinbtn">
@@ -866,17 +895,19 @@
 </div>
 
 <header class="top" hidden id="topbar">
-  <div class="brand"><b>Production</b><span>Costello Windows &middot; Oakley</span></div>
+  <div class="brand"><b>Sales</b><span>Costello Windows &middot; Oakley</span></div>
   <div class="searchwrap">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8e8b84" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-    <input id="q" placeholder="Search job no, customer, county, eircode or any comment..." autocomplete="off">
+    <input id="q" placeholder="Search job no, customer, area, eircode, phone or office no..." autocomplete="off">
   </div>
   <div class="tools">
     <span class="dot" id="livedot"></span><span id="status">starting…</span>
-    <button class="ghost" id="salesreqbtn" hidden>Sales requests</button>
-    <button class="ghost" id="changebtn">Changes</button>
-    <button class="ghost" id="versbtn">Versions</button>
-    <button class="ghost" id="alertbtn">Alerts</button>
+    <!-- app.js wires these three on both pages; the Sales page does not offer them -->
+    <button class="ghost" id="changebtn" hidden>Changes</button>
+    <button class="ghost" id="versbtn" hidden>Versions</button>
+    <button class="ghost" id="alertbtn" hidden>Alerts</button>
+    <button class="ghost" id="reqbtn">Requests</button>
+    <button class="ghost" id="delbtn">Deleted jobs</button>
     <button class="ghost" id="exportbtn">Export</button>
     <button class="ghost" id="refreshbtn">Refresh</button>
     <button class="ghost" id="themebtn">Dark</button>
@@ -889,16 +920,13 @@
   <div class="bar" id="chips"></div>
   <div class="card">
     <div class="thead">
-      <span></span><span class="kick">Job no</span><span class="kick">Customer</span><span class="kick">County</span>
-      <span class="kick">Category</span><span class="kick">Wnd/Drs</span><span class="kick"></span>
-      <span class="kick">Glass</span><span class="kick">On sheets</span>
+      <span class="kick">Job no</span><span class="kick">Customer</span><span class="kick">Address</span>
+      <span class="kick">Eircode</span><span class="kick">Phone</span><span class="kick">Office no</span>
+      <span class="kick">Wnd/Drs</span><span class="kick">Status</span><span class="kick">Delivery</span>
     </div>
     <div id="rows"></div>
     <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20260928-1149</span></span></div>
     <div class="legend">
-      <strong style="color:var(--ink-2)">Sheet colours:</strong>
-      <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
-      <span><i class="sw" style="background:#ffe699"></i>Ready to deliver &middot; <code>#FFE699</code></span>
       <span style="color:var(--urgent)">Urgent = the word in the Comment column, or red row text</span>
       <strong style="color:var(--ink-2)">Row text:</strong>
       <span style="color:#FF0000">Urgent</span>
@@ -909,6 +937,8 @@
   </div>
 </div>
 
+<!-- the Sales page: app.js reads this through isSales() (docs/specs/2026-09-30-sales-page.md) -->
+<script>window.CW_PAGE = "sales";</script>
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
 <script src="parser.js?v=20260928-1149"></script>
@@ -921,5 +951,6 @@
 <script src="sales-core.js?v=20260928-1149"></script>
 <script src="export.js?v=20260928-1149"></script>
 <script src="app.js?v=20260928-1149"></script>
+<script src="sales.js?v=20260928-1149"></script>
 </body>
 </html>
