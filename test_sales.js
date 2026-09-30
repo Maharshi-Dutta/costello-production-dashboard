@@ -491,6 +491,31 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.strictEqual(S.fieldOf("phone").of(s1), "", "and the customer form's 'from' is the Production cell");
   pass("Sales reads the Production sheet only: blanks stay blank, other sheets' jobs never appear");
 
+  /* ---- 13. ready (gold) from Production only: a gold row on John's sheet is not "ready" ---- */
+  const wbG = new XL.Workbook();
+  const gP = wbG.addWorksheet("Production"), gP2 = wbG.addWorksheet("Production (2)");
+  head(gP); head(gP2);
+  const gold = (ws, r) => { for (let c = 1; c <= 60; c++) ws.getCell(r, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE699" } }; };
+  /* R0002: plain on Production, the whole row gold on Production (2) */
+  cell(gP, 6, 3, "R0002"); cell(gP, 6, 5, "Person A"); cell(gP, 6, 13, 2);
+  cell(gP2, 6, 3, "R0002"); cell(gP2, 6, 5, "Person A"); cell(gP2, 6, 13, 2); gold(gP2, 6);
+  /* R0003: gold on Production itself */
+  cell(gP, 7, 3, "R0003"); cell(gP, 7, 5, "Person B"); cell(gP, 7, 13, 1); gold(gP, 7);
+  const pg = parseWorkbook(wbG);
+  const gj2 = pg.find(x => x.id === "R0002"), gj3 = pg.find(x => x.id === "R0003");
+  assert.strictEqual(gj2.done, 1, "(the raw parse: gold on any sheet)");
+  assert.strictEqual(gj2.doneMain, 0, "but not gold on Production");
+  assert.notStrictEqual(gj2.cp.win, "done", "and a gold row on John's sheet paints no checkpoint 'done'");
+  assert.strictEqual(gj3.doneMain, 1); assert.strictEqual(gj3.cp.win, "done");
+  const pj = productionOnly(pg), pj2 = pj.find(x => x.id === "R0002"), pj3 = pj.find(x => x.id === "R0003");
+  assert.strictEqual(pj2.done, 0, "the pages see R0002 as not ready");
+  assert.strictEqual(pj3.done, 1, "and R0003, gold on Production, as ready");
+  assert.strictEqual(S.moveAllowed(pj2), false, "so the Sales move gate refuses it");
+  assert.throws(() => S.moveJob(ctx(), pj2, 3, NAMES, async () => 1), /not marked/);
+  const mm = await S.moveMany(ctx(), [pj2, pj3], 3, NAMES, async ids => ids.length);
+  assert.deepStrictEqual(mm, { moved: 1, refused: ["R0002"] }, "gold only on Production (2): refused; gold on Production: moves");
+  pass("ready is a gold row on Production only: gold on Production (2) is not ready, and Sales cannot move it");
+
   console.log("\n" + n + " checks passed");
   process.exit(0);
 })().catch(e => { console.error("FAIL", e); process.exit(1); });

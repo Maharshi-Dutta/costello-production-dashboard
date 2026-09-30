@@ -335,3 +335,14 @@ E. **The office reads the Production sheet only too** (owner, 2026-09-30: "if
    stay in the list untouched; the items are no longer shown, and no painter,
    import or adoption acts on them (they all walk `cpItems`). Glass units are
    still the most any sheet says (there is no Production-only copy yet).
+   **Ready (gold) is Production's too** (same day): `done` was "a gold row on
+   any sheet", and the Sales move gate trusts it, so a job gold only on John's
+   sheet could have been moved from the Sales page. The pages now read
+   `doneMain` (gold on `Production`), and the parser's "a gold row makes every
+   checkpoint done" fill uses it too. On the local copy no live job changes
+   (69 ready either way). Still merged after this, measured against a parse of
+   `Production` alone: glass units (1 job: N1732 shows FANCY 2 from another
+   sheet), the five dates and the stage they give (1 job: N4953 shows a
+   sent-to-floor date Production has not got), and the product status words
+   behind the row's "In fab" badge (3 jobs: R5051, R5105, S5136 show
+   "process" from another sheet); and the feeders' notes (the owner's call).

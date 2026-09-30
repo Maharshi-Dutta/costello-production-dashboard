@@ -490,6 +490,10 @@ function parseWorkbook(wb) {
                                   cp: { win: '', drs: '', glass: {}, prod: {} } }; }
       j.src[LABEL[name]] = r;
       if (rowDone) j.done = 1;
+      /* ... and gold on `Production` itself (2026-09-30): the only "ready" the
+         pages may trust - a gold row on Production (2) is John's sheet, not the
+         office marking the job ready (the Sales page's move gate reads this) */
+      if (rowDone && mainHere) j.doneMain = 1;
       if (j.sheets.indexOf(LABEL[name]) < 0) j.sheets.push(LABEL[name]);
 
       /* The colour code is read from the Production sheet alone: Production (2)
@@ -620,12 +624,14 @@ function parseWorkbook(wb) {
        numbers. */
     const prodsMain = Object.keys(j.prodsMain).map(k => ({ n: k, f: j.prodsMain[k][0],
       s: j.prodsMain[k][1], t: j.prodsMain[k][2], st: Object.keys(j.status[k] || {}) }));
-    /* a whole gold row says the job is finished, so every checkpoint on it is */
-    if (j.done) {
-      if (j.wnd) j.cp.win = 'done';
-      if (j.drs) j.cp.drs = 'done';
+    /* a whole gold row says the job is finished, so every checkpoint on it is -
+       a gold row on PRODUCTION (2026-09-30): the checkpoint colours are that
+       sheet's alone, and a gold row on John's sheet must not paint them */
+    if (j.doneMain) {
+      if (j.wndMain) j.cp.win = 'done';
+      if (j.drsMain) j.cp.drs = 'done';
       Object.keys(j.glass).forEach(k => { j.cp.glass[k] = 'done'; });
-      prods.forEach(p => {
+      prodsMain.forEach(p => {
         const o = j.cp.prod[p.n] = j.cp.prod[p.n] || {};
         ['f', 's', 't'].forEach(s => { if (p[s]) o[s] = 'done'; });
       });
@@ -664,7 +670,7 @@ function parseWorkbook(wb) {
       doors: doors,
       glass: j.glass, notes: j.notes, sheets: j.sheets, src: j.src,
       /* the word in a comment, or the sheet's own red text: either says urgent */
-      urg: (URG_RE.test(cmtxt) || j.flag === 'urgent') ? 1 : 0, done: j.done || 0,
+      urg: (URG_RE.test(cmtxt) || j.flag === 'urgent') ? 1 : 0, done: j.done || 0, doneMain: j.doneMain || 0,
       cat: PRODCAT[id] || 'past',
       blk: (B.blk[id] === undefined ? -1 : B.blk[id]),
       seq: (B.order[id] === undefined ? 99999 : B.order[id]),
@@ -691,6 +697,9 @@ function productionJob(j) {
     cust: m.cust || '', ph: m.ph || '', ph3: d.length >= 3 ? d.slice(-3) : '', area: m.area || '',
     eir: m.eir || '', off: m.off || '', colour: m.colour || '',
     wnd: j.wndMain || 0, drs: j.drsMain || 0, prods: j.prodsMain || [], notes: notes,
+    /* ready = a gold row on Production itself, never on John's sheet: the
+       Sales page's move gate trusts this (2026-09-30) */
+    done: j.doneMain || 0,
     /* every sheet's notes, kept for the station feeders only: their COMMENT
        column is left exactly as it was (amendment E) - the owner's call */
     notesAll: j.notesAll || j.notes || [],
