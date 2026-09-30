@@ -738,7 +738,7 @@ JOBS.blockNames = NAMES;
      is still on the sheet, and every stepper names the row it belongs to */
   global.__jobs = JOBS;
   A("ALL = __jobs; BLOCKNAMES = " + JSON.stringify(NAMES) + "; ALL.blockNames = BLOCKNAMES;");
-  A("GLZ_Q = ''; GLZ_SECT = ''; state.board = 'glazing';");
+  A("state.q = ''; GLZ_SECT = ''; state.board = 'glazing';");
   const html = A("glzBoardHtml()");
   assert.ok(/data-zopen="R8001"/.test(html), "a job still on the sheet opens its drawer from the head");
   assert.ok(!/data-zopen="R8050"/.test(html));

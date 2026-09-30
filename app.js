@@ -2710,9 +2710,9 @@ function saveWeldFeed() { try { localStorage.setItem(WELD_FEED_KEY, JSON.stringi
 let WELD_OPEN = {}, WELD_SECT = "";
 /* The boards filter by the top bar's search (state.q), one search for the
    list and every board (2026-09-30). A board left empty by it says so. */
-function boardQueryEmptyHtml() {
+function boardQueryEmptyHtml(unfiltered) {
   const q = String(state.q || "").trim();
-  return q ? '<div class="empty">No job matches “' + esc(q) + '”</div>' : "";
+  return q && unfiltered ? '<div class="empty">No job matches “' + esc(q) + '”</div>' : "";
 }
 let weldWriting = {};           // item id|part -> an office write in flight
 
@@ -3316,7 +3316,7 @@ function weldBoardHtml() {
     '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
     '</div>';
   const body = !cards.length
-    ? (boardQueryEmptyHtml() ||
+    ? (boardQueryEmptyHtml(weldRecordsNow().cards.length) ||
       '<div class="empty" style="line-height:1.6">No welding jobs on the floor’s board yet. ' +
       'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(weldRowHtml).join("");
@@ -3979,7 +3979,7 @@ function glzBoardHtml() {
     '<span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span>' +
     '</div>';
   const body = !cards.length
-    ? (boardQueryEmptyHtml() ||
+    ? (boardQueryEmptyHtml(glzRecordsNow().cards.length) ||
       '<div class="empty" style="line-height:1.6">No glazing jobs on the floor’s board yet. ' +
       'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(glzRowHtml).join("");
@@ -4696,7 +4696,7 @@ function fabrBoardHtml() {
     : FABR_ASSIGN_OK === true ? fabrRequestsHtml() : "";
   if (FABR_VIEW === "who") return trouble + bar + assign + fabrWhoHtml();
   const body = !cards.length
-    ? (boardQueryEmptyHtml() ||
+    ? (boardQueryEmptyHtml(fabrRecordsNow().cards.length) ||
       '<div class="empty" style="line-height:1.6">No fabrication jobs on the floor’s board yet. ' +
       'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(fabrRowHtml).join("");
@@ -4719,10 +4719,11 @@ function fabrRequestsHtml() {
     line's done / their quantity, urgent first. */
 function fabrWhoHtml() {
   if (FABR_ASSIGN_OK !== true) return "";
-  const per = {};
+  const per = {}, shownJobs = {};
+  fabrCardsShown().forEach(c => { shownJobs[c.job] = 1; });
   fabrAssignNow().rows.filter(r => r.status === "assigned").forEach(r => {
     const g = fabrGroupRec(r.job, r.group);
-    if (!g) return;                                       // off the sheet: not open
+    if (!g || !shownJobs[r.job]) return;                  // off the sheet, or hidden by the search
     const done = g[r.part], total = g[r.part + "Total"];
     if (total > 0 && done >= total) return;               // that line is finished
     const u = FABC.fbUrgentOf(g.urgent);
@@ -8461,7 +8462,7 @@ function stationBoardHtml() {
            'Jobs appear here once this dashboard has fed them across.</div>';
   /* the top bar's search, the tablet's own match rule (job or customer) */
   const shown = ST.boardFilter(board, state.q);
-  if (!shown.length) return trouble + dayWeekLineHtml() + boardQueryEmptyHtml();
+  if (!shown.length) return trouble + dayWeekLineHtml() + boardQueryEmptyHtml(board.length);
   /* the finished ones go to the bottom, gold, exactly as they do on the floor's
      own screen: the two boards are read side by side over the phone */
   const order = shown.sort((a, b) => (a.finished ? 1 : 0) - (b.finished ? 1 : 0));
