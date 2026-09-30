@@ -405,6 +405,33 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   S.onBusy = null;
   pass("the Sales move runs in the same queue as every write; busy() covers the whole time anything is in flight");
 
+  /* ---- 9b. (amendment B) a drag or "move to" on several jobs: ready ones move, the rest are refused ---- */
+  const calls = [];
+  const mv2 = async (ids, idx) => { calls.push([ids.slice(), idx]); return ids.length; };
+  const mix = [{ id: "R0001", done: 1 }, { id: "R0005", done: 0 }, { id: "C0003", done: 1 }, { id: "R0006", done: 0 }];
+  let res = await S.moveMany(ctx(), mix, 3, NAMES, mv2);
+  assert.deepStrictEqual(calls, [[["R0001", "C0003"], 3]], "only the jobs the office marked ready are handed to the move");
+  assert.deepStrictEqual(res, { moved: 2, refused: ["R0005", "R0006"] }, "the refused ones are named for the toast");
+  assert.strictEqual(S.REFUSED_NOTE, "the office has not marked this job ready - send a request");
+  calls.length = 0;
+  res = await S.moveMany(ctx(), [{ id: "R0005", done: 0 }], 3, NAMES, mv2);
+  assert.deepStrictEqual(calls, [], "nothing ready: the move is never called");
+  assert.deepStrictEqual(res, { moved: 0, refused: ["R0005"] });
+  assert.throws(() => S.moveMany(ctx(), mix, 4, NAMES, mv2), /In production from here/, "the same targets as the drawer's Move");
+  assert.throws(() => S.moveMany(ctx(), mix, 0, NAMES, mv2), /second hand from here/);
+  assert.throws(() => S.moveMany(Object.assign(ctx(), { who: "" }), mix, 3, NAMES, mv2), /Pick your name/);
+  /* ... and in the same queue: a write in flight holds the multi-move back */
+  let rel2; const g2 = new Promise(r => { rel2 = r; }); const ord2 = [];
+  const w2 = S.serial(async () => { await g2; ord2.push("write"); });
+  const m2 = S.moveMany(ctx(), mix, 2, NAMES, async ids => { ord2.push("move " + ids.join("+")); return ids.length; });
+  await new Promise(r => setTimeout(r, 10));
+  assert.deepStrictEqual(ord2, []); rel2(); await w2; await m2;
+  assert.deepStrictEqual(ord2, ["write", "move R0001+C0003"]);
+  window.CW_PAGE = undefined;
+  assert.throws(() => S.moveMany(ctx(), mix, 3, NAMES, mv2), /Only the Sales page/);
+  window.CW_PAGE = "sales";
+  pass("several jobs at once: ready ones move through the queue, the rest are refused and named");
+
   /* ---- 10. (review 12) the office's reply: refused if someone has replied since ---- */
   window.CW_PAGE = undefined;
   const RQ = { a: { Reply: "", ReplyBy: "" }, b: { Reply: "Tuesday", ReplyBy: "colleague@example.test" } }, rp = [];

@@ -2801,6 +2801,27 @@ const person = (name, stages, pin, active, station) =>
   await stationPoll();
   pass("a 410 resync on the poll costs one full read and a new token, and nobody sees anything");
 
+  /* THE FLICKER (2026-09-30): a list that refuses delta is read whole every
+     ten seconds, and a whole read used to answer "moved" every time - so the
+     list and any open drawer were redrawn with nothing changed. A whole read
+     that brings back what is held is not a change. */
+  DELTA_FAIL = 400; DELTA_FAIL_LEFT = 2; reset();
+  assert.strictEqual(await stationPoll(), false, "a refused delta, read whole, same rows: nothing moved");
+  assert.ok(REQ.some(r => r.path.indexOf("/items?expand") > 0), "(it really was a whole read)");
+  reset();
+  assert.strictEqual(await stationPoll(), false, "and again on the plain-read cadence");
+  ITEMS[0] = { id: ITEMS[0].id, fields: Object.assign({}, ITEMS[0].fields, { Hotmelt: 7 }) };
+  reset();
+  assert.strictEqual(await stationPoll(), true, "a whole read that differs still counts");
+  assert.strictEqual(A("ST.jobBoard(STATION_ITEMS).find(g => g.job === 'R5303').bars.hotmelt.done"), 7);
+  assert.strictEqual(A("sameRows([{id:'1',fields:{a:1}}], [{id:'1',fields:{a:1}}])"), true);
+  assert.strictEqual(A("sameRows([{id:'1',fields:{a:1}}], [{id:'1',fields:{a:2}}])"), false);
+  assert.strictEqual(A("sameRows([{id:'1',fields:{a:1}}], null)"), false, "nothing held yet is always a change");
+  DELTA_FAIL = 0;
+  A("STATION_FEEDS.items.off = 0; STATION_FEEDS.log.off = 0; STATION_FEEDS.items.token = null; STATION_FEEDS.log.token = null;");
+  await stationPoll();
+  pass("a whole read (delta refused) reports a change only when the rows differ from what is held");
+
   /* the job list itself is a fourth reason to watch now that its rows carry the
      floor's chip (section 14b tests that one on its own), so each of the other
      three is set out here with the last draw's answer to it deliberately off */

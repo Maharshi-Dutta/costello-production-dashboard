@@ -95,13 +95,13 @@
   .sreq textarea { width:100%; margin-top:8px; border:1px solid var(--line); border-radius:5px; padding:7px 9px;
                    background:var(--surface); color:var(--ink); font:inherit; font-size:13px }
   /* ---- the Sales page's own (sales.js) ---- */
-  .card .thead, .card .row.srow { grid-template-columns:78px minmax(110px,1.4fr) minmax(80px,1fr) 86px 112px 72px 66px minmax(150px,1.3fr) 92px }
+  .card .thead, .card .row.srow { grid-template-columns:28px 78px minmax(110px,1.4fr) minmax(80px,1fr) 86px 112px 72px 66px minmax(150px,1.3fr) 92px }
   .row.srow.s-urgent { color:var(--urgent) }
   .row.srow.s-urgent .jid, .row.srow.s-booked .jid { color:inherit }
   .row.srow.s-booked { color:var(--green) }
   @media (max-width:800px){
-    .card .thead, .card .row.srow { grid-template-columns:70px minmax(90px,1fr) minmax(120px,1.2fr) }
-    .card .thead > :nth-child(n+3):not(:nth-child(8)), .card .row.srow > :nth-child(n+3):not(:nth-child(8)) { display:none }
+    .card .thead, .card .row.srow { grid-template-columns:28px 70px minmax(90px,1fr) minmax(120px,1.2fr) }
+    .card .thead > :nth-child(n+4):not(:nth-child(9)), .card .row.srow > :nth-child(n+4):not(:nth-child(9)) { display:none }
   }
   #spick { position:fixed; inset:0; background:var(--brand); color:var(--onbrand); z-index:85;
            display:flex; align-items:center; justify-content:center }
@@ -920,7 +920,7 @@
   <div class="bar" id="chips"></div>
   <div class="card">
     <div class="thead">
-      <span class="kick">Job no</span><span class="kick">Customer</span><span class="kick">Address</span>
+      <span></span><span class="kick">Job no</span><span class="kick">Customer</span><span class="kick">Address</span>
       <span class="kick">Eircode</span><span class="kick">Phone</span><span class="kick">Office no</span>
       <span class="kick">Wnd/Drs</span><span class="kick">Status</span><span class="kick">Delivery</span>
     </div>

@@ -313,7 +313,23 @@ const SALESC = (function () {
     return serial(() => move([j.id], idx));
   }
 
+  /** Several jobs at once - a drag onto a section, or "move to" on a selection
+      (amendment B). The same gate and targets as the drawer's Move and the
+      same queue; a job the office has not marked ready is refused and nothing
+      moves for it. Answers { moved, refused: [ids] }. */
+  const REFUSED_NOTE = "the office has not marked this job ready - send a request";
+  function moveMany(ctx, jobs, idx, names, move) {
+    need(ctx);
+    const name = (names || [])[idx];
+    if (!name || NO_MOVE.indexOf(name) >= 0) throw new Error("Jobs cannot be moved to " + (name || "that section") + " from here.");
+    const list = (jobs || []).filter(Boolean);
+    const ready = list.filter(moveAllowed), refused = list.filter(j => !moveAllowed(j)).map(j => j.id);
+    if (!ready.length) return Promise.resolve({ moved: 0, refused });
+    return serial(() => move(ready.map(j => j.id), idx)).then(n => ({ moved: Number(n) || 0, refused }));
+  }
+
   return Object.assign(api, {
+    REFUSED_NOTE, moveMany,
     PEOPLE, JOBS, BACKUPS, REQUESTS, PEOPLE_FIELDS, JOBS_FIELDS, BACKUP_FIELDS, REQUEST_FIELDS, REQUEST_KINDS,
     COLOURS, COLOUR_WORD, NO_MOVE, FIELDS, ROW_MAX,
     isSales, flagWord, fromWord, nextFlag, replaceQuestion, mask, moveAllowed, moveTargets, fieldOf, yes,

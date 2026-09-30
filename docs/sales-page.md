@@ -56,6 +56,28 @@ holds every write control on the page while anything is in flight. A pink
 written or exported before a name is picked. The office's reply reads the
 request first and refuses if it has been answered.
 
+**Amendments after the demo (A-C, same day).**
+- *A:* the View select offers the flat list and the sheet-order grouped view
+  (sections in sheet order, collapse, Select all per section, the
+  Categories show/hide filter); rows carry a tick box; "N selected - move
+  to...", "Export selected" (the export window on the ticked jobs) and the
+  selection wheel. Sales columns in both views. No saved views or
+  categories are written.
+- *B:* a drag onto a section, the "move to" menu and the wheel's Move go
+  through `SALESC.moveMany`: same gate and targets as the drawer's Move,
+  same queue; a job not `j.done` is refused and named in the toast
+  ("the office has not marked this job ready - send a request"), and
+  nothing moves for it. The office page's drag and move are unchanged.
+- *C (both pages):* `renderDrawer` leaves the DOM alone when the HTML is
+  identical, and patches `.dhead`/`.dbody` inside the open drawer for the
+  same job (no slide or fade replayed, scroll kept); `paintRows` skips
+  identical HTML for the list, boards and tiles; a background re-read
+  (`load` after the first, `stationAfterFeed`) draws quietly;
+  `stationFull` and the welding/glazing/fabrication full reads report a
+  change only when the rows differ (`sameRows`). A click on a control, a
+  change, or a drag in the list/drawer forgets the last HTML so the next
+  redraw always goes through.
+
 **The writes** (spec "Writes, exactly"):
 - *Customer cell* - locate by column C, check the one cell, PATCH the cell
   (phone and eircode with Excel's apostrophe text marker, the same one

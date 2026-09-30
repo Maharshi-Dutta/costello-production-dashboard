@@ -2153,8 +2153,16 @@ async function stationFull(key, siteId, gen) {
      Every existing caller tests it for truth, where null and false are the
      same, so only a caller that looks for null sees any difference. */
   if (all == null) return null;
-  f.set(feedRows(key, all));
-  return true;
+  /* a full read that brought back exactly what is held is not a change: a
+     list that refuses delta is read like this every ten seconds, and "moved"
+     here redraws the list and the open drawer each time (the flicker, 2026-09-30) */
+  const next = feedRows(key, all), same = sameRows(next, f.get());
+  f.set(next);
+  return !same;
+}
+/** Two lists of rows ({id, fields}) that say exactly the same thing. */
+function sameRows(a, b) {
+  return !!a && !!b && a.length === b.length && JSON.stringify(a) === JSON.stringify(b);
 }
 /** One list, brought up to date the cheap way. true = something moved. */
 async function stationDelta(key, siteId) {
@@ -2973,23 +2981,23 @@ async function weldPoll() {
          and enumerating a list that does not exist every ten seconds - which is
          exactly review bug B of the comments feature. */
       WELD_OK = false; WELD_WHY = WELD_LIST_MISSING;
-    } else if (got.rows) {
+    } else if (got.rows && !(got.fresh && sameRows(got.rows, WELD_ITEMS))) {   // a full read of the same rows is no change
       WELD_ITEMS = got.fresh ? got.rows : ST.mergeDelta(WELD_ITEMS || [], got.rows);
       moved = true;
     }
     if (WELD_LOG_OK === true) {
       const lg = await weldDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
       if (lg === null) { WELD_LOG_OK = false; WELD_LOG_WHY = WELD_LOG_MISSING; }
-      else if (lg.rows) {
-        WELD_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(WELD_LOG || [], lg.rows));
+      else if (lg.rows && !(lg.fresh && sameRows(stationLogRecent(lg.rows), WELD_LOG))) {
+        WELD_LOG =stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(WELD_LOG || [], lg.rows));
         moved = true;
       }
     }
     if (WELD_NOTES_OK === true) {
       const nt = await weldDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
       if (nt === null) { WELD_NOTES_OK = false; WELD_NOTES = WELD_NOTES || []; }
-      else if (nt.rows) {
-        WELD_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(WELD_NOTES || [], nt.rows));
+      else if (nt.rows && !(nt.fresh && sameRows(stationNotesRecent(nt.rows), WELD_NOTES))) {
+        WELD_NOTES =stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(WELD_NOTES || [], nt.rows));
         moved = true;
       }
     }
@@ -3678,23 +3686,23 @@ async function glzPoll() {
        "nothing moved" it would leave this feed reporting healthy for ever and
        enumerating a list that does not exist every ten seconds. */
     if (got === null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; }
-    else if (got.rows) {
+    else if (got.rows && !(got.fresh && sameRows(got.rows, GLZ_ITEMS))) {     // a full read of the same rows is no change
       GLZ_ITEMS = got.fresh ? got.rows : ST.mergeDelta(GLZ_ITEMS || [], got.rows);
       moved = true;
     }
     if (GLZ_LOG_OK === true) {
       const lg = await glzDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
       if (lg === null) { GLZ_LOG_OK = false; GLZ_LOG_WHY = GLZ_LOG_MISSING; }
-      else if (lg.rows) {
-        GLZ_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(GLZ_LOG || [], lg.rows));
+      else if (lg.rows && !(lg.fresh && sameRows(stationLogRecent(lg.rows), GLZ_LOG))) {
+        GLZ_LOG =stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(GLZ_LOG || [], lg.rows));
         moved = true;
       }
     }
     if (GLZ_NOTES_OK === true) {
       const nt = await glzDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
       if (nt === null) { GLZ_NOTES_OK = false; GLZ_NOTES = GLZ_NOTES || []; }
-      else if (nt.rows) {
-        GLZ_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(GLZ_NOTES || [], nt.rows));
+      else if (nt.rows && !(nt.fresh && sameRows(stationNotesRecent(nt.rows), GLZ_NOTES))) {
+        GLZ_NOTES =stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(GLZ_NOTES || [], nt.rows));
         moved = true;
       }
     }
@@ -4301,24 +4309,24 @@ async function fabrPoll() {
     let moved = false, items = false;
     const got = await fabrDeltaOne("items", FABC.FB_LIST, FABC.FB_FIELDS);
     if (got === null) { FABR_OK = false; FABR_WHY = FABR_LIST_MISSING; }
-    else if (got.rows) {
+    else if (got.rows && !(got.fresh && sameRows(got.rows, FABR_ITEMS))) {    // a full read of the same rows is no change
       FABR_ITEMS = got.fresh ? got.rows : ST.mergeDelta(FABR_ITEMS || [], got.rows);
       moved = items = true;
     }
     if (FABR_LOG_OK === true) {
       const lg = await fabrDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
       if (lg === null) { FABR_LOG_OK = false; FABR_LOG_WHY = FABR_LOG_MISSING; }
-      else if (lg.rows) { FABR_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(FABR_LOG || [], lg.rows)); moved = true; }
+      else if (lg.rows && !(lg.fresh && sameRows(stationLogRecent(lg.rows), FABR_LOG))) { FABR_LOG = stationLogRecent(lg.fresh ? lg.rows : ST.mergeDelta(FABR_LOG || [], lg.rows)); moved = true; }
     }
     if (FABR_NOTES_OK === true) {
       const nt = await fabrDeltaOne("notes", ST.COMMENT_LIST, ST.COMMENT_FIELDS);
       if (nt === null) { FABR_NOTES_OK = false; FABR_NOTES = FABR_NOTES || []; }
-      else if (nt.rows) { FABR_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(FABR_NOTES || [], nt.rows)); moved = true; }
+      else if (nt.rows && !(nt.fresh && sameRows(stationNotesRecent(nt.rows), FABR_NOTES))) { FABR_NOTES = stationNotesRecent(nt.fresh ? nt.rows : ST.mergeDelta(FABR_NOTES || [], nt.rows)); moved = true; }
     }
     if (FABR_ASSIGN_OK === true) {
       const as = await fabrDeltaOne("assign", FABC.FB_ASSIGN_LIST, FABC.FB_ASSIGN_FIELDS);
       if (as === null) { FABR_ASSIGN_OK = false; FABR_ASSIGN = []; moved = true; }
-      else if (as.rows) { FABR_ASSIGN = as.fresh ? as.rows : ST.mergeDelta(FABR_ASSIGN || [], as.rows); moved = true; }
+      else if (as.rows && !(as.fresh && sameRows(as.rows, FABR_ASSIGN))) { FABR_ASSIGN = as.fresh ? as.rows : ST.mergeDelta(FABR_ASSIGN || [], as.rows); moved = true; }
     } else if (FABR_ASSIGN_OK === false && Date.now() - (fabrAssignLook || 0) > 300000) {
       /* a list made since the page opened is picked up within five minutes */
       fabrAssignLook = Date.now();
@@ -5113,8 +5121,10 @@ function stationAfterFeed() {
   catch (e) { console.warn("[station] after-feed render failed: " + ((e && e.message) || e)); }
 }
 function stationAfterFeedBody() {
-  if (state.board || state.sel) { renderAll(); if (state.sel) renderDrawer(); }
-  else renderRows();
+  /* after every load's feed, i.e. in the background: quietly, and not at all
+     where nothing changed (the flicker, 2026-09-30) */
+  if (state.board || state.sel) { quietAll(); if (state.sel) renderDrawer(); }
+  else quietRows();
   stationReadIfNeeded(() => { if (!state.board) renderRows(); });
   /* ... and the same for the other two stations, which the plain job list now
      has a reason to know about: since 2026-09-21 a row's status word can be the
@@ -5288,7 +5298,10 @@ async function load(reason, force) {
       }
     }
     updateChangeBtn();
-    renderAll();
+    /* a re-read (the poll, a reconcile after a write) nobody asked for draws
+       quietly, like the floor's polls: no fade, and nothing redrawn at all
+       where the HTML has not changed (the flicker, 2026-09-30) */
+    if (prev.length) quietAll(); else renderAll();
     if (state.sel) renderDrawer();
     /* the floor's list, brought up to date from the sheet we have just read.
        Deliberately last, deliberately not awaited for the render above, and
@@ -7733,11 +7746,11 @@ function renderTiles() {
     { k: "secondhand", l: "Second hand", v: n(j => catOf(j) === "secondhand"), c: "--ink-3" },
     { k: "urgent", l: "Urgent", v: n(j => j.urg), c: "--urgent" }
   ];
-  $("#tiles").innerHTML = defs.map((d, i) =>
+  paintRows($("#tiles"), defs.map((d, i) =>        // the same HTML is not redrawn (no rise replayed)
     '<button class="tile" aria-pressed="' + (state.cat === d.k) + '" data-k="' + (d.k || "") + '"' +
     ' style="animation-delay:' + (i * 25) + 'ms;border-top-color:var(' + d.c + ')"><span class="kick">' + d.l + '</span>' +
     '<span class="n" style="color:var(' + d.c + ')">' + d.v + '</span>' +
-    (d.s ? '<span style="font-size:11px;color:var(--ink-3)">' + d.s + '</span>' : '') + '</button>').join("");
+    (d.s ? '<span style="font-size:11px;color:var(--ink-3)">' + d.s + '</span>' : '') + '</button>').join(""));
   $("#tiles").querySelectorAll(".tile").forEach(b => b.onclick = () => {
     const k = b.dataset.k || null; state.cat = state.cat === k ? null : k; renderAll();
   });
@@ -7909,6 +7922,7 @@ function renderCatMenu(anchor) {
 
 /** Move the ticked jobs into a group of a view, or into a brand new view. */
 function renderMoveMenu(anchor) {
+  if (isSales() && typeof salesMoveMenu === "function") return salesMoveMenu(anchor);   // amendment B
   const old = $("#movemenu"); if (old) { old.remove(); return; }
   const jobs = Object.keys(state.picked);
   const m = document.createElement("div"); m.id = "movemenu"; m.className = "menu";
@@ -9151,7 +9165,7 @@ function renderRows() {
      drag and nothing that writes anything anywhere */
   if (state.board === "john") {
     ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // no job rows on screen
-    host.innerHTML = '<div class="jboard">' + johnViewHtml() + "</div>";
+    paintRows(host, '<div class="jboard">' + johnViewHtml() + "</div>");
     wireJohnView(host);
     const shown = johnShown().length, total = (JOHNROWS || []).length;
     $("#count").textContent = !total ? "No “Production (2)” sheet in the workbook"
@@ -9169,7 +9183,7 @@ function renderRows() {
        station". */
     if (state.board === "welding") {
       weldReadIfNeeded(() => { if (state.board === "welding") renderRows(); });
-      host.innerHTML = '<div class="stboard weldboard">' + weldBoardHtml() + '</div>';
+      paintRows(host, '<div class="stboard weldboard">' + weldBoardHtml() + '</div>');
       viewOnlyBoard(host);
       wireWeldBoard(host);
       const wn = (WELD_OK === true && weldOn()) ? weldCardsShown().length : 0;
@@ -9181,7 +9195,7 @@ function renderRows() {
       glzReadIfNeeded(() => { if (state.board === "glazing") renderRows(); });
       /* the glazing board borrows welding's row, but emits one cell fewer (no
          toggle column), so it carries its own class for its own track list */
-      host.innerHTML = '<div class="stboard weldboard glzboard">' + glzBoardHtml() + '</div>';
+      paintRows(host, '<div class="stboard weldboard glzboard">' + glzBoardHtml() + '</div>');
       viewOnlyBoard(host);
       wireGlzBoard(host);
       const zn = (GLZ_OK === true && glzOn()) ? glzCardsShown().length : 0;
@@ -9191,7 +9205,7 @@ function renderRows() {
     }
     if (state.board === "fabrication") {
       fabrReadIfNeeded("board", () => { if (state.board === "fabrication") renderRows(); });
-      host.innerHTML = '<div class="stboard weldboard fabboard">' + fabrBoardHtml() + '</div>';
+      paintRows(host, '<div class="stboard weldboard fabboard">' + fabrBoardHtml() + '</div>');
       viewOnlyBoard(host);
       wireFabrBoard(host);
       const fn = (FABR_OK === true && fabrOn()) ? fabrCardsShown().length : 0;
@@ -9202,7 +9216,7 @@ function renderRows() {
     /* the card's "last: ..." line comes from the log list, which the feeder
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
-    host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
+    paintRows(host, '<div class="stboard">' + stationBoardHtml() + '</div>');
     viewOnlyBoard(host);
     wireNotesIcons(host);             // the card's note icon opens the job, as the row's does
     wireStationBoard(host);            // ... and the office's steppers and the card head
@@ -9225,13 +9239,11 @@ function renderRows() {
   ROWS_STALE = false;
   if (ROWS_GLASS !== wasGlass) stationTick();
 
-  /* the Sales page: its own customer columns, one flat list, nothing to tick or drag */
-  if (isSales() && typeof salesRowHtml === "function") {
-    host.innerHTML = list.length ? list.map(salesRowHtml).join("") : '<div class="empty">No job matches that search or filter.</div>';
-    wireRows(host);
-  } else if (state.view === "flat") {
-    host.innerHTML = list.length ? list.map((j, i) => rowHtml(j, i, max)).join("")
-      : '<div class="empty">No job matches that search or filter.</div>';
+  /* the Sales page draws its own customer columns, flat or grouped (amendment A) */
+  const rowFn = isSales() && typeof salesRowHtml === "function" ? salesRowHtml : rowHtml;
+  if (state.view === "flat") {
+    paintRows(host, list.length ? list.map((j, i) => rowFn(j, i, max)).join("")
+      : '<div class="empty">No job matches that search or filter.</div>');
     wireRows(host);
   } else {
     /* grouped: one collapsible section per block, each with its own search */
@@ -9242,7 +9254,7 @@ function renderRows() {
     /* what each group's tick box means: the jobs that group is showing right
        now, after its own search box has had its say */
     const shownBy = {};
-    host.innerHTML = keys.length ? keys.map(g => {
+    paintRows(host, keys.length ? keys.map(g => {
       const name = names[g] || (state.view + " group " + g);
       const open = !state.collapsed[state.view + "|" + g];
       const q = (state.gq && state.gq[state.view + "|" + g]) || "";
@@ -9259,10 +9271,10 @@ function renderRows() {
           (nOn === rows.length ? " checked" : "") + '><span>Select all ' + rows.length + '</span></label>' : "") +
         '<input class="gsearch txt" placeholder="Search in this group…" value="' + esc(q) + '">' +
         '</div>' + (open ? '<div class="gbody">' +
-          (rows.length ? rows.map((j, i) => rowHtml(j, i, max)).join("")
+          (rows.length ? rows.map((j, i) => rowFn(j, i, max)).join("")
                        : '<div class="empty" style="padding:22px">Nothing here.</div>') + '</div>' : "") +
         '</div>';
-    }).join("") : '<div class="empty">Nothing in this view yet.</div>';
+    }).join("") : '<div class="empty">Nothing in this view yet.</div>');
 
     host.querySelectorAll(".grp").forEach(gEl => {
       const g = gEl.dataset.g, key = state.view + "|" + g;
@@ -9292,7 +9304,9 @@ function renderRows() {
         e.preventDefault(); gEl.classList.remove("dragover");
         const ids = (e.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean);
         if (!ids.length) return;
-        if (state.view === "Abin") await moveJobsInSheet(ids, Number(g));
+        /* the Sales page: through its own queue and gate (amendment B) */
+        if (isSales()) { if (typeof salesMoveMany === "function") await salesMoveMany(ids, Number(g)); }
+        else if (state.view === "Abin") await moveJobsInSheet(ids, Number(g));
         else await assignMany(ids, state.view, Number(g));
       };
       wireRows(gEl);
@@ -9305,6 +9319,24 @@ function renderRows() {
 }
 
 function renderAll() { renderTiles(); renderChips(); renderRows(); }
+function quietAll() { ROWS_QUIET = true; try { renderAll(); } finally { ROWS_QUIET = false; } }
+
+/* THE FLICKER (2026-09-30, measured): the polls redrew the whole list with
+   exactly the HTML already on screen, several times a minute. Same HTML: leave
+   the DOM alone. A person touching the list (a tick, a drag, typing in a
+   group's search) may change the DOM without a redraw, so any such event
+   forgets what was drawn and the next redraw always goes through. */
+function paintRows(host, html) {
+  if (!host.__watch && host.addEventListener) {
+    host.__watch = 1;
+    ["click", "change", "input", "dragstart", "dragend", "drop"].forEach(ev =>
+      host.addEventListener(ev, () => { host.__html = null; }, true));
+  }
+  if (host.__html === html) return false;
+  host.innerHTML = html;
+  host.__html = html;
+  return true;
+}
 
 /* The Sales page sees the floor boards view only (spec decision 8): every
    control that writes is taken out before the board is wired, so it is neither
@@ -9907,7 +9939,19 @@ function datesSectionHtml(j, st) {
 }
 
 function openDrawer() {
-  if (!$("#dhost")) { const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d); }
+  if (!$("#dhost")) {
+    const d = document.createElement("div"); d.id = "dhost"; document.body.appendChild(d);
+    /* a person's own click or typing may change the drawer's DOM without a
+       redraw (a stepper patched in place, a button disabled): the next redraw
+       must then go through rather than be skipped as identical */
+    if (d.addEventListener) {
+      d.addEventListener("change", () => { d.__html = null; }, true);
+      d.addEventListener("click", e => {
+        const t = e.target;
+        if (t && t.closest && t.closest("button,a,label,input[type=checkbox],[data-cpfold],[data-ph]")) d.__html = null;
+      }, true);
+    }
+  }
   renderDrawer(); renderFab();
   stationTick();                 // a job with glass on screen polls at the fast rate
 }
@@ -9948,7 +9992,7 @@ function renderDrawer() {
      seconds, and a comment box that empties itself mid-sentence is the worst
      kind of bug to have to explain */
   const cTyping = act && act.id === "cbox" ? act.value : null;
-  host.innerHTML = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
+  const html = '<div class="scrim" id="dscrim"></div><div class="drawer">' +
     '<div class="dhead"><div><div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">' +
       '<span class="cond tab" style="font-size:29px;font-weight:700">' + esc(j.id) + '</span>' +
       '<span class="badge" style="background:var(--brand-2);color:#d5d1c8">' + esc(statusWord(j)) + '</span>' +
@@ -10023,6 +10067,27 @@ function renderDrawer() {
         j.notes.map(n => '<div class="note"><div class="kick" style="margin-bottom:3px">' + esc(n.k) + ' · ' + esc(n.s) + '</div>' +
           '<div style="font-size:13px;line-height:1.45">' + esc(n.t) + '</div></div>').join("") + '</div>' : "") +
     '</div></div>';
+  /* THE FLICKER (2026-09-30, measured): every poll that said "moved" rebuilt
+     #dhost wholesale - a new scrim and drawer, so the fade and slide replayed
+     and the drawer jumped back to its top - even when nothing in it changed.
+     Same job, same HTML: leave the DOM alone. Same job, new HTML: patch the
+     head and body inside the drawer already on screen, keeping its scroll. */
+  if (host.__job === j.id && host.__html === html && host.querySelector(".drawer")) return;
+  const open = host.__job === j.id && typeof HTMLTemplateElement !== "undefined" ? host.querySelector(".drawer") : null;
+  let patched = false;
+  if (open) {
+    const t = document.createElement("template"); t.innerHTML = html;
+    const nd = t.content.querySelector(".drawer"), oh = open.querySelector(".dhead"), ob = open.querySelector(".dbody");
+    const nh = nd && nd.querySelector(".dhead"), nb = nd && nd.querySelector(".dbody");
+    if (oh && ob && nh && nb) {
+      const top = ob.scrollTop;
+      oh.innerHTML = nh.innerHTML; ob.innerHTML = nb.innerHTML;
+      ob.scrollTop = top;
+      patched = true;
+    }
+  }
+  if (!patched) host.innerHTML = html;
+  host.__job = j.id; host.__html = html;
 
   if (typing) {
     const box = host.querySelector('.cpin[data-cpin="' + typing.item + '"]');

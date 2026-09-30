@@ -119,10 +119,10 @@ function salesTiles() {
     { k: "booked", l: "Booked", v: n(j => j.flag === "booked"), c: "--green" },
     { k: "inprod", l: "In production", v: n(j => ["floor", "ready", "office"].indexOf(catOf(j)) >= 0), c: "--single" }
   ];
-  $("#tiles").innerHTML = defs.map((d, i) =>
+  paintRows($("#tiles"), defs.map((d, i) =>
     '<button class="tile" aria-pressed="' + (state.cat === d.k) + '" data-k="' + (d.k || "") + '"' +
     ' style="animation-delay:' + (i * 25) + 'ms;border-top-color:var(' + d.c + ')"><span class="kick">' + d.l + '</span>' +
-    '<span class="n" style="color:var(' + d.c + ')">' + d.v + '</span></button>').join("");
+    '<span class="n" style="color:var(' + d.c + ')">' + d.v + '</span></button>').join(""));
   $("#tiles").querySelectorAll(".tile").forEach(b => b.onclick = () => {
     const k = b.dataset.k || null; state.cat = state.cat === k ? null : k; renderAll();
   });
@@ -130,6 +130,30 @@ function salesTiles() {
 function salesChips() {
   const c = $("#chips"); c.innerHTML = "";
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  /* amendment A: the office's list controls - Select all shown, the View
+     (flat, or sheet order grouped by section with collapse and Select all per
+     section), and which categories to show. No saved views or categories are
+     written from here, so only the two built-in views are offered. */
+  const all = live();
+  if (!state.board && state.view === "flat") {
+    const shown = filtered();
+    if (shown.length && shown.length < all.length) {
+      const on = shown.filter(j => state.picked[j.id]).length;
+      const lab = mk("label", "selall"), box = mk("input");
+      box.type = "checkbox"; box.className = "pick";
+      box.checked = on === shown.length; box.indeterminate = on > 0 && on < shown.length;
+      box.onchange = () => pickMany(shown.map(j => j.id), box.checked);
+      lab.appendChild(box); lab.appendChild(mk("span", null, "Select all shown (" + shown.length + ")"));
+      c.appendChild(lab);
+    }
+  }
+  if (state.view !== "flat" && state.view !== "Abin") state.view = "flat";
+  c.appendChild(mk("span", "kick", "View"));
+  const vsel = mk("select", "txt");
+  vsel.innerHTML = '<option value="flat">Flat list</option><option value="Abin">Sheet order, grouped</option>';
+  vsel.value = state.view;
+  vsel.onchange = () => { state.view = vsel.value; state.picked = {}; renderAll(); };
+  c.appendChild(vsel);
   c.appendChild(mk("span", "kick", "Show"));
   const ssel = mk("select", "txt");
   ssel.id = "showsel";
@@ -143,6 +167,22 @@ function salesChips() {
     else if (state.board) stationReadIfNeeded(() => renderAll());
   };
   c.appendChild(ssel);
+  const catsBtn = mk("button", "chip", "Categories…");
+  catsBtn.onclick = () => renderCatMenu(catsBtn);            // show/hide, remembered in this browser only
+  c.appendChild(catsBtn);
+  const nsel = Object.keys(state.picked).length;
+  if (nsel) {
+    const b = mk("button", "chip", nsel + " selected — move to…");
+    b.style.cssText = "background:var(--accent);color:#fff;border-color:var(--accent)";
+    b.onclick = () => salesMoveMenu(b);
+    c.appendChild(b);
+    const x = mk("button", "chip", "Export selected");
+    x.onclick = () => fabDo("export");                       // the export window, opened on the ticked jobs
+    c.appendChild(x);
+    const cl = mk("button", "chip", "clear");
+    cl.onclick = () => { state.picked = {}; renderAll(); };
+    c.appendChild(cl);
+  }
   const sp = mk("span", "kick", "Sort by"); sp.style.marginLeft = "auto"; c.appendChild(sp);
   const sort = mk("select", "txt");
   sort.innerHTML = SORTS.map(p => '<option value="' + p[0] + '"' + (state.sort === p[0] ? " selected" : "") + '>' + p[1] + "</option>").join("");
@@ -151,6 +191,34 @@ function salesChips() {
   const dir = mk("button", "chip", state.desc ? "▼ reversed" : "▲ normal");
   dir.onclick = () => { state.desc = !state.desc; renderRows(); salesChips(); };
   c.appendChild(dir);
+  renderFab();                    // the selection wheel, as on the office page
+}
+/* ---- moving several jobs: a drag onto a section, or "move to" (amendment B) */
+async function salesMoveMany(ids, idx) {
+  const jobs = (ids || []).map(byId).filter(Boolean);
+  try {
+    const r = await SALESC.moveMany(salesCtx(), jobs, idx, BLOCKNAMES, moveJobsInSheet);
+    if (r.refused.length) toast("Not moved - " + SALESC.REFUSED_NOTE + ": " + r.refused.join(", "), true);
+    return r;
+  } catch (e) { toast(friendly(e), true); return null; }
+  finally { state.picked = {}; renderAll(); }
+}
+function salesMoveMenu(anchor) {
+  const old = $("#movemenu"); if (old) { old.remove(); return; }
+  const jobs = Object.keys(state.picked);
+  const nReady = jobs.filter(id => SALESC.moveAllowed(byId(id))).length;
+  const m = document.createElement("div"); m.id = "movemenu"; m.className = "menu";
+  m.innerHTML = '<div class="kick" style="padding:4px 10px 6px">Move ' + nReady + ' of ' + jobs.length + ' ticked in the Production sheet to</div>' +
+    (nReady < jobs.length ? '<div style="padding:0 10px 6px;font-size:11.5px;color:var(--ink-4)">' + (jobs.length - nReady) +
+      ' not moved: ' + esc(SALESC.REFUSED_NOTE) + '</div>' : "") +
+    SALESC.moveTargets(BLOCKNAMES, -1).map(t => '<button class="mrow" data-grp="' + t.idx + '"' +
+      (nReady && SALES_WHO && !SALESC.busy() ? "" : " disabled") + '>' + esc(t.name) + '</button>').join("");
+  document.body.appendChild(m);
+  menuAt(m, anchor);
+  m.querySelectorAll("[data-grp]").forEach(b => b.onclick = async () => { m.remove(); await salesMoveMany(jobs, Number(b.dataset.grp)); });
+  setTimeout(() => document.addEventListener("click", function off(e) {
+    if (!m.contains(e.target) && e.target !== anchor) { m.remove(); document.removeEventListener("click", off); }
+  }), 0);
 }
 function salesPills(j) {
   const p = (t, bg, fg) => '<span class="badge" style="background:var(' + bg + ');color:var(' + fg + ')">' + esc(t) + '</span>';
@@ -165,8 +233,10 @@ function salesPills(j) {
 function salesRowHtml(j, i) {
   const d = SALES_DELIV[j.id];
   const ink = j.flag === "urgent" ? " s-urgent" : j.flag === "booked" ? " s-booked" : "";
-  return '<div class="row srow' + (state.sel === j.id ? " on" : "") + (j.done ? " ready" : "") + ink +
-    '" data-id="' + esc(j.id) + '" style="' + rowDraw(i) + '">' +
+  const picked = !!state.picked[j.id];
+  return '<div class="row srow' + (state.sel === j.id ? " on" : "") + (j.done ? " ready" : "") + ink + (picked ? " picked" : "") +
+    '" data-id="' + esc(j.id) + '" draggable="true" style="' + rowDraw(i) + '">' +
+    '<span class="pickcell"><input type="checkbox" class="pick"' + (picked ? " checked" : "") + '></span>' +
     '<span class="tab jid" style="font-weight:600">' + esc(j.id) + '</span>' +
     '<span class="ell">' + esc(j.cust || "—") + '</span>' +
     '<span class="ell">' + esc(j.area || "—") + '</span>' +
