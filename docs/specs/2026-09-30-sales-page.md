@@ -310,3 +310,28 @@ D. **The Production sheet only on the Sales page** (owner's standing rule,
    `wndMain`/`drsMain`/`prodsMain`, notes are Production's. The John print
    template (Production (2)) is not offered on the Sales page. The office page
    is unchanged.
+E. **The office reads the Production sheet only too** (owner, 2026-09-30: "if
+   the data is present in the Production sheet then only it is visible in the
+   main page; Production (2) is basically the John sheet"). One shared rule,
+   `productionOnly` / `productionJob` in parser.js, is applied to every job
+   object the pages hold (the office's load and the version-history compare,
+   and the Sales overlay): only jobs on `Production`; customer, phone, area,
+   eircode, office no and windows colour are that sheet's own cells (blank
+   stays blank); WND/DRS and the product groups are `wndMain`/`drsMain`/
+   `prodsMain`, so the drawer's checkpoint lines, the job row, search and the
+   Default export follow; the notes and the urgent word are Production's. The
+   John print sheet view and template still read Production (2), unchanged.
+   The station feeders are fed exactly what they were: they get the same jobs
+   with every sheet's notes put back (`notesAll`), because their COMMENT
+   column would otherwise lose a comment written on another sheet (16 rows on
+   the local copy) - whether the floor should see those is the owner's call.
+   Measured on the local copy of the workbook before the switch: the office's
+   live list already held only jobs on Production (the other 524 parsed jobs
+   were "past"), but a Changes line or an Open job link could open the drawer
+   of a job that is not; 6 jobs showed a windows colour from another sheet, 15
+   showed notes from another sheet, and 12 jobs carried product groups only
+   another sheet has - 36 checkpoint items, 25 of them with a recorded status
+   ("done") in the 2026-09-17 snapshot of `Dashboard progress`. Those records
+   stay in the list untouched; the items are no longer shown, and no painter,
+   import or adoption acts on them (they all walk `cpItems`). Glass units are
+   still the most any sheet says (there is no Production-only copy yet).

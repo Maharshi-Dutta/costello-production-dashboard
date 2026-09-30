@@ -675,8 +675,37 @@ function parseWorkbook(wb) {
   return result;
 }
 
-if (typeof module !== 'undefined') module.exports = { parseWorkbook, parseJohnSheet, mapSheet, fillOf, fontOf, flagOf, blackInk, JOB_RE, URG_RE, blocksFromValues, templateForJob, cutColours, doorCode, DOOR_SLOTS };
+/* ---- the Production sheet only (owner, 2026-09-18 and 2026-09-30) ---------
+   "If the data is present in the Production sheet then only it is visible in
+   the main page; Production (2) is basically the John sheet." The parse above
+   still reads every sheet (the John view and template need Production (2),
+   and the merged values are what verify.js checks against); these two turn a
+   parsed job into what the pages may SHOW: only jobs on `Production`, and
+   every value that sheet has - the six identity cells, WND/DRS, the product
+   groups and the notes - taken from `Production` alone, blank where it is
+   blank. Safe to apply twice. Station feeders get the same job objects. */
+function productionJob(j) {
+  const m = j.main || {}, d = String(m.ph || '').replace(/\D/g, '');
+  const notes = (j.notes || []).filter(n => n.s === 'Production');
+  return Object.assign({}, j, {
+    cust: m.cust || '', ph: m.ph || '', ph3: d.length >= 3 ? d.slice(-3) : '', area: m.area || '',
+    eir: m.eir || '', off: m.off || '', colour: m.colour || '',
+    wnd: j.wndMain || 0, drs: j.drsMain || 0, prods: j.prodsMain || [], notes: notes,
+    /* every sheet's notes, kept for the station feeders only: their COMMENT
+       column is left exactly as it was (amendment E) - the owner's call */
+    notesAll: j.notesAll || j.notes || [],
+    urg: (URG_RE.test(notes.map(n => n.t).join(' ')) || j.flag === 'urgent') ? 1 : 0
+  });
+}
+function productionOnly(jobs) {
+  const out = (jobs || []).filter(j => j && j.main).map(productionJob);
+  if (jobs && jobs.blockNames) out.blockNames = jobs.blockNames;
+  return out;
+}
+
+if (typeof module !== 'undefined') module.exports = { parseWorkbook, productionJob, productionOnly, parseJohnSheet, mapSheet, fillOf, fontOf, flagOf, blackInk, JOB_RE, URG_RE, blocksFromValues, templateForJob, cutColours, doorCode, DOOR_SLOTS };
 if (typeof window !== 'undefined') { window.parseWorkbook = parseWorkbook; window.mapSheet = mapSheet;
+  window.productionJob = productionJob; window.productionOnly = productionOnly;
   window.doorCode = doorCode; window.DOOR_SLOTS = DOOR_SLOTS;
   window.fontOf = fontOf; window.flagOf = flagOf; window.blackInk = blackInk;
   window.parseJohnSheet = parseJohnSheet;

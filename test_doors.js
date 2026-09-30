@@ -468,6 +468,52 @@ const doorButtons = html => {
     assert.strictEqual(station.indexOf(bit), -1, "the floor's files must not mention " + bit));
   pass("no network, nothing personal, and the tablet is not in this at all");
 
+  /* ---- amendment E (owner 2026-09-30): the office reads the Production sheet only ---- */
+  const ewb = new ExcelJS.Workbook();
+  const ehead = ws => { const p = (r, c, v) => { ws.getCell(r, c).value = v; };
+    p(2, 4, "DATES ON CONTRACT"); p(3, 4, "SOLD"); p(2, 9, "CUSTOMER"); p(2, 10, "PHONE NO."); p(2, 11, "AREA");
+    p(2, 13, "QUANTITY"); p(3, 13, "WND"); p(3, 14, "DRS");
+    p(2, 20, "7000 CASEMENT"); p(3, 20, "F"); p(3, 21, "S"); p(3, 22, "T");
+    p(2, 23, "SLIDERS"); p(3, 23, "F"); p(3, 24, "S"); p(3, 25, "T"); };
+  const ep = ewb.addWorksheet("Production"), ep2 = ewb.addWorksheet("Production (2)");
+  ehead(ep); ehead(ep2);
+  const ec = (ws, r, c, v) => { ws.getCell(r, c).value = v; };
+  /* R7001 on Production: a blank phone and area, casement windows only */
+  ec(ep, 6, 3, "R7001"); ec(ep, 6, 9, "Person A"); ec(ep, 6, 13, 4); ec(ep, 6, 20, 4); ec(ep, 6, 21, 4);
+  /* the same job on Production (2): a phone, an area, more windows, and a sliders group Production has not got */
+  ec(ep2, 6, 3, "R7001"); ec(ep2, 6, 9, "Person B"); ec(ep2, 6, 10, "0871111111"); ec(ep2, 6, 11, "Cork");
+  ec(ep2, 6, 13, 9); ec(ep2, 6, 20, 4); ec(ep2, 6, 23, 2);
+  /* R7009 on Production (2) only */
+  ec(ep2, 7, 3, "R7009"); ec(ep2, 7, 9, "Person B"); ec(ep2, 7, 10, "0862222222");
+  const merged = parseWorkbook(ewb);
+  assert.strictEqual(merged.find(x => x.id === "R7001").ph, "0871111111", "(the raw parse still merges - John and verify.js read it)");
+  global.__E = productionOnly(merged);
+  vm.runInThisContext("ALL = __E; CHANGES = []; state.sel = null;");
+  assert.strictEqual(byId("R7009"), undefined, "a job only on Production (2) is not on the office page at all");
+  const e1 = byId("R7001");
+  assert.strictEqual(e1.cust, "Person A"); assert.strictEqual(e1.ph, ""); assert.strictEqual(e1.ph3, "");
+  assert.strictEqual(e1.area, "", "a blank on Production stays blank");
+  assert.strictEqual(e1.wnd, 4, "WND off Production (Production (2) says 9)");
+  const erow = rowHtml(e1, 0, 10);
+  assert.ok(erow.indexOf("Person A") >= 0 && erow.indexOf("Person B") < 0 && erow.indexOf("Cork") < 0,
+    "the job row shows Production's cells and nothing from Production (2)");
+  /* the checkpoint switch: the drawer's product groups are Production's */
+  const keys = cpItems(e1).map(x => x.key);
+  assert.ok(keys.indexOf("prod:7000 casement:f") >= 0, "Production's group is there");
+  assert.ok(!keys.some(k => k.indexOf("prod:sliders") === 0), "the group only Production (2) has is not an item");
+  /* a recorded status on the vanished item: shown nowhere, and nothing acts on it */
+  useJob(e1, [{ item: "prod:sliders:f", done: 2, total: 2, status: "done" },
+              { item: "prod:7000 casement:f", done: 4, total: 4, status: "done" }]);
+  assert.ok(cpSectionHtml(byId("R7001"), true).toLowerCase().indexOf("sliders") < 0, "the drawer does not show it");
+  assert.ok(!cpRepaintPlan([byId("R7001")], 50).some(c => String(c.item || "").indexOf("sliders") >= 0),
+    "no repaint is planned for it");
+  assert.ok(!cpAggregatePlan("R7001").some(c => String(c.item || "").indexOf("sliders") >= 0), "nor an aggregate paint");
+  /* the John view is untouched: Production (2) on its own terms */
+  const john = parseJohnSheet(ewb);
+  assert.ok(john.some(r => r.id === "R7001" && r.phone === "0871111111") && john.some(r => r.id === "R7009"),
+    "the John sheet still reads Production (2), phone and all");
+  pass("the office shows Production's own values, drops other sheets' jobs and groups, and the John view is unchanged");
+
   console.log("\n" + n + " checks passed");
   process.exit(0);
 })().catch(e => { console.error("FAIL", e); process.exit(1); });

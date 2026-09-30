@@ -283,6 +283,11 @@ function inView(j, view) {
 }
 
 const live = () => ALL.filter(j => j.cat !== "past");
+/* the jobs as the station feeders see them: the page's own (Production only,
+   amendment E) with every sheet's notes put back, so the floor's COMMENT column
+   is exactly what it was before E - measured on the local copy, 16 rows would
+   otherwise lose a comment written on another sheet. The owner's call. */
+const feedJobs = () => ALL.map(j => j.notesAll ? Object.assign({}, j, { notes: j.notesAll }) : j);
 const byId = id => ALL.find(j => j.id === id);
 const comp = j => j.prods.reduce((a, p) => ({ f: a.f + p.f, s: a.s + p.s, t: a.t + p.t }), { f: 0, s: 0, t: 0 });
 const tot = c => c.f + c.s + c.t;
@@ -2621,7 +2626,7 @@ async function feedStation() {
     /* the slice carries the office's own record with it, so a job the office
        has already ticked off arrives on the floor showing it (see
        ST.officeSeed) rather than reading nothing done */
-    const slice = ST.glassSlice(ALL, BLOCKNAMES, glassCounts);
+    const slice = ST.glassSlice(feedJobs(), BLOCKNAMES, glassCounts);
     const hash = ST.sliceHash(slice);
     if (hash === STATION_FEED.hash && Date.now() - (STATION_FEED.at || 0) < STATION_FEED_MS) {
       STATION_FEED_ERR = "";                             // nothing to do is not a failure
@@ -2877,7 +2882,7 @@ async function feedWelding() {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { WELD_FEED_ERR = ""; return null; }
     /* every job on the sheet, every allowed group with F or S > 0, carrying the
        office's own record so a group already ticked gold arrives welded */
-    const slice = WELDC.weldSlice(ALL, BLOCKNAMES, weldStatusOf);
+    const slice = WELDC.weldSlice(feedJobs(), BLOCKNAMES, weldStatusOf);
     const hash = ST.sliceHash(slice, WELDC.WELD);
     if (hash === WELD_FEED.hash && Date.now() - (WELD_FEED.at || 0) < STATION_FEED_MS) {
       WELD_FEED_ERR = "";                                // nothing to do is not a failure
@@ -3585,7 +3590,7 @@ async function feedGlazing() {
   glzBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { GLZ_FEED_ERR = ""; return null; }
-    const slice = GLZC.glzSlice(ALL, BLOCKNAMES);
+    const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES);
     const hash = ST.sliceHash(slice, GLZC.GLAZE);
     if (hash === GLZ_FEED.hash && Date.now() - (GLZ_FEED.at || 0) < STATION_FEED_MS) {
       GLZ_FEED_ERR = "";                                 // nothing to do is not a failure
@@ -4233,7 +4238,7 @@ async function feedFabrication() {
   fabrBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { FABR_FEED_ERR = ""; return null; }
-    const slice = FABC.fbSlice(ALL, BLOCKNAMES);
+    const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES);
     const hash = ST.sliceHash(slice, FABC.FAB);
     if (hash === FABR_FEED.hash && Date.now() - (FABR_FEED.at || 0) < STATION_FEED_MS) { FABR_FEED_ERR = ""; return null; }
     FABR_SITEID = await fabrSiteId();
@@ -5174,7 +5179,10 @@ async function load(reason, force) {
     LASTWB = wb;                                   // row formatting templates for moves
     const tDown = performance.now() - t0;
     const prev = ALL;
-    const parsed = parseWorkbook(wb);
+    /* THE PRODUCTION SHEET ONLY (amendment E, owner 2026-09-30): the pages see
+       only jobs on `Production`, with that sheet's own values. The John view
+       reads Production (2) on its own below (JOHNROWS), exactly as before. */
+    const parsed = productionOnly(parseWorkbook(wb));
     BLOCKNAMES = parsed.blockNames || [];
     /* "Production (2)" on its own terms: John's own sheet, read straight out
        of the same download and never merged into the job model above. It is
@@ -10390,7 +10398,7 @@ const vnum = v => String(v.id).replace(/\.0$/, "");
 const vwho = v => (v.by || "").replace(/ ?[-\u2013] ?Costello.*$/i, "").replace(/ Costello Windows$/i, "");
 
 async function versionJobs(v) {
-  if (!VCACHE[v.id]) VCACHE[v.id] = parseWorkbook(await CW.downloadVersion(v.id));
+  if (!VCACHE[v.id]) VCACHE[v.id] = productionOnly(parseWorkbook(await CW.downloadVersion(v.id)));   // compared like with like (amendment E)
   return VCACHE[v.id];
 }
 

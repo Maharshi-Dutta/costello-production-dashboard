@@ -112,16 +112,13 @@ function salesOverlay(list) {
     return c;
   });
 }
-/** One job as the Sales page may show it: Production's own cells only. */
+/** One job as the Sales page may show it: Production's own cells only - the
+    shared rule (parser.js productionJob, amendment E), and the Sales page also
+    names no other sheet. */
 function salesMainOnly(j) {
-  const m = j.main || {}, d = String(m.ph || "").replace(/\D/g, "");
-  return Object.assign({}, j, {
-    cust: m.cust || "", ph: m.ph || "", ph3: d.length >= 3 ? d.slice(-3) : "", area: m.area || "",
-    eir: m.eir || "", off: m.off || "", colour: m.colour || "",
-    wnd: j.wndMain || 0, drs: j.drsMain || 0, prods: j.prodsMain || [],
-    notes: (j.notes || []).filter(n => n.s === "Production"),
-    sheets: (j.sheets || []).filter(s => s === "Production")
-  });
+  const c = productionJob(j);
+  c.sheets = (j.sheets || []).filter(s => s === "Production");
+  return c;
 }
 
 /* ---- tiles, chips, rows ------------------------------------------------------ */
