@@ -409,7 +409,13 @@ async function addComment(id, text) {
   toast("Comment added");
 }
 
+/* The Sales page (sales.html, 2026-09-30) runs this same file with
+   window.CW_PAGE = "sales". Every difference goes through this one test; the
+   office page leaves it unset. docs/specs/2026-09-30-sales-page.md */
+function isSales() { return typeof window !== "undefined" && !!window && window.CW_PAGE === "sales"; }
 function whoAmI() {
+  /* the shared sales account is two people: the name picked on that page */
+  if (isSales()) return typeof salesWho === "function" ? salesWho() : "";
   const a = CW.account;
   return (a && (a.username || a.name)) || "unknown";
 }
@@ -514,6 +520,7 @@ if (typeof setPhaseHook === "function") setPhaseHook(handPhase);
     on - clear it and go back to the sheet. One list item per job; one log
     line per change; no workbook write of any kind. */
 async function setPhaseByHand(j, n) {
+  if (isSales()) return false;                     // office only (Sales page spec)
   if (!j || PHASEBUSY[j.id]) return false;
   if (PHASE_LIST_OK === null || PHASE_LIST_CONSENT) {      // first read pending, or it failed for want of permission:
     try { if (CW.listConsent) await CW.listConsent(); } catch (e) { toast(friendly(e), true); return false; }
@@ -650,7 +657,8 @@ let cpListReading = null;     // the read in flight, so two callers share one
 let cpPolling = false, cpSoonT = null, cpPollT = null;
 
 /** Can a click write? Only when the list has actually answered. */
-const cpWritable = () => CP_LIST_OK === true;
+/* never on the Sales page: sales paint no fill and tick nothing (spec decision 4) */
+const cpWritable = () => !isSales() && CP_LIST_OK === true;
 /** What to say when it cannot, in the drawer and in a toast. */
 const cpWhyNot = () => CP_LIST_OK === null ? CP_LIST_CHECKING : (CP_LIST_WHY || CP_LIST_MISSING);
 
@@ -1195,6 +1203,7 @@ const cpAggregateWords = cells => cells.map(c =>
   CP_AGG_NAME[c.item] + " cell painted " + (c.want === "done" ? "gold" : "yellow")).join(" · ");
 
 async function cpAggregatePaint(job, exclude) {
+  if (isSales()) return 0;                         // sales never paint a fill
   const j = byId(job);
   const cells = cpAggregatePlan(job, exclude);
   if (!cells.length) return 0;
@@ -2589,6 +2598,7 @@ function glassCounts(j) {
 }
 
 async function feedStation() {
+  if (isSales()) return null;                      // the office feeds the floor; the Sales page only reads
   if (stationBusy) return null;                          // only one feed at a time
   /* a poll is merging a delta into STATION_ITEMS right now. Feeding would
      replace the list and null the token under it, so it waits for the next
@@ -2849,6 +2859,7 @@ function weldFeedAgain() {
 }
 
 async function feedWelding() {
+  if (isSales()) return null;
   if (!weldOn()) return null;
   if (weldBusy) return null;                             // only one feed at a time
   if (weldPolling) { weldFeedAgain(); return null; }     // a poll is merging a delta right now
@@ -3101,6 +3112,7 @@ function weldNotesReadIfNeeded(then) {
    exactly as the glass clear's does, and the tablet shows the office's name as
    the row's last touch on its next ten-second poll. */
 async function weldOfficeEdit(id, part, act) {
+  if (isSales()) return false;                     // boards are view only on the Sales page
   if (!weldOn() || !CW.listPatch) return false;
   const rec = (weldRecordsNow().byId || {})[String(id)];
   if (!rec) return false;
@@ -3557,6 +3569,7 @@ function glzFeedAgain() {
 }
 
 async function feedGlazing() {
+  if (isSales()) return null;
   if (!glzOn()) return null;
   if (glzBusy) return null;                              // only one feed at a time
   if (glzPolling) { glzFeedAgain(); return null; }       // a poll is merging a delta right now
@@ -3777,6 +3790,7 @@ function glzNotesReadIfNeeded(then) {
    stays the floor's. The change goes into `Dashboard Log` through noteChange,
    exactly as the welding board's does. */
 async function glzOfficeEdit(id, act, part) {
+  if (isSales()) return false;
   /* `part` "astragal" moves the Astragal counter (2026-09-24); anything else
      the windows' Glazed, exactly as before */
   const P = GLZC.glzPart(part);
@@ -4204,6 +4218,7 @@ function fabrFeedAgain() {
   fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, 30000);
 }
 async function feedFabrication() {
+  if (isSales()) return null;
   if (!fabrOn() || fabrBusy) return null;
   if (fabrPolling) { fabrFeedAgain(); return null; }
   if (typeof CW === "undefined" || !CW || !CW.listAdd) return null;
@@ -4366,6 +4381,7 @@ function fabrReadIfNeeded(which, then) {
    `Dashboard Log` line, never `Station log`. The row is read immediately
    before the write and the number derived from it (welding's review R3). ---- */
 async function fabrOfficeEdit(id, part, act) {
+  if (isSales()) return false;
   if (!fabrOn() || !CW.listPatch) return false;
   const rec = (fabrRecordsNow().byId || {})[String(id)];
   if (!rec) return false;
@@ -4476,6 +4492,7 @@ const fabrGroupRec = (job, group) => {
   return c ? c.groups.find(g => g.group === group) || null : null;
 };
 async function fabrOfficeAct(what, fn) {
+  if (isSales()) return false;
   if (!fabrOn() || fabrAssignWriting) return false;
   if (CW.hasListConsent && !(await CW.hasListConsent())) { toast(STATION_NEED_CONSENT, true); return false; }
   fabrAssignWriting = true;
@@ -4493,6 +4510,7 @@ async function fabrOfficeAct(what, fn) {
 }
 const fabrAssignOpts = () => ({ siteId: FABR_SITEID, fields: FABC.FB_ASSIGN_FIELDS });
 async function fabrAssign(gid, part, person, qty) {
+  if (isSales()) return false;
   const g = (fabrRecordsNow().byId || {})[String(gid)];
   if (!g || FABR_ASSIGN_OK !== true) return false;
   const p = (FABR_PEOPLE || []).find(x => x.name === person);
@@ -4567,6 +4585,7 @@ async function fabrDecide(aid, status) {
 }
 /** Urgent: `scope` job (every row of the job), group (one row), or a part. */
 async function fabrUrgent(scope, job, gid, part) {
+  if (isSales()) return false;
   const c = (fabrRecordsNow().byJob || {})[job];
   if (!c) return false;
   const word = scope === "job" ? "job" : scope === "group" ? "group" : part;
@@ -5195,6 +5214,7 @@ async function load(reason, force) {
     await readPhases();
 
     ALL = applyPending(parsed, true);   // our own recent writes win over a stale file
+    if (isSales() && typeof salesOverlay === "function") ALL = salesOverlay(ALL);   // the Sales page's own recent writes, likewise
     ALL.blockNames = BLOCKNAMES;
     /* is the one-time import over? Everything that used to read the Excel
        colour falls back to it until it is (review finding M1), so this is
@@ -5283,7 +5303,9 @@ async function load(reason, force) {
        cell whose colour differs from the one this dashboard last painted. Both
        must run BEFORE the feeder, because OfficeDone and the floor's seed are
        derived from the record and the import is what puts it there. */
-    cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
+    /* The Sales page runs none of it: it feeds no list and paints nothing. */
+    if (isSales()) { if (typeof salesAfterLoad === "function") salesAfterLoad(); }
+    else cpImportRun().catch(e => console.warn("[checkpoints] " + ((e && e.message) || e)))
       /* before the safeguard, always: an unrecorded door cell is the doors
          import's until it has drained, not a hand-paint (amendment 2) */
       .then(() => cpDoorImportRun(), () => {})
@@ -5368,6 +5390,13 @@ let LASTWB = null, MOVING = {};
 const sectionIdx = name => BLOCKNAMES.indexOf(name);
 async function moveJobsInSheet(ids, idx) {
   const name = BLOCKNAMES[idx] || ("section " + idx);
+  /* the Sales page moves one job the office has marked ready, and never into
+     In production or Can sell as second hand (spec decision 5) */
+  if (isSales() && (typeof SALESC === "undefined" || SALESC.NO_MOVE.indexOf(name) >= 0 ||
+      !ids.every(id => SALESC.moveAllowed(byId(id))))) {
+    toast("The office has not marked this job ready, or it cannot go to " + name + " from here.", true);
+    return 0;
+  }
   const before = {};
   ids.forEach(id => { const j = byId(id); if (j) before[id] = j.blk; });
   ids.forEach(id => pend(id, { blk: idx }));
@@ -5398,6 +5427,7 @@ async function moveJobsInSheet(ids, idx) {
 }
 
 async function markReady(job, on) {
+  if (isSales()) throw new Error("Marking a job ready is the office's.");
   const row = await CW.rowForJob("Production", job.id);   // re-found every time: rows move
   const addr = "A" + row + ":CL" + row;
   /* white, not "no fill": the sheet's cells carry an explicit white fill and
@@ -5770,6 +5800,7 @@ function floorClearAgain() {
 
 /** Put one job's floor counters back to nought. The one write. */
 async function clearFloorGlass(job) {
+  if (isSales()) return false;
   const id = String(job);
   if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listPatch) return false;
   const j = byId(id);
@@ -5839,6 +5870,7 @@ function cpWatchExit() {
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") go(); });
 }
 function cpReplayQueue() {
+  if (isSales()) return 0;                         // checkpoint taps are the office's
   const n = cpReplay(cpFlushItem, whoAmI());
   if (n) toast(n === 1 ? "Sending a checkpoint from earlier" : "Sending " + n + " checkpoints from earlier");
   return n;
@@ -6348,6 +6380,7 @@ const adminDomain = () => adminAddress().split("@")[1] || "";
    permission. Anyone who can edit the workbook can edit the sheet in Excel -
    SharePoint's own permissions are the real protection. */
 function isAdmin() {
+  if (isSales()) return false;                     // no alert editing on the Sales page
   const a = adminAddress();
   return !!a && String(whoAmI()).trim().toLowerCase() === a;
 }
@@ -7440,6 +7473,7 @@ function renderNotesWindow() {
     one at a time is what keeps a single consent prompt single. A failure is
     remembered against its job and nothing else: the print goes ahead. */
 async function savePrintNotes(ids, typed) {
+  if (isSales()) return false;
   const who = whoAmI(), at = new Date().toISOString();
   const list = (ids || []).slice();
   for (let i = 0; i < list.length; i++) {
@@ -7654,13 +7688,17 @@ function filtered() {
     if (state.view !== "flat" && !inView(j, state.view)) return false;
     if (scope && catOf(j) !== scope) return false;
     if (state.cat === "urgent") { if (!j.urg) return false; }
+    else if (state.cat === "salesready") { if (!j.done) return false; }      // the Sales page's tiles
+    else if (state.cat === "booked") { if (j.flag !== "booked") return false; }
     else if (state.cat === "inprod") { if (["floor", "ready", "office"].indexOf(catOf(j)) < 0) return false; }
     else if (state.cat && catOf(j) !== state.cat) return false;
     if (state.hidden[catOf(j)]) return false;
     if (state.sheet && j.sheets.indexOf(state.sheet) < 0) return false;
     if (!q) return true;
     return (j.id + " " + j.cust + " " + j.area + " " + j.eir + " " + j.off + " " +
-      j.notes.map(n => n.t).join(" ")).toLowerCase().indexOf(q) >= 0;
+      /* the Sales page also finds a job by its phone number, digits only */
+      (isSales() ? String(j.ph || "").replace(/\D/g, "") + " " + String(j.eir || "").replace(/\s/g, "") + " " : "") +
+      j.notes.map(n => n.t).join(" ")).toLowerCase().indexOf(isSales() && /^[\d\s]+$/.test(q) ? q.replace(/\s/g, "") : q) >= 0;
   });
   const bi = (a, b) => a.id.localeCompare(b.id);
   const s = state.sort;
@@ -7676,6 +7714,7 @@ function filtered() {
 }
 
 function renderTiles() {
+  if (isSales() && typeof salesTiles === "function") return salesTiles();
   const all = live(), n = f => all.filter(f).length;
   const defs = [
     { k: null, l: "All jobs", v: all.length, c: "--ink", s: all.reduce((a, j) => a + j.wnd, 0) + " wnd · " + all.reduce((a, j) => a + j.drs, 0) + " drs" },
@@ -7697,6 +7736,7 @@ function renderTiles() {
 }
 
 function renderChips() {
+  if (isSales() && typeof salesChips === "function") return salesChips();
   const c = $("#chips"); c.innerHTML = "";
   const all = live();
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
@@ -7892,6 +7932,7 @@ function renderMoveMenu(anchor) {
 }
 
 async function assignMany(jobs, view, group) {
+  if (isSales()) return false;                     // no saved views or categories from the Sales page
   const who = whoAmI();
   setStatus("saving " + jobs.length + " to " + view + "…", "busy");
   VIEWS[view] = VIEWS[view] || {};
@@ -8344,6 +8385,7 @@ const GLASS_EDIT_WORDS = { cut: "Glass cutting", hotmelt: "Glass hotmelting", tu
 let glassWriting = {};                 // item id|stage -> an office write in flight
 
 async function glassOfficeEdit(job, stage, act) {
+  if (isSales()) return false;
   if (typeof ST === "undefined" || typeof CW === "undefined" || !CW || !CW.listPatch) return false;
   const rec = stationForJob(job);
   if (!rec) return false;
@@ -8974,6 +9016,7 @@ function paintDaySheets(force) {
 /** The office's weekly target: one upsert of `Station targets`, one log line.
     The office is the only writer of this list, and the tablet reads it. */
 async function saveDayTarget(raw) {
+  if (isSales()) return false;
   if (typeof ST === "undefined" || !CW || !CW.listUpsert || !dayStage() || !dayTargetOn()) return false;
   /* A TARGET IS AT LEAST ONE (review, 2026-09-21). Clearing the box and tapping
      Save used to write a target of NOUGHT - which is not "no target": every
@@ -9021,6 +9064,7 @@ async function saveDayTarget(raw) {
     ST.dayOfficeFields can build. One `Dashboard Log` line, old → new totals.
     There is no delete on this path and none anywhere in this feature. */
 async function saveDayEdit(id, got) {
+  if (isSales()) return false;
   if (typeof ST === "undefined" || !CW || !CW.listPatch || !dayStage()) return false;
   if (dayWriting) return false;
   /* the stage, once (review, 2026-09-28) - see saveDayTarget */
@@ -9118,6 +9162,7 @@ function renderRows() {
     if (state.board === "welding") {
       weldReadIfNeeded(() => { if (state.board === "welding") renderRows(); });
       host.innerHTML = '<div class="stboard weldboard">' + weldBoardHtml() + '</div>';
+      viewOnlyBoard(host);
       wireWeldBoard(host);
       const wn = (WELD_OK === true && weldOn()) ? weldCardsShown().length : 0;
       $("#count").textContent = wn ? "Showing " + wn + " job" + (wn > 1 ? "s" : "") +
@@ -9129,6 +9174,7 @@ function renderRows() {
       /* the glazing board borrows welding's row, but emits one cell fewer (no
          toggle column), so it carries its own class for its own track list */
       host.innerHTML = '<div class="stboard weldboard glzboard">' + glzBoardHtml() + '</div>';
+      viewOnlyBoard(host);
       wireGlzBoard(host);
       const zn = (GLZ_OK === true && glzOn()) ? glzCardsShown().length : 0;
       $("#count").textContent = zn ? "Showing " + zn + " job" + (zn > 1 ? "s" : "") +
@@ -9138,6 +9184,7 @@ function renderRows() {
     if (state.board === "fabrication") {
       fabrReadIfNeeded("board", () => { if (state.board === "fabrication") renderRows(); });
       host.innerHTML = '<div class="stboard weldboard fabboard">' + fabrBoardHtml() + '</div>';
+      viewOnlyBoard(host);
       wireFabrBoard(host);
       const fn = (FABR_OK === true && fabrOn()) ? fabrCardsShown().length : 0;
       $("#count").textContent = fn ? "Showing " + fn + " job" + (fn > 1 ? "s" : "") +
@@ -9148,7 +9195,8 @@ function renderRows() {
        never reads - so the board asks for it once, here */
     stationLogReadIfNeeded(() => { if (state.board) renderRows(); });
     host.innerHTML = '<div class="stboard">' + stationBoardHtml() + '</div>';
-    wireNotesIcons(host);              // the card's note icon opens the job, as the row's does
+    viewOnlyBoard(host);
+    wireNotesIcons(host);             // the card's note icon opens the job, as the row's does
     wireStationBoard(host);            // ... and the office's steppers and the card head
     const n = (STATION_OK === true && typeof ST !== "undefined") ? ST.boardFilter(ST.jobBoard(STATION_ITEMS || []), state.q).length : 0;
     $("#count").textContent = n ? "Showing " + n + " job" + (n > 1 ? "s" : "") + " on the Glass station board"
@@ -9169,7 +9217,11 @@ function renderRows() {
   ROWS_STALE = false;
   if (ROWS_GLASS !== wasGlass) stationTick();
 
-  if (state.view === "flat") {
+  /* the Sales page: its own customer columns, one flat list, nothing to tick or drag */
+  if (isSales() && typeof salesRowHtml === "function") {
+    host.innerHTML = list.length ? list.map(salesRowHtml).join("") : '<div class="empty">No job matches that search or filter.</div>';
+    wireRows(host);
+  } else if (state.view === "flat") {
     host.innerHTML = list.length ? list.map((j, i) => rowHtml(j, i, max)).join("")
       : '<div class="empty">No job matches that search or filter.</div>';
     wireRows(host);
@@ -9245,6 +9297,15 @@ function renderRows() {
 }
 
 function renderAll() { renderTiles(); renderChips(); renderRows(); }
+
+/* The Sales page sees the floor boards view only (spec decision 8): every
+   control that writes is taken out before the board is wired, so it is neither
+   shown nor reachable. The edit functions refuse on that page as well. */
+const BOARD_WRITES = "[data-wact],[data-zact],[data-fwact],[data-gact],[data-fasg],[data-fapp],[data-fdec]," +
+                     "[data-furg],[data-fpsel],[data-fqty],[data-frq],#stweekbtn";
+function viewOnlyBoard(host) {
+  if (isSales() && host && host.querySelectorAll) host.querySelectorAll(BOARD_WRITES).forEach(el => el.remove());
+}
 
 /* ---------- the floating selection wheel ----------
    When jobs are ticked, a round button appears in the thumb's corner showing
@@ -9863,7 +9924,10 @@ function renderDrawer() {
      is the only station today, but the channel is every station's and a job
      with no glass on it can still have had something said about it */
   stationNotesReadIfNeeded(() => { if (state.sel === j.id) renderDrawer(); });
-  const st = label(j), ed = state.edit;
+  /* the Sales page sees the office's sections read only, under its own */
+  const sales = isSales();
+  const st = label(j), ed = !sales && state.edit;
+  const salesKept = sales ? keepInputs(host) : null;
   const isCS = /^[CS]\d/.test(j.id);
   const readyName = isCS ? "Collect & supply only" : "Ready to fit";
   const hint = t => '<div style="font-size:11.5px;color:var(--ink-4);margin:-6px 0 12px;line-height:1.4">' + t + '</div>';
@@ -9883,9 +9947,10 @@ function renderDrawer() {
       (j.urg && j.flag !== "urgent" ? '<span class="badge" style="background:var(--urgent);color:#fff">Urgent</span>' : "") +
       flagChip(j) +
       '</div><div style="font-size:13px;color:#d5d1c8;margin-top:4px">' + esc(j.cust || "—") + ' · ' + esc(j.area || "—") + '</div></div>' +
-      '<div style="display:flex;gap:7px"><button class="ghost" id="editbtn">' + (ed ? "Done" : "Edit") + '</button>' +
+      '<div style="display:flex;gap:7px">' + (sales ? "" : '<button class="ghost" id="editbtn">' + (ed ? "Done" : "Edit") + '</button>') +
       '<button class="ghost" id="dclose">Close</button></div></div>' +
     '<div class="dbody">' +
+      (sales && typeof salesDrawerHtml === "function" ? salesDrawerHtml(j) : salesDeliveryLineHtml(j)) +
       (ed ? '<div class="editbar">Changes here are written <strong>straight into the Excel sheet</strong>. Everyone sees them.</div>' +
         (MOVING[j.id]
           ? '<button class="markbtn" disabled><span class="spin"></span> moving the row in Excel…</button>'
@@ -9945,7 +10010,7 @@ function renderDrawer() {
           '<div style="font-size:11.5px;color:var(--ink-4);margin-top:6px">Written in the print-notes ' +
           'window before a John print. Kept in SharePoint, never in the Excel file.</div></div>';
       })() +
-      alertsSectionHtml(j) +
+      (sales ? "" : alertsSectionHtml(j)) +
       (j.notes.length ? '<div class="sect"><span class="kick">From the sheet</span>' +
         j.notes.map(n => '<div class="note"><div class="kick" style="margin-bottom:3px">' + esc(n.k) + ' · ' + esc(n.s) + '</div>' +
           '<div style="font-size:13px;line-height:1.45">' + esc(n.t) + '</div></div>').join("") + '</div>' : "") +
@@ -9965,7 +10030,8 @@ function renderDrawer() {
   }
   $("#dscrim").onclick = closeDrawer;
   $("#dclose").onclick = closeDrawer;
-  $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
+  if (sales) { restoreInputs(host, salesKept); if (typeof salesWireDrawer === "function") salesWireDrawer(host, j); }
+  else $("#editbtn").onclick = () => { state.edit = !state.edit; renderDrawer(); };
   /* the one thing in the Glass station section that can be clicked: the same
      log, unfiltered from this job rather than cut off at twelve lines */
   const full = host.querySelector("[data-stfull]");
@@ -10052,6 +10118,119 @@ function renderDrawer() {
       renderAll();
     };
   }
+}
+
+/* ---------- the Sales page's two shared lists (2026-09-30) ----------
+   `Sales requests` (a question from the Sales page, the office's reply) and
+   `Sales jobs` (a delivery date per job). Read on both pages every 30 s while
+   the page is visible; the lists are small, so a whole read is fine. Nothing
+   here goes near the workbook. The office writes only Reply, ReplyBy and
+   ReplyAt, from the requests window. A missing list hides the bell and says
+   nothing more. docs/specs/2026-09-30-sales-page.md                       */
+let SALES_REQS = [], SALES_REQS_OK = null, SALES_DELIV = {}, SALES_JOBS_OK = null, salesListsReading = null;
+function readSalesLists() {
+  if (typeof SALESC === "undefined" || typeof CW === "undefined" || !CW || !CW.listItems) return Promise.resolve();
+  if (salesListsReading) return salesListsReading;
+  const deliv = JSON.stringify(SALES_DELIV[state.sel] || null);
+  salesListsReading = (async () => {
+    try { const r = await CW.listItems(SALESC.REQUESTS, { fields: SALESC.REQUEST_FIELDS }); SALES_REQS_OK = r !== null; SALES_REQS = r || []; }
+    catch (e) { console.warn("[sales] requests: " + ((e && e.message) || e)); }
+    try { const d = await CW.listItems(SALESC.JOBS, { fields: SALESC.JOBS_FIELDS }); SALES_JOBS_OK = d !== null; SALES_DELIV = SALESC.deliveryMap(d || []); }
+    catch (e) { console.warn("[sales] delivery dates: " + ((e && e.message) || e)); }
+  })().finally(() => {
+    salesListsReading = null;
+    updateSalesBell();
+    if ($("#srhost")) renderSalesRequests();
+    if (isSales()) { if (typeof salesRepaint === "function") salesRepaint(); }
+    else if (state.sel && $("#dhost") && JSON.stringify(SALES_DELIV[state.sel] || null) !== deliv) renderDrawer();
+  });
+  return salesListsReading;
+}
+function updateSalesBell() {
+  const b = $("#salesreqbtn"); if (!b) return;
+  const n = SALESC.unanswered(SALES_REQS).length;
+  b.hidden = SALES_REQS_OK !== true;
+  b.textContent = "Sales requests" + (n ? " " + n : "");
+  if (b.classList) b.classList.toggle("bell", n > 0);
+}
+/** Typed text in [data-keep] boxes survives a repaint of the same window. */
+function keepInputs(host) {
+  const out = {}, act = document.activeElement;
+  if (host && host.querySelectorAll) host.querySelectorAll("[data-keep]").forEach(el => { out[el.dataset.keep] = el.value; });
+  out.__focus = act && act.dataset ? act.dataset.keep || "" : "";
+  return out;
+}
+function restoreInputs(host, kept) {
+  if (!host || !kept || !host.querySelectorAll) return;
+  host.querySelectorAll("[data-keep]").forEach(el => {
+    const k = el.dataset.keep;
+    if (k in kept) el.value = kept[k];
+    if (kept.__focus && kept.__focus === k) { try { el.focus(); } catch (e) {} }
+  });
+}
+/** The drawer's delivery line, read only. */
+function salesDeliveryLineHtml(j) {
+  const d = SALES_DELIV[j.id];
+  if (!d || typeof SALESC === "undefined") return "";
+  return '<div class="sect"><span class="kick">Delivery</span><div style="font-size:13px">Delivery date: <strong>' +
+    esc(SALESC.dayWords(d.date)) + '</strong>' + (d.by ? ' &middot; set by ' + esc(d.by) : "") + '</div></div>';
+}
+/** One request as a card; `reply` adds the office's reply box when unanswered. */
+function salesRequestHtml(r, reply) {
+  const f = r.fields || {}, answered = !!String(f.Reply || "").trim();
+  const kind = (SALESC.REQUEST_KINDS.find(p => p[0] === f.Kind) || ["", f.Kind || ""])[1];
+  return '<div class="cmt sreq' + (answered ? "" : " open") + '">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--ink-3);margin-bottom:4px">' +
+      '<span><button class="stn jump" data-j="' + esc(f.Job || "") + '" style="border:0;cursor:pointer">' + esc(f.Job || "") + '</button> ' +
+      '<strong style="color:var(--ink-2)">' + esc(kind) + '</strong> &middot; ' + esc(f.From || "—") + '</span>' +
+      '<span>' + esc(stamp(f.At)) + '</span></div>' +
+    '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">' + esc(f.Text || "") + '</div>' +
+    (answered
+      ? '<div class="sreply"><span class="kick">Reply</span> <span style="font-size:11px;color:var(--ink-3)">' +
+          esc(shortWho(f.ReplyBy)) + ' &middot; ' + esc(stamp(f.ReplyAt)) + '</span>' +
+          '<div style="font-size:13px;white-space:pre-wrap">' + esc(f.Reply) + '</div></div>'
+      : reply ? '<textarea rows="2" data-keep="r' + esc(r.id) + '" placeholder="Reply to the Sales page…"></textarea>' +
+          '<div style="display:flex;justify-content:flex-end"><button class="btn" data-srreply="' + esc(r.id) + '">Reply</button></div>'
+      : '<div style="font-size:12px;color:var(--ink-4)">Waiting for the office.</div>') +
+  '</div>';
+}
+/** The office's window: unanswered first, a reply box on each, Open job. */
+function renderSalesRequests() {
+  let host = $("#srhost");
+  if (!host) { host = document.createElement("div"); host.id = "srhost"; document.body.appendChild(host); }
+  const kept = keepInputs(host);
+  const all = SALESC.officeOrder(SALES_REQS), open = SALESC.unanswered(all).length;
+  host.innerHTML = '<div class="scrim" id="srscrim"></div><div class="logwin">' +
+    '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Sales requests</div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + open + ' waiting for a reply &middot; from the Sales page</div></div>' +
+      '<button class="ghost" id="srclose">Close</button></div>' +
+    '<div class="logbody" style="padding:12px;display:flex;flex-direction:column;gap:10px">' +
+      (SALES_REQS_OK !== true ? '<div class="empty">The “Sales requests” list is not in SharePoint, or could not be read.</div>'
+        : all.length ? all.map(r => salesRequestHtml(r, true)).join("") : '<div class="empty">No requests yet.</div>') +
+    '</div></div>';
+  restoreInputs(host, kept);
+  $("#srscrim").onclick = closeWin(host);
+  $("#srclose").onclick = closeWin(host);
+  host.querySelectorAll(".jump").forEach(b => b.onclick = () => {
+    if (!byId(b.dataset.j)) { toast(b.dataset.j + " is not on the sheet."); return; }
+    host.remove(); state.sel = b.dataset.j; state.edit = false; renderRows(); openDrawer();
+  });
+  host.querySelectorAll("[data-srreply]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.srreply, box = host.querySelector('[data-keep="r' + id + '"]');
+    const text = box ? box.value.trim() : "";
+    if (!text) { toast("Write the reply first.", true); return; }
+    b.disabled = true;
+    const fields = { Reply: text.slice(0, 1000), ReplyBy: whoAmI(), ReplyAt: new Date().toISOString() };
+    try {
+      if (CW.listConsent) await CW.listConsent();
+      await CW.listPatch(SALESC.REQUESTS, id, fields);
+      const r = SALES_REQS.find(x => x.id === id); if (r) Object.assign(r.fields, fields);
+      if (box) box.value = "";
+      toast("Reply sent to the Sales page");
+    } catch (e) { toast(friendly(e), true); }
+    updateSalesBell(); renderSalesRequests();
+  });
+  renderFab();
 }
 
 /* ---------- changes window ---------- */
@@ -10224,6 +10403,7 @@ async function renderVersionDetail() {
 }
 
 async function doRollback(v, nChanges) {
+  if (isSales()) return false;
   const vn = vnum(v);
   const typed = prompt("This replaces the live workbook with version " + vn + " and undoes " + nChanges +
     " change" + (nChanges === 1 ? "" : "s") + " made since.\n\nThe current state is kept as a version, so this can be undone.\n\nType " + vn + " to confirm:");
@@ -10305,6 +10485,11 @@ async function start() {
     return;
   }
   if (NOACCESS) return;            // load() met it and has already put the gate up
+  /* the Sales page: who is at the desk, before anything can be written */
+  if (isSales() && typeof salesStart === "function") salesStart();
+  /* both pages read the Sales page's requests and delivery dates */
+  readSalesLists();
+  setInterval(() => { if (!document.visibilityState || document.visibilityState === "visible") readSalesLists(); }, 30000);
   cpReplayQueue();                 // taps this browser owed from a previous visit
   bootReconcile();                 // a reload must not orphan a pending write
   setInterval(poll, 12000);
@@ -10324,6 +10509,7 @@ async function start() {
   $("#versbtn").onclick = () => renderVersions();
   $("#alertbtn").onclick = () => renderAlertsWindow();
   $("#exportbtn").onclick = () => renderExportWindow();
+  const srb = $("#salesreqbtn"); if (srb) srb.onclick = () => renderSalesRequests();
   /* the logo is looked for once, here, so the export path itself never has to
      go and get anything - and a missing file is simply a PDF without a logo */
   xpLoadLogo();
@@ -10338,6 +10524,8 @@ async function start() {
     if (e.key === "Escape" && $("#xhost")) { $("#xhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#lhost")) { $("#lhost").remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dayhost")) { $("#dayhost").remove(); renderFab(); return; }
+    const win = ["#sconfirm", "#srhost", "#sqhost", "#sdhost"].find(s => $(s));
+    if (e.key === "Escape" && win) { $(win).remove(); renderFab(); return; }
     if (e.key === "Escape" && $("#dhost")) closeDrawer();
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
   });

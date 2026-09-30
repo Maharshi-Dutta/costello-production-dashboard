@@ -577,11 +577,15 @@ async function removeAlert(job, email) {
 /* ---- writes: always addressed by cell, never by rewriting the file ---- */
 const A1 = n => { let s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
 
+/* the Sales page never paints a fill (spec 2026-09-30, decision 4) */
+const noFillHere = () => { if (typeof window !== "undefined" && window && window.CW_PAGE === "sales") throw new Error("The Sales page does not paint fills."); };
 async function setFill(sheet, address, color) {
+  noFillHere();
   const f = await findFile();
   return call("PATCH", f.base + "/worksheets('" + sheet + "')/range(address='" + address + "')/format/fill", { color });
 }
 async function clearFill(sheet, address) {
+  noFillHere();
   const f = await findFile();
   return call("POST", f.base + "/worksheets('" + sheet + "')/range(address='" + address + "')/format/fill/clear", {});
 }
