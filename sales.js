@@ -97,15 +97,30 @@ function salesOverlay(list) {
     if ("ph" in h) { const d = String(h.ph).replace(/\D/g, ""); c.ph3 = d.length >= 3 ? d.slice(-3) : ""; }
     return c;
   };
-  return (list || []).filter(j => !SALES_GONE[j.id]).map(j => {
-    const h = SALES_HOLD[j.id];
-    if (!h) return j;
-    if (now - h.at > SALES_HOLD_MS) { delete SALES_HOLD[j.id]; return j; }
-    const c = put(j, h);
+  /* THE PRODUCTION SHEET ONLY (owner's rule, 2026-09-18): the Sales page never
+     shows a job that is not on `Production`, and every customer field it shows
+     or edits is that sheet's own cell (`j.main`, parser.js) - never a value
+     another sheet filled into a blank. Wnd/Drs and the products likewise. */
+  const HOLD_NONE = {};
+  return (list || []).filter(j => j.main && !SALES_GONE[j.id]).map(j => {
+    let h = SALES_HOLD[j.id] || HOLD_NONE;
+    if (h !== HOLD_NONE && now - h.at > SALES_HOLD_MS) { delete SALES_HOLD[j.id]; h = HOLD_NONE; }
+    const c = put(salesMainOnly(j), h);
     /* a move hold keeps its revert data: the parsed job under it gets the
        same Sales fields, so applyPending re-applying onto it keeps both */
-    if (j.raw) c.raw = put(j.raw, h);
+    if (j.raw) c.raw = put(salesMainOnly(j.raw), h);
     return c;
+  });
+}
+/** One job as the Sales page may show it: Production's own cells only. */
+function salesMainOnly(j) {
+  const m = j.main || {}, d = String(m.ph || "").replace(/\D/g, "");
+  return Object.assign({}, j, {
+    cust: m.cust || "", ph: m.ph || "", ph3: d.length >= 3 ? d.slice(-3) : "", area: m.area || "",
+    eir: m.eir || "", off: m.off || "", colour: m.colour || "",
+    wnd: j.wndMain || 0, drs: j.drsMain || 0, prods: j.prodsMain || [],
+    notes: (j.notes || []).filter(n => n.s === "Production"),
+    sheets: (j.sheets || []).filter(s => s === "Production")
   });
 }
 
@@ -196,12 +211,18 @@ function salesChips() {
 /* ---- moving several jobs: a drag onto a section, or "move to" (amendment B) */
 async function salesMoveMany(ids, idx) {
   const jobs = (ids || []).map(byId).filter(Boolean);
+  const ticked = Object.assign({}, state.picked);
+  let r = null;
   try {
-    const r = await SALESC.moveMany(salesCtx(), jobs, idx, BLOCKNAMES, moveJobsInSheet);
+    r = await SALESC.moveMany(salesCtx(), jobs, idx, BLOCKNAMES, moveJobsInSheet);
     if (r.refused.length) toast("Not moved - " + SALESC.REFUSED_NOTE + ": " + r.refused.join(", "), true);
     return r;
   } catch (e) { toast(friendly(e), true); return null; }
-  finally { state.picked = {}; renderAll(); }
+  finally {
+    /* (review) the ticks go only when something moved; otherwise they stay for another try */
+    state.picked = r && r.moved > 0 ? {} : ticked;
+    renderAll();
+  }
 }
 function salesMoveMenu(anchor) {
   const old = $("#movemenu"); if (old) { old.remove(); return; }
@@ -289,13 +310,25 @@ function salesDrawerHtml(j) {
 /** Run one Sales write with the drawer's buttons held, and say how it went. */
 async function salesRun(host, fn, ok) {
   host.querySelectorAll(".dbody button, .dbody input, .dbody select, .dbody textarea").forEach(el => { el.disabled = true; });
+  host.__html = null;               // the DOM was changed by hand: the next draw must not be skipped as identical
   setStatus("writing to Excel…", "busy");
   try { const r = await fn(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); return r; }
   catch (e) { toast(friendly(e), true); return null; }
-  finally { setStatus("live"); renderAll(); if ($("#dhost")) renderDrawer(); }
+  finally {
+    setStatus("live"); renderAll();
+    const d = $("#dhost");
+    if (d) { d.__html = null; renderDrawer(); }   // (review) a failed write must never leave the controls disabled
+  }
 }
 function salesWireDrawer(host, j) {
   const on = (id, fn) => { const el = host.querySelector("#" + id); if (el) el.onclick = fn; };
+  /* (review) rows are draggable on this page: a job number dropped on the
+     drawer must never land in a customer field */
+  if (!host.__nodrop && host.addEventListener) {
+    host.__nodrop = 1;
+    host.addEventListener("dragover", e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; }, true);
+    host.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); }, true);
+  }
   on("scsave", () => salesRun(host, async () => {
     const changed = [];
     host.querySelectorAll("[data-sfield]").forEach(el => {

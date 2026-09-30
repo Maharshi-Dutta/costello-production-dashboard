@@ -453,7 +453,7 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   /* ---- 11. (review 13) the Sales hold keeps a move hold's revert data ---- */
   vm.runInThisContext(fs.readFileSync(__dirname + "/sales.js", "utf8"), { filename: "sales.js" });
   vm.runInThisContext('SALES_HOLD.R0001 = { flag: "booked", flagHex: "#00B050", at: Date.now() }');
-  const parsedJob = { id: "R0001", blk: 1, flag: "", urg: 0 };
+  const parsedJob = { id: "R0001", blk: 1, flag: "", urg: 0, main: { cust: "Person A", ph: "" } };
   const moving = Object.assign({}, parsedJob, { blk: 3, raw: parsedJob });    // applyPending's copy: moved, file not caught up
   const out = vm.runInThisContext("salesOverlay")([moving])[0];
   assert.strictEqual(out.flag, "booked"); assert.strictEqual(out.blk, 3, "the move hold is still shown");
@@ -461,6 +461,35 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.strictEqual(out.raw.blk, 1, "a failed move can still go back to where the file has it");
   assert.strictEqual(out.raw.flag, "booked", "and going back keeps the Sales colour hold");
   pass("salesOverlay keeps applyPending's raw (revert) job, with the Sales fields on it too");
+
+  /* ---- 12. the Production sheet only (owner's rule 2026-09-18; review of the demo) ---- */
+  const XL = require("exceljs");
+  const wbP = new XL.Workbook();
+  const head = ws => { const p = (r, c, v) => { ws.getCell(r, c).value = v; };
+    p(2, 2, "OFFICE NO."); p(2, 4, "DATES ON CONTRACT"); p(3, 4, "SOLD"); p(2, 5, "CUSTOMER"); p(2, 6, "PHONE NO.");
+    p(2, 7, "AREA"); p(2, 8, "EIRCODE"); p(2, 13, "QUANTITY"); p(3, 13, "WND"); p(3, 14, "DRS"); };
+  const wsP = wbP.addWorksheet("Production"), wsP2 = wbP.addWorksheet("Production (2)");
+  head(wsP); head(wsP2);
+  const cell = (ws, r, c, v) => { ws.getCell(r, c).value = v; };
+  /* R0001 on Production with a BLANK phone and area; Production (2) has both, and another name */
+  cell(wsP, 6, 3, "R0001"); cell(wsP, 6, 5, "Person A"); cell(wsP, 6, 8, "A65 F4E2"); cell(wsP, 6, 13, 3);
+  cell(wsP2, 6, 3, "R0001"); cell(wsP2, 6, 5, "Person B"); cell(wsP2, 6, 6, "0871111111"); cell(wsP2, 6, 7, "Cork"); cell(wsP2, 6, 13, 9);
+  /* R0009 is on Production (2) only */
+  cell(wsP2, 7, 3, "R0009"); cell(wsP2, 7, 5, "Person B"); cell(wsP2, 7, 6, "0862222222");
+  const parsed = parseWorkbook(wbP);
+  const p1 = parsed.find(x => x.id === "R0001"), p9 = parsed.find(x => x.id === "R0009");
+  assert.strictEqual(p1.ph, "0871111111", "(the office's merged value is untouched: Production (2) filled the blank)");
+  assert.deepStrictEqual(p1.main, { cust: "Person A", area: "", eir: "A65 F4E2", off: "", colour: "", ph: "" },
+    "the Production-only copy: blank where Production is blank");
+  assert.strictEqual(p9.main, null, "a job not on Production has no Production copy");
+  const shown = vm.runInThisContext("salesOverlay")(parsed);
+  assert.deepStrictEqual(shown.map(x => x.id), ["R0001"], "the Sales list: a job only on Production (2) is absent");
+  const s1 = shown[0];
+  assert.strictEqual(s1.ph, "", "Sales shows the blank phone, not Production (2)'s number");
+  assert.strictEqual(s1.area, ""); assert.strictEqual(s1.cust, "Person A"); assert.strictEqual(s1.eir, "A65 F4E2");
+  assert.strictEqual(s1.wnd, 3, "Wnd off Production alone (Production (2) says 9)");
+  assert.strictEqual(S.fieldOf("phone").of(s1), "", "and the customer form's 'from' is the Production cell");
+  pass("Sales reads the Production sheet only: blanks stay blank, other sheets' jobs never appear");
 
   console.log("\n" + n + " checks passed");
   process.exit(0);

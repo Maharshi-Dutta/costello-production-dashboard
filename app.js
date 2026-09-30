@@ -6891,6 +6891,7 @@ function salesNoName() {
 function renderExportWindow() {
   if (salesNoName()) return;
   if (!XSTATE) XSTATE = xpNewState();
+  if (isSales() && XSTATE.template === "john") XSTATE.template = "default";
   /* opened from the John print sheet view, the window OPENS on that template -
      there is nothing else it could sensibly mean from in there. Only on the way
      in, though: this function re-runs on every click inside the window, and
@@ -6927,7 +6928,8 @@ function renderExportWindow() {
 
       '<div class="xsec">' +
         xpRow("Template", "template", XSTATE.template,
-              [["default", "Default"], ["john", "John print sheet"], ["station", "Station report"]]) +
+              /* the John print sheet is Production (2): never offered on the Sales page (owner's rule, 2026-09-18) */
+              [["default", "Default"]].concat(isSales() ? [] : [["john", "John print sheet"]]).concat([["station", "Station report"]])) +
         (station
           ? '<div class="xrow"><span class="xlab">Station</span><span class="xopts">' +
               '<select class="txt" id="xstation">' + stOpts.map(o =>
@@ -9779,6 +9781,7 @@ function cpSectionHtml(j, ed) {
 function cpPatchSection(j) {
   const host = $("#dhost");
   if (!host || !j || !host.querySelectorAll) return;
+  host.__html = null;             // patched in place: the next full draw must go through, not be skipped as identical
   const sum = host.querySelector(".cpsum");
   if (sum) sum.textContent = cpSummaryHtml(j);
   const on = state.edit && !j.done && cpWritable();

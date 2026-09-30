@@ -298,3 +298,15 @@ C. **Flicker (both pages).** Measured: an open drawer is rebuilt wholesale on
    `#dhost` (no animation replay, scroll kept); `renderRows` skips identical
    HTML; the stations' full-read paths report a change only when the rows
    differ from what is held. Tablets untouched.
+   Consequence, accepted (review of 696b250, finding 3): since a whole read of
+   unchanged rows no longer counts as "moved", the office's glass and
+   fabrication colour painters that follow a poll now run only when the floor's
+   rows actually changed (they still run after every workbook load).
+D. **The Production sheet only on the Sales page** (owner's standing rule,
+   2026-09-18). The Sales list, tiles, counts, search, grouped view and export
+   show only jobs on `Production`, and every customer field shown or edited
+   there is `Production`'s own cell (`j.main`, parser.js), never a value filled
+   in from `Production (2)` or another sheet; Wnd/Drs and the products are
+   `wndMain`/`drsMain`/`prodsMain`, notes are Production's. The John print
+   template (Production (2)) is not offered on the Sales page. The office page
+   is unchanged.

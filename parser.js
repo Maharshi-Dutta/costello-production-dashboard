@@ -507,6 +507,15 @@ function parseWorkbook(wb) {
       }
 
       for (const k in m.ident) { const v = cellText(row.getCell(m.ident[k])).trim(); if (v && !j[k]) j[k] = v.slice(0, 70); }
+      /* ... AND THE SAME SIX FROM `Production` ALONE (2026-09-30, the Sales
+         page). The line above takes the first sheet with a value, so a blank on
+         Production is filled from Production (2) or the call log - which the
+         owner's rule (2026-09-18) says is not real data. The Sales page shows
+         and edits these, and nothing else: blank on Production is blank. */
+      if (mainHere) {
+        j.identMain = j.identMain || {};
+        for (const k in m.ident) if (!(k in j.identMain)) j.identMain[k] = cellText(row.getCell(m.ident[k])).trim();
+      }
       for (const k in m.dates) { const v = cellDate(row.getCell(m.dates[k])); if (v && !j['d_' + k]) j['d_' + k] = v; }
       for (const k in m.qty) {
         const c = row.getCell(m.qty[k]), v = num(c);
@@ -640,6 +649,12 @@ function parseWorkbook(wb) {
          must not inherit another sheet's misalignment (the glazing station is
          the first: its Total is the windows, and ASTRAGAL is its second count) */
       wndMain: j.wndMain || 0, drsMain: j.drsMain || 0, astrMain: j.astrMain || 0,
+      /* the identity cells off `Production` and no other sheet (null = the job
+         is not on Production at all). Read by the Sales page only; `ph` there is
+         the whole phone cell, exactly as `ph` is below. */
+      main: j.identMain ? { cust: (j.identMain.cust || '').slice(0, 70), area: (j.identMain.area || '').slice(0, 70),
+        eir: (j.identMain.eir || '').slice(0, 70), off: (j.identMain.off || '').slice(0, 70),
+        colour: (j.identMain.colour || '').slice(0, 70), ph: (j.identMain.phone || '').slice(0, 40) } : null,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
       prods: prods, prodsMain: prodsMain, cp: j.cp,
       /* one entry per DOORS DONE cell that has text in it: { slot, code,
