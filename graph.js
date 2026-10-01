@@ -141,12 +141,13 @@ async function headers(extra, path) {
    errors: drop the stale session, open a fresh one, and try again. */
 let openingSession = false;
 
-async function call(method, path, body, asBuffer) {
+async function call(method, path, body, asBuffer, more) {
   let lastStatus = 0, lastText = "", sessionRetried = false;
   for (let a = 0; a < 5; a++) {
     /* a Blob (a photo for the Sales photos library) is sent as it is */
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
-    const init = { method, headers: await headers(body ? { "Content-Type": raw ? (body.type || "application/octet-stream") : "application/json" } : null, path) };
+    const ct = body ? { "Content-Type": raw ? (body.type || "application/octet-stream") : "application/json" } : null;
+    const init = { method, headers: await headers(more ? Object.assign({}, ct, more) : ct, path) };   // more: e.g. If-Match
     if (body) init.body = raw ? body : JSON.stringify(body);
     const r = await fetch(G + path, init);
     if (r.ok) {
@@ -1330,7 +1331,8 @@ async function listItem(displayName, itemId, opts) {
   try {
     const r = await call("GET", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId +
                                 "?expand=fields(select=" + select + ")");
-    return { id: String(r.id), fields: r.fields || {} };
+    /* etag: what an If-Match write can be made conditional on */
+    return { id: String(r.id), fields: r.fields || {}, etag: r["@odata.etag"] || (r.fields && r.fields["@odata.etag"]) || "" };
   } catch (e) {
     if (isMissing(e)) return null;      // deleted between the plan and the write
     throw e;
@@ -1340,7 +1342,9 @@ async function listPatch(displayName, itemId, fields, opts) {
   const id = await listId(displayName, opts);
   if (!id) throw new Error("The “" + displayName + "” list is not in SharePoint.");
   const siteId = await listSiteId(opts);
-  return call("PATCH", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId + "/fields", fields || {});
+  /* opts.ifMatch: refused with 412 if the item changed since that etag was read */
+  return call("PATCH", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId + "/fields", fields || {}, false,
+              opts && opts.ifMatch ? { "If-Match": opts.ifMatch } : null);
 }
 /** The column names of a list (internal names), or null when the list is not
     there - so a feature can tell a column that has not been added yet. */
@@ -1359,23 +1363,31 @@ async function listColumns(displayName, opts) {
    the page already signs in with; nothing here touches the workbook.        */
 const SALES_PHOTOS = "Sales photos";
 let salesDriveMemo = null;
-/** The library's drive id, or null while there is no such library (not cached). */
-async function salesPhotoDrive() {
+/** The library's drive id, or null while there is no such library. The lookup
+    is one shared promise, so several thumbnail reads at once ask once; a miss
+    or a failure is forgotten, so the next call looks again. */
+function salesPhotoDrive() {
   if (salesDriveMemo) return salesDriveMemo;
-  const f = await findFile();
-  const r = await call("GET", "/sites/" + f.siteId + "/drives?$select=id,name");
-  const hit = (r.value || []).find(d => String(d.name || "").toLowerCase() === SALES_PHOTOS.toLowerCase());
-  return (salesDriveMemo = hit ? { siteId: f.siteId, id: hit.id } : null);
+  const p = salesDriveMemo = (async () => {
+    const f = await findFile();
+    const r = await call("GET", "/sites/" + f.siteId + "/drives?$select=id,name");
+    const hit = (r.value || []).find(d => String(d.name || "").toLowerCase() === SALES_PHOTOS.toLowerCase());
+    return hit ? { siteId: f.siteId, id: hit.id } : null;
+  })();
+  p.then(d => { if (!d && salesDriveMemo === p) salesDriveMemo = null; },
+         () => { if (salesDriveMemo === p) salesDriveMemo = null; });
+  return p;
 }
 const drivePath = (folder, name) => [folder, name].filter(Boolean).map(encodeURIComponent).join("/");
-/** Upload one photo (a Blob) into the message's folder. A name already there is
-    kept and this one renamed by SharePoint, so a re-send never overwrites. */
+/** Upload one photo (a Blob) into the message's folder. The caller picks a
+    number past every file already there, so replace only ever replaces this
+    same photo on a retried PUT - never another one, and never a duplicate. */
 async function salesPhotoPut(folder, name, blob) {
   salesOnly();
   const d = await salesPhotoDrive();
   if (!d) throw new Error("The “" + SALES_PHOTOS + "” library is not in SharePoint.");
   return call("PUT", "/sites/" + d.siteId + "/drives/" + d.id + "/root:/" + drivePath(folder, name) +
-                     ":/content?@microsoft.graph.conflictBehavior=rename", blob);
+                     ":/content?@microsoft.graph.conflictBehavior=replace", blob);
 }
 /** The photos in one message's folder: [{id, name, webUrl, thumb}]; [] when
     the folder (or the library) is not there. */

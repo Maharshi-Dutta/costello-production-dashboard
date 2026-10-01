@@ -110,9 +110,10 @@ const SALESC = (function () {
   const newestFirst = reqs => (reqs || []).slice().sort((a, b) => str(reqF(b).At).localeCompare(str(reqF(a).At)));
   const extrasIn = cols => !!cols && REQUEST_EXTRA.every(c => cols.indexOf(c) >= 0);
   const isComplaint = r => str(reqF(r).Kind) === "complaint";
-  /** Open only when the list says so: a complaint sent before the Status column
-      existed has no status, and nothing could resolve it. */
-  const openComplaint = r => isComplaint(r) && str(reqF(r).Status) === "Open";
+  /** Open unless the list says Resolved: a complaint whose Status is empty (sent
+      before the columns existed, or while the column check had not finished)
+      is open - and can be resolved, since the columns now exist (review 1). */
+  const openComplaint = r => isComplaint(r) && str(reqF(r).Status) !== "Resolved";
   /** The office's bell: unanswered messages plus open complaints, each once. */
   const bellCount = reqs => (reqs || []).filter(r => !str(reqF(r).Reply).trim() || openComplaint(r)).length;
   /** The office's window: open complaints first, then unanswered, then the
@@ -125,7 +126,7 @@ const SALESC = (function () {
   const photoCount = r => Number(reqF(r).Photos) || 0;
 
   /* ---- photos: shrunk in the browser, then one folder per message --------- */
-  const PHOTO_MAX = 8, PHOTO_SIDE = 1600, PHOTO_QUALITY = 0.82;
+  const PHOTO_MAX = 8, PHOTO_SIDE = 1600, PHOTO_QUALITY = 0.82, PHOTO_BYTES = 40 * 1024 * 1024;
   /** The size a photo is drawn at: longest side PHOTO_SIDE, aspect kept, never upscaled. */
   function fitSize(w, h, max) {
     max = max || PHOTO_SIDE;
@@ -137,8 +138,14 @@ const SALESC = (function () {
     files = files || [];
     if ((already || 0) + files.length > PHOTO_MAX) return "At most " + PHOTO_MAX + " photos per message.";
     const bad = files.find(f => !/^image\//i.test(str(f && f.type)));
-    return bad ? "“" + str(bad.name || "That file") + "” is not a photo." : "";
+    if (bad) return "“" + str(bad.name || "That file") + "” is not a photo.";
+    /* refused before the browser tries to decode it (review 8) */
+    const huge = files.find(f => Number(f && f.size) > PHOTO_BYTES);
+    return huge ? "“" + str(huge.name || "That file") + "” is over 40 MB, so it was not added." : "";
   }
+  /** The next free file number in a folder listing: one past the highest n.jpg,
+      so a re-send never lands on (and with replace, never overwrites) a photo. */
+  const nextPhotoNo = list => (list || []).reduce((m, p) => Math.max(m, parseInt(str(p && p.name), 10) || 0), 0);
   /** The message's folder in the library: its Title, with | and : made safe. */
   const photoFolder = t => str(t).replace(/[|:"*<>?\/\\#%]/g, "-");
   const pad2 = n => (n < 10 ? "0" : "") + n;
@@ -301,23 +308,31 @@ const SALESC = (function () {
   }
 
   const errText = e => (e && e.message) || String(e);
-  /** Upload photos into one message's folder, one by one, then PATCH Photos to
-      what is there now (had + landed). A failed photo never undoes the message. */
-  async function putPhotos(ctx, id, folder, blobs, had) {
+  /** Has the list got the five new columns? ctx.extras is a flag, or (on the
+      page) a function that runs the column check first if it has not finished
+      or had failed, so a complaint is never sent without its Status (review 1). */
+  const extrasOf = async ctx => typeof ctx.extras === "function" ? !!(await ctx.extras()) : !!ctx.extras;
+  /** Upload photos into one message's folder, one by one, numbered from `start`
+      + 1, then PATCH Photos to what the folder really holds (its listing; had +
+      landed only if the listing fails). A failed photo never undoes the message. */
+  async function putPhotos(ctx, id, folder, blobs, start, had) {
     if (!(await ctx.CW.salesPhotoDrive()))
-      return { landed: 0, failed: blobs.length, note: "The “Sales photos” library is not in SharePoint yet, so no photo was sent." };
+      return { landed: 0, failed: blobs.length, photos: had, note: "The “Sales photos” library is not in SharePoint yet, so no photo was sent." };
     let landed = 0;
     for (let i = 0; i < blobs.length; i++) {
-      try { await ctx.CW.salesPhotoPut(folder, (had + i + 1) + ".jpg", blobs[i]); landed++; }
+      try { await ctx.CW.salesPhotoPut(folder, (start + i + 1) + ".jpg", blobs[i]); landed++; }
       catch (e) { if (typeof console !== "undefined") console.warn("[sales] photo: " + errText(e)); }
     }
     const failed = blobs.length - landed;
     let note = failed ? failed + " of " + blobs.length + " photos failed — send them again from the message" : "";
-    if (landed) {
-      try { await ctx.CW.listPatch(REQUESTS, id, { Photos: had + landed }); }
+    let photos = had + landed;
+    try { photos = (await ctx.CW.salesPhotoList(folder)).length; }          // review 3: the folder is the truth
+    catch (e) { if (typeof console !== "undefined") console.warn("[sales] photo listing: " + errText(e)); }
+    if (photos !== had) {
+      try { await ctx.CW.listPatch(REQUESTS, id, { Photos: photos }); }
       catch (e) { note = (note ? note + ". " : "") + "The photos are saved, but their count could not be: " + errText(e); }
     }
-    return { landed, failed, note };
+    return { landed, failed, photos, note };
   }
 
   /** A message to the office: Status / Move about a job, or a Report /
@@ -329,13 +344,16 @@ const SALESC = (function () {
     need(ctx);
     m = m || {};
     const kind = REQUEST_KINDS.some(p => p[0] === m.kind) ? m.kind : "other";
-    const job = str(m.job).trim().toUpperCase(), cust = str(m.customer).trim().slice(0, 255);
+    const job = str(m.job).trim().toUpperCase().slice(0, 40), cust = str(m.customer).trim().slice(0, 255);
     const text = str(m.text).trim().slice(0, 4000), photos = (m.photos || []).filter(Boolean);
     if (!text) throw new Error("Write the message first.");
     if (!job && NO_JOB_OK.indexOf(kind) < 0) throw new Error("A " + kindWord(kind).toLowerCase() + " message needs a job number.");
+    /* review 9: a Status or Move is about a job on the sheet */
+    if (NO_JOB_OK.indexOf(kind) < 0 && ctx.hasJob && !ctx.hasJob(job))
+      throw new Error(job + " is not on the Production sheet. Check the number, or send it as a Report.");
     if (photos.length > PHOTO_MAX) throw new Error("At most " + PHOTO_MAX + " photos per message.");
-    const extras = !!ctx.extras;
     return serial(async () => {
+      const extras = await extrasOf(ctx);
       const at = now(ctx);
       const fields = { Title: title(job || "NO JOB", at), Job: job, Kind: kind, Text: text, From: ctx.who, At: at, ReplySeen: "No" };
       if (extras) { fields.Customer = cust; fields.Photos = 0; if (kind === "complaint") fields.Status = "Open"; }
@@ -344,9 +362,9 @@ const SALESC = (function () {
       const id = made && made.id;
       let r = { landed: 0, failed: 0, note: "" };
       if (photos.length) {
-        r = extras ? await putPhotos(ctx, id, photoFolder(fields.Title), photos, 0)
+        r = extras ? await putPhotos(ctx, id, photoFolder(fields.Title), photos, 0, 0)
           : { landed: 0, failed: photos.length, note: "Sent without the photos: the “Sales requests” list has no Photos column yet." };
-        if (extras) fields.Photos = r.landed;
+        if (extras) fields.Photos = r.photos;
       }
       ctx.note(job || "—", "Sales message: " + kindWord(kind), "", r.landed + (r.landed === 1 ? " photo" : " photos"));
       return Object.assign({ id, fields }, r);
@@ -358,17 +376,21 @@ const SALESC = (function () {
   /** More photos on a message already sent (a failed photo, or one forgotten). */
   function addPhotos(ctx, item, blobs) {
     need(ctx);
-    if (!ctx.extras) throw new Error("The “Sales requests” list has no Photos column yet, so photos cannot be sent.");
     blobs = (blobs || []).filter(Boolean);
     if (!blobs.length) throw new Error("Pick a photo first.");
     return serial(async () => {
+      if (!(await extrasOf(ctx))) throw new Error("The “Sales requests” list has no Photos column yet, so photos cannot be sent.");
       const cur = await ctx.CW.listItem(REQUESTS, item.id, { fields: REQUEST_FIELDS.concat(REQUEST_EXTRA) });
       if (!cur) throw new Error("That message is no longer in the list.");
-      const had = photoCount(cur);
+      const folder = photoFolder(cur.fields.Title);
+      /* the folder says what is there and which numbers are taken (review 3) */
+      let list = null;
+      try { list = await ctx.CW.salesPhotoList(folder); } catch (e) {}
+      const had = list ? list.length : photoCount(cur), start = list ? nextPhotoNo(list) : had;
       if (had + blobs.length > PHOTO_MAX) throw new Error("At most " + PHOTO_MAX + " photos per message (" + had + " there already).");
-      const r = await putPhotos(ctx, item.id, photoFolder(cur.fields.Title), blobs, had);
-      ctx.note(str(cur.fields.Job) || "—", "Sales photos added", had, had + r.landed);
-      return Object.assign({ photos: had + r.landed }, r);
+      const r = await putPhotos(ctx, item.id, folder, blobs, start, photoCount(cur));
+      ctx.note(str(cur.fields.Job) || "—", "Sales photos added", had, r.photos);
+      return r;
     });
   }
 
@@ -389,7 +411,17 @@ const SALESC = (function () {
       e.current = f; throw e;
     }
     const fields = { Status: want, ResolvedBy: str(who), ResolvedAt: at || new Date().toISOString() };
-    await CW.listPatch(REQUESTS, id, fields);
+    /* review 4: only if nobody has changed the item since that read */
+    const etag = cur.etag || f["@odata.etag"];
+    try { await CW.listPatch(REQUESTS, id, fields, etag ? { ifMatch: etag } : undefined); }
+    catch (e) {
+      if (!/->\s*412\b/.test(errText(e))) throw e;
+      const now = await CW.listItem(REQUESTS, id, { fields: REQUEST_FIELDS.concat(REQUEST_EXTRA) });
+      const nf = (now && now.fields) || f, nby = str(nf.ResolvedBy).split("@")[0];
+      const e2 = new Error("Someone got there first - it now says " + (str(nf.Status) || "Open") +
+        (nby ? " (" + nby + (nf.ResolvedAt ? ", " + whenWords(nf.ResolvedAt) : "") + ")" : "") + ". Nothing was written.");
+      e2.current = nf; throw e2;
+    }
     return Object.assign({}, f, fields);
   }
   /** The Sales page's side of it: a name, the queue, a log line. */
@@ -403,11 +435,17 @@ const SALESC = (function () {
   }
 
   /** The replies on screen that have not been marked seen: ReplySeen = Yes. */
+  /* ids already queued or written this page load: a reply is marked once (review 2) */
+  const seenQueued = {};
   function markSeen(ctx, reqs) {
     need(ctx);
-    const todo = unreadReplies(reqs);
+    const todo = unreadReplies(reqs).filter(r => !seenQueued[r.id]);
+    todo.forEach(r => { seenQueued[r.id] = 1; });
     return serial(async () => {
-      for (let i = 0; i < todo.length; i++) await ctx.CW.listPatch(REQUESTS, todo[i].id, { ReplySeen: "Yes" });
+      for (let i = 0; i < todo.length; i++) {
+        try { await ctx.CW.listPatch(REQUESTS, todo[i].id, { ReplySeen: "Yes" }); }
+        catch (e) { for (let k = i; k < todo.length; k++) delete seenQueued[todo[k].id]; throw e; }   // may be asked again
+      }
       return todo.length;
     });
   }
@@ -458,7 +496,7 @@ const SALESC = (function () {
   return Object.assign(api, {
     REFUSED_NOTE, moveMany,
     PEOPLE, JOBS, BACKUPS, REQUESTS, PEOPLE_FIELDS, JOBS_FIELDS, BACKUP_FIELDS, REQUEST_FIELDS, REQUEST_KINDS,
-    REQUEST_EXTRA, FORM_KINDS, NO_JOB_OK, PHOTO_MAX, PHOTO_SIDE, PHOTO_QUALITY,
+    REQUEST_EXTRA, FORM_KINDS, NO_JOB_OK, PHOTO_MAX, PHOTO_SIDE, PHOTO_QUALITY, PHOTO_BYTES, nextPhotoNo,
     extrasIn, isComplaint, openComplaint, bellCount, kindWord, photoCount, fitSize, photoRefusal, photoFolder, whenWords,
     sendMessage, addPhotos, setComplaint, resolve,
     COLOURS, COLOUR_WORD, NO_MOVE, FIELDS, ROW_MAX,

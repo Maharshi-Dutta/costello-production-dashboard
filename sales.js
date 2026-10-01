@@ -26,7 +26,8 @@ const salesCtx = () => ({
   tmplFor: id => LASTWB ? templateForJob(LASTWB.getWorksheet("Production"), id) : null,
   identCol: k => (PRODMAP && PRODMAP.ident && PRODMAP.ident[k]) || null,
   hdrRow: () => (PRODMAP && PRODMAP.hdr && PRODMAP.hdr[0]) || 0,
-  extras: SALES_REQ_EXTRAS === true               // Sales requests has Customer/Status/Photos (app.js)
+  extras: salesEnsureCols,                        // Sales requests has Customer/Status/Photos (app.js), checked again if not known
+  hasJob: id => !!byId(id)                         // a Status or Move is about a job on the sheet
 });
 /** " disabled" while nobody is picked or any Sales write or move is in flight. */
 const salesDis = () => (!SALES_WHO || SALESC.busy()) ? " disabled" : "";
@@ -73,7 +74,7 @@ function salesPicker() {
 async function salesStart() {
   const b = $("#whobtn");
   if (b) { b.textContent = "…"; b.onclick = () => salesPicker(); }
-  const rq = $("#reqbtn"); if (rq) rq.onclick = () => salesRequestsWindow();
+  const rq = $("#reqbtn"); if (rq) rq.onclick = () => salesRequestsWindow(true);
   const sb = $("#sendbtn"); if (sb) sb.onclick = () => salesSendForm("");
   const dl = $("#delbtn"); if (dl) dl.onclick = () => salesDeletedWindow();
   await salesReadPeople();
@@ -429,7 +430,9 @@ async function salesShrink(file) {
   catch (e) { throw new Error("“" + file.name + "” could not be opened as a photo - this browser may not read it (an iPhone HEIC photo?). Send it as a JPEG."); }
   const s = SALESC.fitSize(img.width, img.height);
   const c = document.createElement("canvas"); c.width = s.w; c.height = s.h;
-  c.getContext("2d").drawImage(img, 0, 0, s.w, s.h);
+  const g = c.getContext("2d");
+  g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, s.w, s.h);     // a transparent PNG/GIF goes white, not black, as JPEG
+  g.drawImage(img, 0, 0, s.w, s.h);
   if (img.close) img.close();
   const blob = await new Promise(res => c.toBlob(res, "image/jpeg", SALESC.PHOTO_QUALITY));
   if (!blob) throw new Error("“" + file.name + "” could not be made smaller, so it was not added.");
@@ -440,7 +443,7 @@ async function salesShrinkAll(files, already) {
   const why = SALESC.photoRefusal(files, already);
   if (why) { toast(why, true); return []; }
   const out = [];
-  for (const f of files) { try { out.push(await salesShrink(f)); } catch (e) { toast(friendly(e), true); } }
+  for (const f of files) { try { out.push(await salesShrink(f)); } catch (e) { toast((e && e.message) || String(e), true); } }   // our own words
   return out;
 }
 function salesFormClose() {
@@ -457,7 +460,7 @@ function salesSendForm(job, kind, text) {
     '<div class="cond" style="font-size:22px;font-weight:700;margin-bottom:10px">Send to office</div><div class="sfform">' +
       '<div class="sfrow"><label>Type<select class="txt" id="sfkind">' +
         SALESC.FORM_KINDS.map(k => '<option value="' + k + '"' + (k === (kind || "status") ? " selected" : "") + '>' + esc(SALESC.kindWord(k)) + '</option>').join("") +
-      '</select></label><label>Job no.<input class="txt" id="sfjob" value="' + esc(job || "") + '" autocomplete="off"></label></div>' +
+      '</select></label><label>Job no.<input class="txt" id="sfjob" maxlength="40" value="' + esc(job || "") + '" autocomplete="off"></label></div>' +
       '<label id="sfcustl">Customer (no job number)<input class="txt" id="sfcust" autocomplete="off"></label>' +
       '<label>Message<textarea id="sftext" rows="5" placeholder="Write to the office…">' + esc(text || "") + '</textarea></label>' +
       (extras ? '<div><label class="chip saddph">Add photos<input type="file" accept="image/*" multiple id="sffile" hidden></label>' +
@@ -507,7 +510,7 @@ function salesSendForm(job, kind, text) {
       salesFormClose();
       toast(r.note || ("Sent to the office" + (r.landed ? " with " + r.landed + (r.landed === 1 ? " photo" : " photos") : "")), !!r.note);
       salesRepaint();
-    } catch (e) { toast(friendly(e), true); b.disabled = false; }
+    } catch (e) { toast(salesMsgErr(e), true); b.disabled = false; }
     setStatus("live");
   };
   try { q(job ? "#sftext" : "#sfjob").focus(); } catch (e) {}
@@ -525,7 +528,7 @@ function salesWireAddPhotos(host, redraw) {
       const res = await SALESC.addPhotos(salesCtx(), r, blobs);
       r.fields.Photos = res.photos;
       toast(res.note || (res.landed + (res.landed === 1 ? " photo" : " photos") + " sent"), !!res.note);
-    } catch (e) { toast(friendly(e), true); }
+    } catch (e) { toast(salesMsgErr(e), true); }
     setStatus("live"); redraw();
   });
 }
@@ -533,7 +536,9 @@ function salesWireAddPhotos(host, redraw) {
 function salesResolve(id, want) { return SALESC.resolve(salesCtx(), id, want); }
 
 /** Every request with its reply, newest first; the replies shown are marked seen. */
-function salesRequestsWindow() {
+/** userOpen: the person opened it (Requests button) - only then are the replies
+    shown marked seen; a redraw (thumbnails, a 30 s read) never writes (review 2). */
+function salesRequestsWindow(userOpen) {
   const all = SALESC.newestFirst(SALES_REQS), unread = SALESC.unreadReplies(all).length, comps = all.filter(SALESC.openComplaint).length;
   const host = salesWindow("sqhost", "Requests", unread + " new repl" + (unread === 1 ? "y" : "ies") + " from the office" +
     (comps ? " · " + comps + " open complaint" + (comps === 1 ? "" : "s") : ""),
@@ -546,7 +551,7 @@ function salesRequestsWindow() {
   salesWireMsgs(host, redraw);
   salesWireAddPhotos(host, redraw);
   salesLoadThumbs(all, redraw);
-  if (SALES_REQS_OK !== true || !SALES_WHO || !SALESC.unreadReplies(all).length) return;   // no write before a name
+  if (!userOpen || SALES_REQS_OK !== true || !SALES_WHO || !SALESC.unreadReplies(all).length) return;   // no write before a name
   const todo = SALESC.unreadReplies(all);
   SALESC.markSeen(salesCtx(), todo)
     .then(() => { todo.forEach(r => { r.fields.ReplySeen = "Yes"; }); salesReqCount(); })

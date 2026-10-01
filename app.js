@@ -10217,16 +10217,34 @@ let SALES_REQS = [], SALES_REQS_OK = null, SALES_DELIV = {}, SALES_JOBS_OK = nul
 /* 2026-10-01: true once `Sales requests` has the five new columns (Customer,
    Status, ResolvedBy, ResolvedAt, Photos). Until then they are never asked
    for or written, and the pages say so quietly. Looked for on each read until found. */
-let SALES_REQ_EXTRAS = null;
+let SALES_REQ_EXTRAS = null, salesColsAsking = null;
+/** Run the column check unless it has already found all five; one at a time.
+    A send awaits this, so a complaint never goes out without its Status. */
+function salesEnsureCols() {
+  if (SALES_REQ_EXTRAS === true || !CW.listColumns) return Promise.resolve(SALES_REQ_EXTRAS === true);
+  if (!salesColsAsking) salesColsAsking = CW.listColumns(SALESC.REQUESTS)
+    .then(cols => { SALES_REQ_EXTRAS = SALESC.extrasIn(cols); })
+    .catch(e => console.warn("[sales] request columns: " + ((e && e.message) || e)))
+    .then(() => { salesColsAsking = null; return SALES_REQ_EXTRAS === true; });
+  return salesColsAsking;
+}
+/** A list or library error in words that do not talk about Excel; our own
+    refusals (no " -> 4xx" in them) are shown as they are. */
+function salesMsgErr(e) {
+  const m = (e && e.message) || String(e);
+  if (!/->\s*\d{3}\b/.test(m)) return m;
+  if (/->\s*40[13]\b/.test(m)) return "SharePoint refused that - this account may not have rights to the Sales lists or the Sales photos library.";
+  if (/->\s*404\b/.test(m)) return "SharePoint could not find that message or folder - it may have been removed.";
+  if (/->\s*412\b/.test(m)) return "Someone else changed that message first - look again and try once more.";
+  if (/->\s*(429|50\d)\b/.test(m)) return "SharePoint was busy and did not answer. Try again in a moment.";
+  return "SharePoint did not accept that: " + m.slice(0, 160);
+}
 function readSalesLists() {
   if (typeof SALESC === "undefined" || typeof CW === "undefined" || !CW || !CW.listItems) return Promise.resolve();
   if (salesListsReading) return salesListsReading;
   const deliv = JSON.stringify(SALES_DELIV[state.sel] || null);
   salesListsReading = (async () => {
-    if (SALES_REQ_EXTRAS !== true && CW.listColumns) {
-      try { SALES_REQ_EXTRAS = SALESC.extrasIn(await CW.listColumns(SALESC.REQUESTS)); }
-      catch (e) { console.warn("[sales] request columns: " + ((e && e.message) || e)); }
-    }
+    await salesEnsureCols();
     const fields = SALESC.REQUEST_FIELDS.concat(SALES_REQ_EXTRAS === true ? SALESC.REQUEST_EXTRA : []);
     try { const r = await CW.listItems(SALESC.REQUESTS, { fields }); SALES_REQS_OK = r !== null; SALES_REQS = r || []; }
     catch (e) { console.warn("[sales] requests: " + ((e && e.message) || e)); }
@@ -10270,20 +10288,32 @@ function salesDeliveryLineHtml(j) {
   return '<div class="sect"><span class="kick">Delivery</span><div style="font-size:13px">Delivery date: <strong>' +
     esc(SALESC.dayWords(d.date)) + '</strong>' + (d.by ? ' &middot; set by ' + esc(d.by) : "") + '</div></div>';
 }
-/* Photo thumbnails per message id: { n, list } - read from the Sales photos
-   library only while a requests window is open, once per photo count (never
-   polled). docs/specs/2026-10-01-sales-reports-complaints-photos.md */
-const SALES_THUMBS = {};
+/* Photo thumbnails per message id: { n, list, at, err } - read from the Sales
+   photos library only while a requests window is open, once per photo count,
+   again after an error or after 30 minutes (the thumbnail links expire); three
+   reads at a time, never polled. docs/specs/2026-10-01-sales-reports-complaints-photos.md */
+const SALES_THUMBS = {}, SALES_THUMB_MS = 30 * 60000;
+let salesThumbQ = [], salesThumbBusy = 0;
 function salesLoadThumbs(reqs, redraw) {
   if (!CW.salesPhotoList) return;
   (reqs || []).forEach(r => {
     const n = SALESC.photoCount(r), t = SALES_THUMBS[r.id];
-    if (!n || (t && t.n === n)) return;
-    SALES_THUMBS[r.id] = { n, list: null };
-    CW.salesPhotoList(SALESC.photoFolder(r.fields.Title))
-      .then(list => { SALES_THUMBS[r.id] = { n, list }; redraw(); })
-      .catch(e => { SALES_THUMBS[r.id] = { n, list: null, err: 1 }; console.warn("[sales] photos: " + ((e && e.message) || e)); redraw(); });
+    /* every message is listed (once per 30 min), not only those with Photos > 0:
+       if the count's PATCH failed, the files are still found and shown (review 3) */
+    if (t && t.n === n && !t.err && (t.pending || Date.now() - t.at < SALES_THUMB_MS)) return;
+    SALES_THUMBS[r.id] = { n, list: t && !t.err ? t.list : null, pending: 1 };   // keep the old ones on screen meanwhile
+    salesThumbQ.push(() => CW.salesPhotoList(SALESC.photoFolder(r.fields.Title))
+      .then(list => { SALES_THUMBS[r.id] = { n, list, at: Date.now() }; },
+            e => { SALES_THUMBS[r.id] = { n, list: null, err: 1, at: Date.now() }; console.warn("[sales] photos: " + ((e && e.message) || e)); })
+      .then(redraw));
   });
+  const pump = () => {
+    while (salesThumbBusy < 3 && salesThumbQ.length) {
+      salesThumbBusy++;
+      salesThumbQ.shift()().then(() => { salesThumbBusy--; pump(); });
+    }
+  };
+  pump();
 }
 /** Mark resolved / Reopen, on either page. The Sales page goes through its own
     queue and picked name (salesResolve, sales.js); the office reads first too. */
@@ -10303,7 +10333,7 @@ function salesWireMsgs(host, redraw) {
       toast(want === "Resolved" ? "Complaint marked resolved" : "Complaint reopened");
     } catch (e) {
       if (e && e.current && r) Object.assign(r.fields, e.current);   // show who got there first
-      toast(friendly(e), true);
+      toast(salesMsgErr(e), true);
     }
     updateSalesBell(); redraw();
   });
@@ -10320,12 +10350,14 @@ function salesRequestHtml(r, reply, o) {
   const dis = isSales() && !(typeof salesWho === "function" && salesWho()) ? " disabled" : "";
   const about = f.Job ? '<button class="stn jump" data-j="' + esc(f.Job) + '" style="border:0;cursor:pointer">' + esc(f.Job) + '</button> '
     : f.Customer ? '<strong style="color:var(--ink-2)">' + esc(f.Customer) + '</strong> &middot; ' : "";
-  const photos = !n ? ""
-    : o.thumbs && th && th.n === n && th.list && th.list.length
+  /* the folder listing is what is shown, even if the Photos count is behind it */
+  const photos = !n && !(o.thumbs && th && th.list && th.list.length) ? ""
+    : o.thumbs && th && th.list && th.list.length
       ? '<div class="sphotos">' + th.list.map(p => '<a href="' + esc(p.webUrl || "#") + '" target="_blank" rel="noopener" title="' + esc(p.name) + '">' +
           (p.thumb ? '<img src="' + esc(p.thumb) + '" alt="' + esc(p.name) + '" loading="lazy">' : '<span>' + esc(p.name) + '</span>') + '</a>').join("") + '</div>'
-      : '<div class="sphn">' + n + (n === 1 ? " photo" : " photos") + (o.thumbs && th && th.err ? " (could not be shown)" : o.thumbs ? " …" : "") + '</div>';
-  const st = !comp || !f.Status ? ""
+      : '<div class="sphn">' + n + (n === 1 ? " photo" : " photos") + (!o.thumbs || !th ? "" : th.err ? " (could not be shown)"
+          : th.list && !th.pending ? " (not found)" : " …") + '</div>';
+  const st = !comp || (!f.Status && !extras) ? ""
     : '<div class="sstate">' + (open ? '<span class="scbad">Open</span>'
         : 'Resolved by ' + esc(shortWho(f.ResolvedBy) || "—") + ' &middot; ' + esc(stamp(f.ResolvedAt))) +
       (o.actions && extras ? ' <button class="chip" data-sstate="' + esc(r.id) + '" data-want="' + (open ? "Resolved" : "Open") + '"' + dis + '>' +

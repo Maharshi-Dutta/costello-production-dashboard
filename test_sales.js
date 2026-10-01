@@ -545,12 +545,15 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   pass("photos: longest side 1600 with aspect kept and no upscale; more than 8 or a non-image refused");
 
   /* ---- 16. sending: the item first, then the photos, then Photos = what landed ---- */
-  const seq = []; let PUT_FAIL = {}, DRIVE = { id: "D" };
+  const seq = []; let PUT_FAIL = {}, DRIVE = { id: "D" }, FILES = {}, LIST_FAIL = false, PATCH_FAIL = false;
   const photoCW = Object.assign({}, fakeCW, {
     listAdd: async (l, f) => { seq.push(["add", l, Object.assign({}, f)]); return listAPI.listAdd(l, f); },
-    listPatch: async (l, id, f) => { seq.push(["patch", id, Object.assign({}, f)]); return listAPI.listPatch(l, id, f); },
+    listPatch: async (l, id, f) => { seq.push(["patch", id, Object.assign({}, f)]); if (PATCH_FAIL) throw new Error("PATCH x -> 500 boom"); return listAPI.listPatch(l, id, f); },
     salesPhotoDrive: async () => DRIVE,
-    salesPhotoPut: async (folder, name, blob) => { seq.push(["put", folder, name]); if (PUT_FAIL[name]) throw new Error("upload refused"); return { id: "f" + name }; }
+    salesPhotoPut: async (folder, name, blob) => { seq.push(["put", folder, name]); if (PUT_FAIL[name]) throw new Error("upload refused");
+      (FILES[folder] = FILES[folder] || {})[name] = 1; return { id: "f" + name }; },     // replace: a name is one file
+    salesPhotoList: async folder => { seq.push(["list", folder]); if (LIST_FAIL) throw new Error("GET x -> 503 busy");
+      return Object.keys(FILES[folder] || {}).map(name => ({ name })); }
   });
   const pctx = (o) => Object.assign(ctx(), { CW: photoCW, extras: true }, o || {});
   resetLists(); seq.length = 0; PUT_FAIL = { "2.jpg": 1 };
@@ -560,8 +563,8 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
     [0, "Open", "Person B", "", "complaint"], "added with Photos 0 and Status Open");
   const folder = S.photoFolder(seq[0][2].Title);
   assert(/^NO JOB-/.test(folder) && !/[|:]/.test(folder), folder);
-  assert.deepStrictEqual(seq.slice(1).map(s => s[0] + ":" + (s[2] && s[2].Photos != null ? s[2].Photos : s[2])),
-    ["put:1.jpg", "put:2.jpg", "put:3.jpg", "patch:2"], "one by one, then Photos = the number that landed");
+  assert.deepStrictEqual(seq.slice(1).map(s => s[0] + ":" + (s[0] === "list" ? s[1] : s[2] && s[2].Photos != null ? s[2].Photos : s[2])),
+    ["put:1.jpg", "put:2.jpg", "put:3.jpg", "list:" + folder, "patch:2"], "one by one, then Photos = what the folder holds");
   assert.strictEqual(ITEMS[sent.id].fields.Photos, 2, "the message stays, with Photos = 2");
   assert.strictEqual(ITEMS[sent.id].fields.Text, "Glass scratched");
   assert.strictEqual(sent.note, "1 of 3 photos failed — send them again from the message");
@@ -569,7 +572,7 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   /* every photo fails: still sent, Photos stays 0, no PATCH */
   resetLists(); seq.length = 0; PUT_FAIL = { "1.jpg": 1, "2.jpg": 1 };
   const s2 = await S.sendMessage(pctx(), { kind: "report", job: "r0005", text: "Site visit", photos: ["a", "b"] });
-  assert.deepStrictEqual(seq.map(s => s[0]), ["add", "put", "put"]);
+  assert.deepStrictEqual(seq.map(s => s[0]), ["add", "put", "put", "list"], "nothing landed: no PATCH");
   assert.strictEqual(ITEMS[s2.id].fields.Photos, 0); assert.strictEqual(ITEMS[s2.id].fields.Status, undefined, "Status only for a complaint");
   assert(/2 of 2 photos failed/.test(s2.note));
   /* the library is missing: no upload, the message is sent and says so */
@@ -583,7 +586,36 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.deepStrictEqual(Object.keys(seq[0][2]).sort(), ["At", "From", "Job", "Kind", "ReplySeen", "Text", "Title"]);
   assert.strictEqual(seq[0][2].Text, "Customer: Person B\nLate", "the customer kept in the text");
   assert.strictEqual(seq.length, 1); assert(/no Photos column/.test(s4.note));
-  assert.throws(() => S.addPhotos(pctx({ extras: false }), { id: "1" }, ["a"]), /no Photos column/);
+  await assert.rejects(S.addPhotos(pctx({ extras: false }), { id: "1" }, ["a"]), /no Photos column/);
+  /* (review 3) the listing fails: Photos falls back to what landed */
+  resetLists(); seq.length = 0; FILES = {}; LIST_FAIL = true;
+  const s5 = await S.sendMessage(pctx(), { kind: "report", job: "R0005", text: "x", photos: ["a", "b"] });
+  assert.strictEqual(ITEMS[s5.id].fields.Photos, 2); LIST_FAIL = false;
+  /* (review 3) the count's PATCH fails: the photos are there, and the note says the count was not saved */
+  resetLists(); seq.length = 0; FILES = {}; PATCH_FAIL = true;
+  const s6 = await S.sendMessage(pctx(), { kind: "report", job: "R0005", text: "x", photos: ["a"] });
+  assert(/photos are saved, but their count could not be/.test(s6.note), s6.note);
+  assert.strictEqual(ITEMS[s6.id].fields.Photos, 0, "the list still says 0 - the window lists the folder anyway");
+  assert.strictEqual(Object.keys(FILES[S.photoFolder(s6.fields.Title)]).length, 1); PATCH_FAIL = false;
+  /* (review 1) the column check runs inside the send: a complaint never goes out without Status */
+  resetLists(); seq.length = 0; let checks = 0;
+  await S.sendMessage(pctx({ extras: async () => { checks++; return true; } }), { kind: "complaint", customer: "Person B", text: "x" });
+  assert.strictEqual(checks, 1); assert.strictEqual(seq[0][2].Status, "Open", "the late check found the columns: Status sent");
+  resetLists(); seq.length = 0;
+  await S.sendMessage(pctx({ extras: async () => false }), { kind: "complaint", customer: "Person B", text: "x" });
+  assert.strictEqual(seq[0][2].Status, undefined, "still missing: nothing written to a column that is not there");
+  /* (review 9) the job number: at most 40 characters; a Status or Move needs a job on the sheet */
+  resetLists(); seq.length = 0;
+  const onSheet = id => id === "R0005";
+  assert.throws(() => S.sendMessage(pctx({ hasJob: onSheet }), { kind: "status", job: "r0099", text: "x" }), /R0099 is not on the Production sheet/);
+  assert.throws(() => S.sendMessage(pctx({ hasJob: onSheet }), { kind: "move", job: "R0099", text: "x" }), /not on the Production sheet/);
+  assert.strictEqual(seq.length, 0, "refused before anything is written");
+  await S.sendMessage(pctx({ hasJob: onSheet }), { kind: "status", job: "r0005", text: "x" });
+  await S.sendMessage(pctx({ hasJob: onSheet }), { kind: "report", job: "R0099", text: "x" });
+  assert.deepStrictEqual(seq.map(s => s[2].Job), ["R0005", "R0099"], "a report may name a job no longer on the sheet");
+  resetLists(); seq.length = 0;
+  await S.sendMessage(pctx(), { kind: "report", job: "x".repeat(60), text: "x" });
+  assert.strictEqual(seq[0][2].Job.length, 40, "job no. cut to 40");
   /* refused before anything is written */
   resetLists(); seq.length = 0;
   assert.throws(() => S.sendMessage(pctx({ who: "" }), { kind: "report", text: "x" }), /Pick your name/, "no name, no send");
@@ -598,23 +630,29 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
 
   /* ---- 17. Add photos on a message already sent: numbered after what is there ---- */
   resetLists(); seq.length = 0; PUT_FAIL = {};
+  /* 2.jpg had failed: the folder holds 1.jpg and 3.jpg, the list says 2 */
+  const F7 = "R0005-2026-10-01T09-00-00.000Z";
+  FILES = { [F7]: { "1.jpg": 1, "3.jpg": 1 } };
   ITEMS["7"] = { list: "Sales requests", fields: { Title: "R0005|2026-10-01T09:00:00.000Z", Job: "R0005", Kind: "report", Photos: 2 } };
   const ad = await S.addPhotos(pctx(), { id: "7" }, ["x", "y"]);
-  assert.deepStrictEqual(seq.map(s => s[0] + ":" + (s[0] === "put" ? s[1] + "/" + s[2] : s[2].Photos)),
-    ["put:R0005-2026-10-01T09-00-00.000Z/3.jpg", "put:R0005-2026-10-01T09-00-00.000Z/4.jpg", "patch:4"]);
+  assert.deepStrictEqual(seq.map(s => s[0] + ":" + (s[0] === "put" ? s[2] : s[0] === "list" ? "" : s[2].Photos)),
+    ["list:", "put:4.jpg", "put:5.jpg", "list:", "patch:4"], "numbered past the highest file, so 3.jpg is never replaced");
+  assert.deepStrictEqual(Object.keys(FILES[F7]).sort(), ["1.jpg", "3.jpg", "4.jpg", "5.jpg"]);
   assert.strictEqual(ad.photos, 4); assert.deepStrictEqual(NOTES.pop(), ["R0005", "Sales photos added", 2, 4]);
   await assert.rejects(S.addPhotos(pctx(), { id: "7" }, img(5)), /At most 8/, "4 there plus 5 is refused");
-  pass("Add photos: re-reads the count, numbers after it, PATCHes the new total");
+  assert.strictEqual(S.nextPhotoNo([{ name: "1.jpg" }, { name: "12.jpg" }, { name: "x.png" }]), 12);
+  pass("Add photos: reads the folder, numbers past the highest file, PATCHes Photos from the listing");
 
   /* ---- 18. resolving: read first, refused when already resolved ---- */
   const CQ = { c: { Kind: "complaint", Job: "", Status: "Open" }, d: { Kind: "complaint", Status: "Resolved", ResolvedBy: "colleague@example.test", ResolvedAt: "2026-10-01T09:30:00Z" },
-               e: { Kind: "report" } }, cp = [];
-  const cCW = { listItem: async (l, id) => CQ[id] ? { id, fields: Object.assign({}, CQ[id]) } : null,
-                listPatch: async (l, id, f) => { cp.push([l, id, f]); Object.assign(CQ[id], f); } };
+               e: { Kind: "report" } }, cp = []; let cpOpts = null;
+  const cCW = { listItem: async (l, id) => CQ[id] ? { id, fields: Object.assign({}, CQ[id]), etag: '"' + id + ',1"' } : null,
+                listPatch: async (l, id, f, o) => { cp.push([l, id, f]); cpOpts = o; Object.assign(CQ[id], f); } };
   window.CW_PAGE = undefined;                                          // the office
   const rs = await S.setComplaint(cCW, "c", "Resolved", "office@example.test", "2026-10-01T10:00:00Z");
   assert.deepStrictEqual(cp, [["Sales requests", "c", { Status: "Resolved", ResolvedBy: "office@example.test", ResolvedAt: "2026-10-01T10:00:00Z" }]],
     "Status, ResolvedBy, ResolvedAt and nothing else");
+  assert.deepStrictEqual(cpOpts, { ifMatch: '"c,1"' }, "(review 4) only if the item is still as it was read");
   assert.strictEqual(rs.Status, "Resolved");
   await assert.rejects(S.setComplaint(cCW, "d", "Resolved", "office@example.test"), /Already resolved by colleague, .* - nothing was written/);
   await assert.rejects(S.setComplaint(cCW, "c", "Resolved", "office@example.test"), /Already resolved by office/, "a second resolve is refused");
@@ -628,6 +666,19 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.deepStrictEqual(NOTES, [["—", "Complaint", "Resolved", "Open"]]);
   await assert.rejects(S.resolve(Object.assign(ctx(), { CW: cCW }), "c", "Open"), /already open/);
   assert.throws(() => S.resolve(Object.assign(ctx(), { CW: cCW, who: "" }), "c", "Resolved"), /Pick your name/);
+  /* (review 1) a complaint with an empty Status is open, and can be resolved */
+  CQ.g = { Kind: "complaint", Status: "" };
+  assert.strictEqual((await S.resolve(Object.assign(ctx(), { CW: cCW }), "g", "Resolved")).Status, "Resolved");
+  await assert.rejects(S.resolve(Object.assign(ctx(), { CW: cCW }), "g", "Open").then(() => S.resolve(Object.assign(ctx(), { CW: cCW }), "g", "Open")), /already open/);
+  /* (review 4) someone else wrote between the read and the PATCH: 412, re-read, say who, nothing written */
+  CQ.h = { Kind: "complaint", Status: "Open" };
+  const raceCW = { listItem: cCW.listItem, listPatch: async (l, id) => {
+    Object.assign(CQ[id], { Status: "Resolved", ResolvedBy: "colleague@example.test", ResolvedAt: "2026-10-01T10:05:00Z" });
+    throw new Error("PATCH /sites/S/lists/L/items/" + id + "/fields -> 412 {\"error\":{\"code\":\"preconditionFailed\"}}"); } };
+  let raced = null;
+  try { await S.setComplaint(raceCW, "h", "Resolved", "office@example.test"); } catch (e) { raced = e; }
+  assert(raced && /Someone got there first - it now says Resolved \(colleague, .*\)\. Nothing was written\./.test(raced.message), raced && raced.message);
+  assert.strictEqual(raced.current.ResolvedBy, "colleague@example.test", "the page is handed what is there now");
   pass("resolve: re-read first, refused (who and when) when already resolved; reopen from the Sales page, logged");
 
   /* ---- 19. the office's bell and order: open complaints count and come first ---- */
@@ -636,10 +687,19 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
     { id: "2", fields: { Kind: "complaint", Status: "Open", At: "2026-10-01T08:00:00Z", Reply: "On it" } }, // answered, open
     { id: "3", fields: { Kind: "complaint", Status: "Open", At: "2026-10-01T07:00:00Z", Reply: "" } },      // both: counted once
     { id: "4", fields: { Kind: "complaint", Status: "Resolved", At: "2026-10-01T10:00:00Z", Reply: "Fixed" } },
-    { id: "5", fields: { Kind: "complaint", At: "2026-10-01T11:00:00Z", Reply: "Old" } }];                  // no Status column then
-  assert.strictEqual(S.bellCount(B), 3, "unanswered plus open complaints, each once");
+    { id: "5", fields: { Kind: "complaint", At: "2026-10-01T11:00:00Z", Reply: "Old" } }];                  // empty Status: open (review 1)
+  assert.strictEqual(S.bellCount(B), 4, "unanswered plus open complaints, each once; an empty Status counts as open");
   assert.strictEqual(S.unanswered(B).length, 2);
-  assert.deepStrictEqual(S.officeOrder(B).map(r => r.id), ["2", "3", "1", "5", "4"], "open complaints first, then unanswered, then newest");
+  assert.deepStrictEqual(S.officeOrder(B).map(r => r.id), ["5", "2", "3", "1", "4"], "open complaints first, then unanswered, then newest");
+  /* (review 2) a reply is marked seen once: a second call with the same window's list writes nothing */
+  const ms = [], msCW = Object.assign({}, fakeCW, { listPatch: async (l, id, f) => { ms.push(id); } });
+  const RS = [{ id: "m1", fields: { Reply: "Yes", ReplySeen: "No" } }, { id: "m2", fields: { Reply: "No", ReplySeen: "No" } }];
+  assert.strictEqual(await S.markSeen(Object.assign(ctx(), { CW: msCW }), RS), 2);
+  assert.strictEqual(await S.markSeen(Object.assign(ctx(), { CW: msCW }), RS), 0, "already queued: nothing sent again");
+  assert.deepStrictEqual(ms, ["m1", "m2"]);
+  /* (review 8) a file over 40 MB is refused before decoding */
+  assert(/“huge.jpg” is over 40 MB/.test(S.photoRefusal([{ name: "huge.jpg", type: "image/jpeg", size: 41 * 1024 * 1024 }], 0)));
+  assert.strictEqual(S.photoRefusal([{ name: "ok.jpg", type: "image/jpeg", size: 39 * 1024 * 1024 }], 0), "");
   assert.strictEqual(S.photoCount({ fields: { Photos: "3" } }), 3); assert.strictEqual(S.photoCount({ fields: {} }), 0);
   assert.strictEqual(S.extrasIn(["Title", "Customer", "Status", "ResolvedBy", "ResolvedAt", "Photos"]), true);
   assert.strictEqual(S.extrasIn(["Title", "Customer", "Status"]), false); assert.strictEqual(S.extrasIn(null), false);
@@ -660,7 +720,8 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   CW._resetListIds();
   await CW.salesPhotoPut("R0005-x", "1.jpg", new Blob(["jpegbytes"], { type: "image/jpeg" }));
   const putq = seen.find(x => x.m === "PUT");
-  assert.strictEqual(putq.p, "/sites/SITE/drives/DRV/root:/R0005-x/1.jpg:/content?@microsoft.graph.conflictBehavior=rename");
+  assert.strictEqual(putq.p, "/sites/SITE/drives/DRV/root:/R0005-x/1.jpg:/content?@microsoft.graph.conflictBehavior=replace",
+    "(review 3) replace: a retried PUT of the same name is one file, not a duplicate");
   assert(putq.raw && putq.ct === "image/jpeg", "the photo goes as bytes, not JSON");
   assert.strictEqual(CW._scopeFor(putq.p), CW.SCOPES, "the file scope the page already has: no new scope");
   assert.deepStrictEqual(await CW.salesPhotoList("R0005-x"), [{ id: "F1", name: "1.jpg", webUrl: "https://example.test/1.jpg", thumb: "https://example.test/t1" }]);
@@ -674,6 +735,22 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   CW._resetListIds();
   assert.strictEqual(await CW.salesPhotoDrive(), null, "no library: null");
   assert.deepStrictEqual(await CW.salesPhotoList("R0005-x"), []);
+  /* (review 7) several reads at once share one lookup */
+  let looks = 0;
+  global.fetch = async (url, init) => { looks++; return { ok: true, status: 200, text: async () => JSON.stringify({ value: [{ id: "DRV", name: "Sales photos" }] }) }; };
+  CW._resetListIds();
+  const drv = await Promise.all([CW.salesPhotoDrive(), CW.salesPhotoDrive(), CW.salesPhotoDrive()]);
+  assert.strictEqual(looks, 1); assert(drv[0] === drv[1] && drv[1] === drv[2] && drv[0].id === "DRV");
+  /* (review 4) listPatch with ifMatch sends If-Match */
+  const hdrs = [];
+  global.fetch = async (url, init) => { hdrs.push([init.method, init.headers["If-Match"]]);
+    const p = String(url);
+    const body = /\/lists\?/.test(p) ? { value: [{ id: "L", displayName: "Sales requests" }] } : {};
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) }; };
+  CW._resetListIds();
+  await CW.listPatch("Sales requests", "5", { Status: "Resolved" }, { ifMatch: '"5,3"' });
+  await CW.listPatch("Sales requests", "5", { ReplySeen: "Yes" });
+  assert.deepStrictEqual(hdrs.filter(h => h[0] === "PATCH"), [["PATCH", '"5,3"'], ["PATCH", undefined]]);
   global.fetch = realFetch; CW._resetListIds();
   pass("graph.js: 'Sales photos' found by name, PUT .../root:/<folder>/<n>.jpg:/content as bytes, children with thumbnails, Sales-only upload");
 
