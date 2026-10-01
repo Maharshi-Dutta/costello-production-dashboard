@@ -4264,7 +4264,11 @@ async function feedFabrication() {
                 plan.patches.length + " changed, " + plan.unchanged + " already right)");
     if (r.sent) {
       const after = await CW.listItems(FABC.FB_LIST, opts);
-      if (after) { FABR_ITEMS = after; FABR_TOK.items = null; }
+      /* and the board is told (2026-10-01): the next poll's full read now
+         equals this one, and sameRows() calls that "no change", so a feed
+         continuing past the 60-write cap otherwise left the board drawing the
+         rows of its first run until something else redrew it */
+      if (after) { FABR_ITEMS = after; FABR_TOK.items = null; redrawFabrication(); }
     }
     return r;
   } catch (e) {

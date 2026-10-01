@@ -73,6 +73,16 @@
   #wtabs button { background:transparent; color:#a8a49a; border:0; min-height:48px; padding:0 13px;
                   font-size:14px; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums }
   #wtabs button.on { background:var(--onbrand); color:var(--brand) }
+  /* Everything | My work | Assigned to me: the same segmented pill, on row 1 */
+  #wview { display:flex; flex:none; border:1px solid var(--brand-line); border-radius:24px;
+           overflow:hidden; background:var(--brand-2) }
+  #wview button { background:transparent; color:#a8a49a; border:0; min-height:44px; padding:0 12px;
+                  font-size:14px; font-weight:600; white-space:nowrap }
+  #wview button.on { background:var(--onbrand); color:var(--brand) }
+  #wview[hidden] { display:none }
+  /* below a wide tablet the "updated" stamp gives its room to the view switch,
+     so the header stays two rows at 700 px */
+  @media (max-width:900px){ #upd { display:none } }
   #switchbtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:48px; padding:0 15px; font-size:14px; font-weight:600;
                white-space:nowrap; flex:none }
@@ -242,6 +252,11 @@
   <div class="toprow">
     <span class="brand">Fabrication</span>
     <span id="whois"></span>
+    <!-- what to draw (2026-10-01): display only, the tap gate is unchanged.
+         On row 1 so row 2 keeps its width at 700 px. -->
+    <span id="wview" class="seg" role="group" aria-label="Show" hidden>
+      <button id="vall" aria-pressed="true">Everything</button><button id="vmine" aria-pressed="false">My work</button><button id="vasg" aria-pressed="false">Assigned to me</button>
+    </span>
     <span id="upd"></span>
   </div>
   <div class="toprow">

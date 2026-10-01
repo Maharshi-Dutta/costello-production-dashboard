@@ -1225,6 +1225,17 @@ office's Assign picker leaves the person out for that part, and an Approve of
 a request for a part the person does not do is refused with a message. With
 no assignments list (Part A) the same per-part rule is the whole gate.
 
+**What the tablet draws: Everything | My work | Assigned to me (owner,
+2026-10-01, `docs/specs/2026-10-01-fabrication-my-work-filter.md`).** A switch
+on the header's first row. *Everything* is the whole board. *My work* draws
+only the groups and parts the signed-in person may do (the `Stages` syntax
+above); *Assigned to me* only the parts they hold an `Assigned` row on (a
+`Requested` row does not count). A group with nothing left is not drawn, nor a
+job. The tab counts, the search and its "N more" line, and the urgent-first
+sort follow the view; notifications do not. **Display only** — the tap gate is
+unchanged, and the view never grants a tap. Everything is the default; the
+choice is remembered per person on the device (`cw_fabview`).
+
 **Finished on the sheet — green (owner, 2026-09-28).** A job whose section is
 **Ready to fit**, **Ready, customer won't take** or **Collect & supply only**
 (exactly those three; not "Can sell as second hand", not In production) is

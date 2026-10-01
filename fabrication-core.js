@@ -364,6 +364,44 @@ function fbEligible(person, group, part) {
   return part ? !!m[fbLow(part)] : FB_PARTS.some(p => m[p]);
 }
 
+/* ---- the tablet's view filter (owner, 2026-10-01) -----------------------------
+   "Everything | My work | Assigned to me". DISPLAY ONLY: it decides which
+   lines are drawn, never which may be tapped (fbCanTap is the gate).
+     all      - the cards as they are;
+     mine     - only the parts the person is eligible for (fbEligible, so the
+                Stages syntax incl. GROUP:parts and ALL:parts);
+     assigned - only the parts the person holds an Assigned row on (Qty > 0;
+                a Requested row does not count).
+   A group left with no line is dropped, a card left with no group is dropped.
+   Kept groups and cards are copies with their counts and colours re-added from
+   what is still drawn; the records the tap gate reads are not touched. */
+const FB_VIEWS = ["all", "mine", "assigned"];
+const fbViewOf = v => (FB_VIEWS.indexOf(v) >= 0 ? v : "all");
+function fbViewFilter(cards, person, mode, idx) {
+  const m = fbViewOf(mode);
+  if (m === "all") return (cards || []).slice();
+  const keepPart = (c, g, part) => m === "mine" ? fbEligible(person, g.group, part)
+    : fbMine(idx, person, c.job, g.group, part) > 0;
+  const out = [];
+  (cards || []).forEach(c => {
+    const groups = [];
+    (c.groups || []).forEach(g => {
+      const lines = (g.lines || []).filter(l => keepPart(c, g, l.part));
+      if (!lines.length) return;
+      const done = lines.reduce((n, l) => n + l.done, 0), total = lines.reduce((n, l) => n + l.total, 0);
+      groups.push(Object.assign({}, g, { lines: lines, done: done, total: total, left: Math.max(0, total - done),
+        colour: fbRollUp(lines.map(l => l.colour)) }));
+    });
+    if (!groups.length) return;
+    const done = groups.reduce((n, g) => n + g.done, 0), total = groups.reduce((n, g) => n + g.total, 0);
+    out.push(Object.assign({}, c, { groups: groups, done: done, total: total, left: Math.max(0, total - done),
+      colour: fbRollUp(groups.map(g => g.colour)) }));
+  });
+  return out;
+}
+/** The remembered choice, per person: { "<person>": "all" | "mine" | "assigned" }. */
+const fbViewFor = (store, name) => fbViewOf((store || {})[fbTxt(name)]);
+
 /* ---- the writes one tap makes ------------------------------------------------ */
 function fbApplyTap(row, part, delta) {
   const k = fbTxt(part).trim().toLowerCase();
@@ -690,6 +728,7 @@ const FABC = {
   fbSlice, fbRowOrder, fbFeederFields, fbSeedFields, fbHashRow,
   fbActive, fbOnSheet, fbColour, fbRollUp, fbRecord, fbCards, fbOfficeBoard, fbJobCard,
   fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible, fbParseStages, fbSheetDone,
+  FB_VIEWS, fbViewOf, fbViewFilter, fbViewFor,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
   fbCellWord, fbCellWant, fbReportJobs,
   FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,

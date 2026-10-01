@@ -53,6 +53,7 @@ function loadPerson() {
   const hit = PEOPLE.find(p => p.name === raw.name);
   if (!hit) return;
   PERSON = hit; LAST_TAP = Number(raw.at) || Date.now();
+  loadView();
 }
 function savePerson() {
   try {
@@ -67,7 +68,10 @@ function clearSearch() {
   const sb = $("#search");
   if (sb) sb.value = "";
 }
-function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {}; clearSearch(); touch(); render(); }
+function pickPerson(p) {
+  PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {};
+  loadView(); clearSearch(); touch(); render();
+}
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {};
   clearSearch(); savePerson(); render();
@@ -422,7 +426,25 @@ function boardNow() {
   tabs.finished = F.fbUrgentFirst(tabs.finished);
   RECS_BY_ID = {};
   tabs.floor.concat(tabs.finished).forEach(c => c.groups.forEach(g => { RECS_BY_ID[String(g.id)] = g; }));
-  return { tabs: tabs };
+  /* the view filter (2026-10-01) narrows what is DRAWN, after the records the
+     tap gate reads were taken from the whole board above */
+  const view = { floor: F.fbViewFilter(tabs.floor, PERSON, VIEW, IDX),
+                 finished: F.fbViewFilter(tabs.finished, PERSON, VIEW, IDX) };
+  return { tabs: view, all: tabs };
+}
+
+/* ---- the view: Everything | My work | Assigned to me (2026-10-01) ----------
+   Display only. Remembered per person in cw_fabview; Everything by default. */
+const VIEW_KEY = "cw_fabview";
+let VIEW = "all";
+function viewStore() {
+  try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function loadView() { VIEW = PERSON ? F.fbViewFor(viewStore(), PERSON.name) : "all"; }
+function setView(v) {
+  VIEW = F.fbViewOf(v);
+  if (!PERSON) return;
+  try { const s = viewStore(); s[PERSON.name] = VIEW; localStorage.setItem(VIEW_KEY, JSON.stringify(s)); } catch (e) {}
 }
 
 /* ---- Part B: the assignments list ------------------------------------------
@@ -640,7 +662,10 @@ function qState(c) {
          "/" + c.groups.map(g => F.FB_PARTS.map(p => JSON.stringify(lineState(g, p))).join("")).join(";") +
          "/" + badgeFor(c.job) + (Object.keys(TAKING).length ? "t" : "");
 }
-const pState = () => (PERSON ? PERSON.name + "|" + (PERSON.stages || []).join(",") : "");
+/* the view is in here too: a switch redraws every card, since the card
+   signature does not know which lines the view drew */
+const pState = () => (PERSON ? PERSON.name + "|" + (PERSON.stages || []).join(",") + "|" + VIEW +
+  (VIEW === "assigned" ? "|" + JSON.stringify(IDX) : "") : "");
 function makeCard(c) {
   const el = document.createElement("div");
   el.className = "card c-" + (c.colour || "none") + (c.finished ? " done" : "");
@@ -712,7 +737,16 @@ function render() {
   if (sb) { sb.hidden = !boarding; sb.style.display = boarding ? "" : "none"; }
   const now = boarding ? boardNow() : null;
   /* the notices, before any card is drawn: the badge is part of the card */
-  if (now) noticesNow(now.tabs.floor.concat(now.tabs.finished)); else UNSEEN = [];
+  /* ... over the WHOLE board: notifications are never filtered by the view */
+  if (now) noticesNow(now.all.floor.concat(now.all.finished)); else UNSEEN = [];
+  const vw = $("#wview");
+  if (vw) { vw.hidden = !boarding; vw.style.display = boarding ? "" : "none"; }
+  [["#vall", "all"], ["#vmine", "mine"], ["#vasg", "assigned"]].forEach(([s, v]) => {
+    const b = $(s);
+    if (!b) return;
+    b.className = VIEW === v ? "on" : "";
+    b.setAttribute("aria-pressed", VIEW === v ? "true" : "false");
+  });
   const ban = $("#banner");
   if (ban) {
     const on = !!UNSEEN.length;
@@ -765,8 +799,15 @@ function render() {
   const board = F.fbFilter(now.tabs[TAB], QUERY);
   if (!board.length) {
     LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
+    /* Assigned to me with the list not read (or not there): say so, rather
+       than an empty board that looks like "nothing assigned" */
+    const notLoaded = VIEW === "assigned" && ASSIGN_OK !== true;
     host.innerHTML = '<div class="msg">' +
-      (QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") + " matches “" + esc(QUERY) + "”."
+      (notLoaded ? (ASSIGN_OK === false ? "Assignments are not set up yet — switch to Everything or My work."
+                                        : "Assignments not loaded yet — try again in a moment.")
+       : QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") + " matches “" + esc(QUERY) + "”."
+       : VIEW !== "all" && (now.all.floor.length || now.all.finished.length)
+         ? "Nothing for you here — switch to Everything to see all jobs."
        : TAB === "floor" ? "Nothing on the floor right now." : "No finished jobs yet.") + '</div>';
     return;
   }
@@ -905,6 +946,13 @@ async function start() {
   if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
   const ban = $("#banner");
   if (ban) ban.onclick = () => { touch(); markSeen(""); };
+  [["#vall", "all"], ["#vmine", "mine"], ["#vasg", "assigned"]].forEach(([s, v]) => {
+    const b = $(s);
+    if (b) b.onclick = () => {
+      if (VIEW !== v) { setView(v); try { window.scrollTo(0, 0); } catch (e) {} }
+      touch(); render();
+    };
+  });
   render();
   await readPeople();
   await readAssign();

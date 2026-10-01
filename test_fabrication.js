@@ -804,6 +804,76 @@ const pass = m => { n++; console.log("  ok  " + m); };
   A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");   // openStationLog armed the tick
   pass("the Floor log reads each station's log (board first when its site is unknown), and says who is still reading");
 
+  /* ================= 15. the view filter: Everything | My work | Assigned (2026-10-01) ===== */
+  const vRow = (id, job, group, f, s, t, section) => ({ id: id, fields: { Title: job + "|" + group, Job: job,
+    Group: group, Frames: f, Sashes: s, Transoms: t, FramesDone: 0, Section: section || "In production",
+    Active: section ? "No" : "Yes", OnSheet: "Yes", Seq: Number(id) } });
+  const vItems = [vRow("1", "V1", "PVC SMART", 2, 2, 0), vRow("2", "V1", "CASEMENT WINDOWS", 4, 4, 1),
+                  vRow("3", "V2", "CASEMENT WINDOWS", 3, 0, 0), vRow("4", "V3", "PVC SMART", 1, 1, 0, "Ready to fit")];
+  const vCards = F.fbOfficeBoard(vItems);
+  const smart = F.fbPeople([{ id: "1", fields: { Title: "Person S", Station: "Fabrication", Active: "Yes",
+    Stages: "PVC SMART:sashes" } }])[0];
+  const allSash = F.fbPeople([{ id: "2", fields: { Title: "Person T", Station: "Fabrication", Active: "Yes",
+    Stages: "ALL:sashes" } }])[0];
+  const shape = cs => cs.map(c => c.job + "[" + c.groups.map(g => g.group + ":" + g.lines.map(l => l.part).join("+")).join(",") + "]");
+  assert.deepStrictEqual(F.fbViewFilter(vCards, smart, "all", {}), vCards, "Everything is the board as it is");
+  assert.deepStrictEqual(shape(F.fbViewFilter(vCards, smart, "mine", {})),
+    ["V1[PVC SMART:sashes]", "V3[PVC SMART:sashes]"],
+    "My work, PVC SMART:sashes: only that part; V2 (no eligible part) gone; the green V3 kept, it has an eligible part");
+  assert.deepStrictEqual(shape(F.fbViewFilter(vCards, allSash, "mine", {})),
+    ["V1[CASEMENT WINDOWS:sashes,PVC SMART:sashes]", "V3[PVC SMART:sashes]"],
+    "My work, ALL:sashes: the sashes of every group; V2 has no sashes and goes");
+  const mineV1 = F.fbViewFilter(vCards, allSash, "mine", {})[0];
+  assert.deepStrictEqual([mineV1.total, mineV1.groups[0].total], [6, 4], "counts are re-added from what is drawn");
+  assert.strictEqual(vCards[0].total, 13, "and the board's own card is untouched");
+  const vIdx = F.fbAssignIndex(F.fbAssignRows([
+    { id: "1", fields: { Job: "V1", Group: "CASEMENT WINDOWS", Part: "frames", Person: "Person T", Qty: 2, Status: "Assigned" } },
+    { id: "2", fields: { Job: "V1", Group: "PVC SMART", Part: "sashes", Person: "Person T", Qty: 1, Status: "Requested" } },
+    { id: "3", fields: { Job: "V2", Group: "CASEMENT WINDOWS", Part: "frames", Person: "Person T", Qty: 3, Status: "Removed" } },
+    { id: "4", fields: { Job: "V1", Group: "CASEMENT WINDOWS", Part: "sashes", Person: "Person S", Qty: 4, Status: "Assigned" } }]));
+  assert.deepStrictEqual(shape(F.fbViewFilter(vCards, allSash, "assigned", vIdx)), ["V1[CASEMENT WINDOWS:frames]"],
+    "Assigned to me: only the Assigned row - not the Requested, not the Removed, not someone else's");
+  assert.deepStrictEqual(F.fbViewFilter(vCards, smart, "nonsense", vIdx), vCards, "an unknown mode is Everything");
+  assert.deepStrictEqual([F.fbViewFor({ "Person S": "mine" }, "Person S"), F.fbViewFor({}, "Person S"),
+                          F.fbViewFor({ "Person S": "junk" }, "Person S")], ["mine", "all", "all"]);
+
+  /* the tablet page: tabs, search and memory follow the view; the gate does not */
+  T("ITEMS = " + JSON.stringify(vItems) + "; PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person S', " +
+    "Station: 'Fabrication', Active: 'Yes', Stages: 'PVC SMART:sashes' } }, { id: '2', fields: { Title: 'Person T', " +
+    "Station: 'Fabrication', Active: 'Yes', Stages: 'ALL:sashes' } }]); QUERY = ''; TAB = 'floor';");
+  setAssign(false);
+  T("pickPerson(PEOPLE[0]);");
+  assert.strictEqual(T("VIEW"), "all", "default after sign-in: Everything");
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify([boardNow().tabs.floor.length, boardNow().tabs.finished.length])")), [2, 1]);
+  T("setView('mine'); render();");
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify([boardNow().tabs.floor.length, boardNow().tabs.finished.length])")), [1, 1],
+    "My work: the tab counts follow");
+  assert.ok(/On floor · 1/.test(T("document.querySelector('#tabfloor').textContent")), "the tab button says so");
+  assert.strictEqual(T("F.fbSearchTab(boardNow().tabs, 'V2', 'floor').tab"), "floor",
+    "search follows: V2 is not Person S's work, so it moves no tab");
+  assert.strictEqual(T("mayTap(recordById('2'), 'frames')"), false, "the gate is unchanged: still not theirs");
+  assert.strictEqual(T("recordById('2').group"), "CASEMENT WINDOWS", "and the gate reads the whole board's records");
+  T("pickPerson(PEOPLE[1]);");
+  assert.strictEqual(T("VIEW"), "all", "remembered PER PERSON: Person T starts at Everything");
+  T("setView('assigned'); render();");
+  T("pickPerson(PEOPLE[0]);");
+  assert.strictEqual(T("VIEW"), "mine", "Person S comes back to My work");
+  assert.deepStrictEqual(JSON.parse(T("localStorage.getItem('cw_fabview')")), { "Person S": "mine", "Person T": "assigned" });
+  /* empty states */
+  T("pickPerson(PEOPLE[1]); TAB = 'floor'; render();");
+  assert.ok(/Assignments are not set up yet/.test(T("document.querySelector('#board').innerHTML")),
+    "Assigned to me with no list: said so");
+  setAssign(null);
+  T("render();");
+  assert.ok(/Assignments not loaded yet/.test(T("document.querySelector('#board').innerHTML")), "and while unknown");
+  setAssign(true, []);
+  T("render();");
+  assert.ok(/Nothing for you here — switch to Everything to see all jobs\./.test(T("document.querySelector('#board').innerHTML")),
+    "nothing assigned: the plain line");
+  /* notifications are not filtered: an assignment on a group the view hides still notifies */
+  assert.ok(/now\.all\.floor\.concat\(now\.all\.finished\)/.test(src("fabrication.js")), "notices read the whole board");
+  pass("view filter: Everything / My work / Assigned to me, per person, tabs and search follow, gate unchanged");
+
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
