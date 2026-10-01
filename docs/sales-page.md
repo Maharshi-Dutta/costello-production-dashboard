@@ -121,8 +121,9 @@ the browser (`createImageBitmap` + canvas, longest side 1600, JPEG 0.82,
 refused. `SALESC.sendMessage`: add the item (`Photos` 0, `Status` Open for a
 complaint), upload the photos one by one to the `Sales photos` library
 (`CW.salesPhotoPut`, `PUT /sites/{site}/drives/{drive}/root:/<folder>/<n>.jpg:/content`,
-`conflictBehavior=rename`, folder = the item's Title with `|`/`:` made `-`),
-then PATCH `Photos` to what landed; a failed photo leaves the message and the
+`conflictBehavior=replace`, numbered past the highest file already in the
+folder, folder = the item's Title with `|`/`:` made `-`), then PATCH `Photos`
+to the folder listing's count; a failed photo leaves the message and the
 toast says "N of M photos failed - send them again from the message", and
 "Add photos" on the person's own message (`SALESC.addPhotos`) sends more. One
 `Dashboard Log` line per message: kind, job, photo count, never the text.
