@@ -428,9 +428,8 @@ function boardNow() {
   tabs.floor.concat(tabs.finished).forEach(c => c.groups.forEach(g => { RECS_BY_ID[String(g.id)] = g; }));
   /* the view filter (2026-10-01) narrows what is DRAWN, after the records the
      tap gate reads were taken from the whole board above */
-  const view = { floor: F.fbViewFilter(tabs.floor, PERSON, VIEW, IDX),
-                 finished: F.fbViewFilter(tabs.finished, PERSON, VIEW, IDX) };
-  return { tabs: view, all: tabs };
+  /* ... and places each card by the lines it shows (review M2) */
+  return { tabs: F.fbViewTabs(tabs, PERSON, VIEW, IDX), all: tabs };
 }
 
 /* ---- the view: Everything | My work | Assigned to me (2026-10-01) ----------
@@ -802,17 +801,35 @@ function render() {
     /* Assigned to me with the list not read (or not there): say so, rather
        than an empty board that looks like "nothing assigned" */
     const notLoaded = VIEW === "assigned" && ASSIGN_OK !== true;
+    /* decided from the CURRENT tab (review M1): the whole board's tab empty is
+       the plain wording; the person's work in the other tab is offered as a
+       tap; otherwise there is nothing of theirs at all */
+    const other = TAB === "floor" ? "finished" : "floor";
+    const otherN = now.tabs[other].length;
     host.innerHTML = '<div class="msg">' +
       (notLoaded ? (ASSIGN_OK === false ? "Assignments are not set up yet — switch to Everything or My work."
                                         : "Assignments not loaded yet — try again in a moment.")
        : QUERY.trim() ? "No job under " + (TAB === "floor" ? "On floor" : "Finished") + " matches “" + esc(QUERY) + "”."
-       : VIEW !== "all" && (now.all.floor.length || now.all.finished.length)
-         ? "Nothing for you here — switch to Everything to see all jobs."
-       : TAB === "floor" ? "Nothing on the floor right now." : "No finished jobs yet.") + '</div>';
+       : VIEW === "all" || !now.all[TAB].length
+         ? (TAB === "floor" ? "Nothing on the floor right now." : "No finished jobs yet.")
+       : otherN ? '<button class="again" id="gotab">Nothing for you here — ' + otherN + " for you " +
+           (other === "finished" ? "in Finished" : "on the floor") + " ›</button>"
+       : "Nothing for you here — switch to Everything to see all jobs.") + '</div>';
+    const gt = host.querySelector ? host.querySelector("#gotab") : null;
+    if (gt) gt.onclick = () => switchTab(other);
     return;
   }
   paintBoard(host, board);
   wireBoard(host);
+}
+/** Go to a tab, as the tab buttons do (a search's tab is not remembered). */
+function switchTab(t) {
+  if (TAB !== t) {
+    TAB = t;
+    if (PRESEARCH == null) saveTab();
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }
+  touch(); render();
 }
 function words() {
   return PROBLEM === "reauth" ? "The sign-in has expired. Tap Sign out, then Sign in again."
@@ -930,14 +947,7 @@ async function start() {
     else clearSearch();
     touch(); render();
   };
-  const goTab = t => {
-    if (TAB !== t) {
-      TAB = t;
-      if (PRESEARCH == null) saveTab();
-      try { window.scrollTo(0, 0); } catch (e) {}
-    }
-    touch(); render();
-  };
+  const goTab = switchTab;
   [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
     const b = $(s);
     if (b) b.onclick = () => goTab(t);

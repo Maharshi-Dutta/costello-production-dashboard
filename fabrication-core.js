@@ -399,6 +399,24 @@ function fbViewFilter(cards, person, mode, idx) {
   });
   return out;
 }
+/** The two tabs under a view (review M2, 2026-10-01). Under My work and
+    Assigned to me a card is placed by the lines it SHOWS: every shown line
+    done -> Finished; any shown line not done, on an active In production job
+    -> On floor. A finished-on-sheet (green) card stays in Finished. Everything
+    is the tabs as they are. Board order, then urgent first, as fbTabs' callers. */
+function fbViewTabs(tabs, person, mode, idx) {
+  const m = fbViewOf(mode);
+  const t = tabs || { floor: [], finished: [] };
+  if (m === "all") return { floor: (t.floor || []).slice(), finished: (t.finished || []).slice() };
+  const cards = fbViewFilter((t.floor || []).concat(t.finished || []), person, m, idx);
+  cards.sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
+  const out = { floor: [], finished: [] };
+  cards.forEach(c => {
+    const shownDone = c.groups.every(g => g.lines.every(l => l.done >= l.total));
+    out[c.active && !c.sheetDone && !shownDone ? "floor" : "finished"].push(c);
+  });
+  return { floor: fbUrgentFirst(out.floor), finished: fbUrgentFirst(out.finished) };
+}
 /** The remembered choice, per person: { "<person>": "all" | "mine" | "assigned" }. */
 const fbViewFor = (store, name) => fbViewOf((store || {})[fbTxt(name)]);
 
@@ -728,7 +746,7 @@ const FABC = {
   fbSlice, fbRowOrder, fbFeederFields, fbSeedFields, fbHashRow,
   fbActive, fbOnSheet, fbColour, fbRollUp, fbRecord, fbCards, fbOfficeBoard, fbJobCard,
   fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible, fbParseStages, fbSheetDone,
-  FB_VIEWS, fbViewOf, fbViewFilter, fbViewFor,
+  FB_VIEWS, fbViewOf, fbViewFilter, fbViewTabs, fbViewFor,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
   fbCellWord, fbCellWant, fbReportJobs,
   FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,

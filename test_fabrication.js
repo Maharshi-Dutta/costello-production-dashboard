@@ -874,6 +874,35 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.ok(/now\.all\.floor\.concat\(now\.all\.finished\)/.test(src("fabrication.js")), "notices read the whole board");
   pass("view filter: Everything / My work / Assigned to me, per person, tabs and search follow, gate unchanged");
 
+  /* M2: under a view a card is placed by the lines it SHOWS */
+  const vDone = vItems.map(it => it.id === "1" ? { id: "1", fields: Object.assign({}, it.fields, { SashesDone: 2 }) } : it);
+  const vTabs = F.fbTabs(vDone);
+  assert.deepStrictEqual(vTabs.floor.map(c => c.job), ["V1", "V2"], "Everything: V1 is on the floor (its casement is not done)");
+  const vMine = F.fbViewTabs(vTabs, smart, "mine", {});
+  assert.deepStrictEqual([vMine.floor.map(c => c.job), vMine.finished.map(c => c.job)], [[], ["V1", "V3"]],
+    "My work: V1's only shown line (PVC SMART sashes) is done, so V1 is Finished; the green V3 stays Finished");
+  const vMineT = F.fbViewTabs(vTabs, allSash, "mine", {});
+  assert.deepStrictEqual(vMineT.floor.map(c => c.job), ["V1"], "ALL:sashes: V1's casement sashes are not done, so On floor");
+  assert.deepStrictEqual(F.fbViewTabs(vTabs, smart, "all", {}).floor.map(c => c.job), ["V1", "V2"], "Everything unchanged");
+  const vUrg = F.fbTabs(vItems.map(it => it.id === "3" ? { id: "3", fields: Object.assign({}, it.fields, { Urgent: "job" }) } : it));
+  assert.deepStrictEqual(F.fbViewTabs(vUrg, allSash, "mine", {}).floor.map(c => c.job), ["V1"], "the sort keeps working");
+  pass("M2: under a view, a card's tab follows the lines it shows; green stays Finished; Everything unchanged");
+
+  /* M1: the empty state is decided from the CURRENT tab */
+  const boardHtml = () => T("document.querySelector('#board').innerHTML");
+  setAssign(false);
+  T("ITEMS = " + JSON.stringify(vDone) + "; pickPerson(PEOPLE[0]); setView('mine'); TAB = 'floor'; QUERY = ''; render();");
+  assert.ok(/Nothing for you here — 2 for you in Finished ›/.test(boardHtml()) && /id="gotab"/.test(boardHtml()),
+    "M1(b): nothing of theirs on the floor, 2 in Finished: offered as a tap");
+  T("PEOPLE.push(FABC.fbPeople([{ id: '9', fields: { Title: 'Person U', Station: 'Fabrication', Active: 'Yes', " +
+    "Stages: 'SIDELIGHTS' } }])[0]); pickPerson(PEOPLE[PEOPLE.length - 1]); setView('mine'); TAB = 'floor'; render();");
+  assert.ok(/Nothing for you here — switch to Everything to see all jobs\./.test(boardHtml()),
+    "M1(c): nothing of theirs in either tab");
+  T("ITEMS = ITEMS.filter(it => it.id !== '4'); TAB = 'finished'; render();");
+  assert.ok(/No finished jobs yet\./.test(boardHtml()), "M1(a): the whole board's tab is empty: the plain wording");
+  T("TAB = 'floor'; setView('all'); pickPerson(PEOPLE[0]);");
+  pass("M1: empty state from the current tab: plain / other tab offered / switch to Everything");
+
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
