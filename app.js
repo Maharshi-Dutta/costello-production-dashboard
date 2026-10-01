@@ -10214,12 +10214,21 @@ function renderDrawer() {
    ReplyAt, from the requests window. A missing list hides the bell and says
    nothing more. docs/specs/2026-09-30-sales-page.md                       */
 let SALES_REQS = [], SALES_REQS_OK = null, SALES_DELIV = {}, SALES_JOBS_OK = null, salesListsReading = null;
+/* 2026-10-01: true once `Sales requests` has the five new columns (Customer,
+   Status, ResolvedBy, ResolvedAt, Photos). Until then they are never asked
+   for or written, and the pages say so quietly. Looked for on each read until found. */
+let SALES_REQ_EXTRAS = null;
 function readSalesLists() {
   if (typeof SALESC === "undefined" || typeof CW === "undefined" || !CW || !CW.listItems) return Promise.resolve();
   if (salesListsReading) return salesListsReading;
   const deliv = JSON.stringify(SALES_DELIV[state.sel] || null);
   salesListsReading = (async () => {
-    try { const r = await CW.listItems(SALESC.REQUESTS, { fields: SALESC.REQUEST_FIELDS }); SALES_REQS_OK = r !== null; SALES_REQS = r || []; }
+    if (SALES_REQ_EXTRAS !== true && CW.listColumns) {
+      try { SALES_REQ_EXTRAS = SALESC.extrasIn(await CW.listColumns(SALESC.REQUESTS)); }
+      catch (e) { console.warn("[sales] request columns: " + ((e && e.message) || e)); }
+    }
+    const fields = SALESC.REQUEST_FIELDS.concat(SALES_REQ_EXTRAS === true ? SALESC.REQUEST_EXTRA : []);
+    try { const r = await CW.listItems(SALESC.REQUESTS, { fields }); SALES_REQS_OK = r !== null; SALES_REQS = r || []; }
     catch (e) { console.warn("[sales] requests: " + ((e && e.message) || e)); }
     try { const d = await CW.listItems(SALESC.JOBS, { fields: SALESC.JOBS_FIELDS }); SALES_JOBS_OK = d !== null; SALES_DELIV = SALESC.deliveryMap(d || []); }
     catch (e) { console.warn("[sales] delivery dates: " + ((e && e.message) || e)); }
@@ -10234,7 +10243,7 @@ function readSalesLists() {
 }
 function updateSalesBell() {
   const b = $("#salesreqbtn"); if (!b) return;
-  const n = SALESC.unanswered(SALES_REQS).length;
+  const n = SALESC.bellCount(SALES_REQS);          // unanswered plus open complaints
   b.hidden = SALES_REQS_OK !== true;
   b.textContent = "Sales requests" + (n ? " " + n : "");
   if (b.classList) b.classList.toggle("bell", n > 0);
@@ -10261,16 +10270,74 @@ function salesDeliveryLineHtml(j) {
   return '<div class="sect"><span class="kick">Delivery</span><div style="font-size:13px">Delivery date: <strong>' +
     esc(SALESC.dayWords(d.date)) + '</strong>' + (d.by ? ' &middot; set by ' + esc(d.by) : "") + '</div></div>';
 }
-/** One request as a card; `reply` adds the office's reply box when unanswered. */
-function salesRequestHtml(r, reply) {
+/* Photo thumbnails per message id: { n, list } - read from the Sales photos
+   library only while a requests window is open, once per photo count (never
+   polled). docs/specs/2026-10-01-sales-reports-complaints-photos.md */
+const SALES_THUMBS = {};
+function salesLoadThumbs(reqs, redraw) {
+  if (!CW.salesPhotoList) return;
+  (reqs || []).forEach(r => {
+    const n = SALESC.photoCount(r), t = SALES_THUMBS[r.id];
+    if (!n || (t && t.n === n)) return;
+    SALES_THUMBS[r.id] = { n, list: null };
+    CW.salesPhotoList(SALESC.photoFolder(r.fields.Title))
+      .then(list => { SALES_THUMBS[r.id] = { n, list }; redraw(); })
+      .catch(e => { SALES_THUMBS[r.id] = { n, list: null, err: 1 }; console.warn("[sales] photos: " + ((e && e.message) || e)); redraw(); });
+  });
+}
+/** Mark resolved / Reopen, on either page. The Sales page goes through its own
+    queue and picked name (salesResolve, sales.js); the office reads first too. */
+function salesWireMsgs(host, redraw) {
+  host.querySelectorAll("[data-sstate]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.sstate, want = b.dataset.want, r = SALES_REQS.find(x => x.id === id);
+    b.disabled = true;
+    try {
+      let now;
+      if (isSales()) now = await salesResolve(id, want);
+      else {
+        if (CW.listConsent) await CW.listConsent();
+        now = await SALESC.setComplaint(CW, id, want, whoAmI());
+        noteChange(String(now.Job || "—"), "Complaint", want === "Resolved" ? "Open" : "Resolved", want);
+      }
+      if (r) Object.assign(r.fields, now);
+      toast(want === "Resolved" ? "Complaint marked resolved" : "Complaint reopened");
+    } catch (e) {
+      if (e && e.current && r) Object.assign(r.fields, e.current);   // show who got there first
+      toast(friendly(e), true);
+    }
+    updateSalesBell(); redraw();
+  });
+}
+/** One request as a card; `reply` adds the office's reply box when unanswered.
+    o.thumbs shows the photos (when read), o.actions Mark resolved / Reopen,
+    o.addPhotos the Sales page's "Add photos" on that person's own message. */
+function salesRequestHtml(r, reply, o) {
+  o = o || {};
   const f = r.fields || {}, answered = !!String(f.Reply || "").trim();
-  const kind = (SALESC.REQUEST_KINDS.find(p => p[0] === f.Kind) || ["", f.Kind || ""])[1];
-  return '<div class="cmt sreq' + (answered ? "" : " open") + '">' +
-    '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--ink-3);margin-bottom:4px">' +
-      '<span><button class="stn jump" data-j="' + esc(f.Job || "") + '" style="border:0;cursor:pointer">' + esc(f.Job || "") + '</button> ' +
-      '<strong style="color:var(--ink-2)">' + esc(kind) + '</strong> &middot; ' + esc(f.From || "—") + '</span>' +
+  const kind = SALESC.kindWord(f.Kind), comp = SALESC.isComplaint(r), open = SALESC.openComplaint(r);
+  const n = SALESC.photoCount(r), th = SALES_THUMBS[r.id], extras = SALES_REQ_EXTRAS === true;
+  const dis = isSales() && (!(typeof salesWho === "function" && salesWho()) || SALESC.busy()) ? " disabled" : "";
+  const about = f.Job ? '<button class="stn jump" data-j="' + esc(f.Job) + '" style="border:0;cursor:pointer">' + esc(f.Job) + '</button> '
+    : f.Customer ? '<strong style="color:var(--ink-2)">' + esc(f.Customer) + '</strong> &middot; ' : "";
+  const photos = !n ? ""
+    : o.thumbs && th && th.n === n && th.list && th.list.length
+      ? '<div class="sphotos">' + th.list.map(p => '<a href="' + esc(p.webUrl || "#") + '" target="_blank" rel="noopener" title="' + esc(p.name) + '">' +
+          (p.thumb ? '<img src="' + esc(p.thumb) + '" alt="' + esc(p.name) + '" loading="lazy">' : '<span>' + esc(p.name) + '</span>') + '</a>').join("") + '</div>'
+      : '<div class="sphn">' + n + (n === 1 ? " photo" : " photos") + (o.thumbs && th && th.err ? " (could not be shown)" : o.thumbs ? " …" : "") + '</div>';
+  const st = !comp || !f.Status ? ""
+    : '<div class="sstate">' + (open ? '<span class="scbad">Open</span>'
+        : 'Resolved by ' + esc(shortWho(f.ResolvedBy) || "—") + ' &middot; ' + esc(stamp(f.ResolvedAt))) +
+      (o.actions && extras ? ' <button class="chip" data-sstate="' + esc(r.id) + '" data-want="' + (open ? "Resolved" : "Open") + '"' + dis + '>' +
+        (open ? "Mark resolved" : "Reopen") + '</button>' : "") + '</div>';
+  const add = o.addPhotos && extras && n < SALESC.PHOTO_MAX
+    ? '<label class="chip saddph' + (dis ? " off" : "") + '">Add photos<input type="file" accept="image/*" multiple data-saddph="' + esc(r.id) + '" hidden' + dis + '></label>' : "";
+  return '<div class="cmt sreq' + (answered && !open ? "" : " open") + (open ? " scomp" : "") + '">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--ink-3);margin-bottom:4px;flex-wrap:wrap">' +
+      '<span>' + about + (comp ? '<span class="scbad">Complaint</span>' : '<strong style="color:var(--ink-2)">' + esc(kind) + '</strong>') +
+      ' &middot; ' + esc(f.From || "—") + '</span>' +
       '<span>' + esc(stamp(f.At)) + '</span></div>' +
-    '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap">' + esc(f.Text || "") + '</div>' +
+    '<div style="font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere">' + esc(f.Text || "") + '</div>' +
+    photos + st + add +
     (answered
       ? '<div class="sreply"><span class="kick">Reply</span> <span style="font-size:11px;color:var(--ink-3)">' +
           esc(shortWho(f.ReplyBy)) + ' &middot; ' + esc(stamp(f.ReplyAt)) + '</span>' +
@@ -10285,16 +10352,21 @@ function renderSalesRequests() {
   let host = $("#srhost");
   if (!host) { host = document.createElement("div"); host.id = "srhost"; document.body.appendChild(host); }
   const kept = keepInputs(host);
-  const all = SALESC.officeOrder(SALES_REQS), open = SALESC.unanswered(all).length;
+  const all = SALESC.officeOrder(SALES_REQS), open = SALESC.unanswered(all).length, comps = all.filter(SALESC.openComplaint).length;
   host.innerHTML = '<div class="scrim" id="srscrim"></div><div class="logwin">' +
     '<div class="dhead"><div><div class="cond" style="font-size:25px;font-weight:700">Sales requests</div>' +
-      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + open + ' waiting for a reply &middot; from the Sales page</div></div>' +
+      '<div style="font-size:12.5px;color:#a8a49a;margin-top:2px">' + open + ' waiting for a reply' +
+        (comps ? ' &middot; ' + comps + ' open complaint' + (comps === 1 ? "" : "s") : "") + ' &middot; from the Sales page</div></div>' +
       '<button class="ghost" id="srclose">Close</button></div>' +
     '<div class="logbody" style="padding:12px;display:flex;flex-direction:column;gap:10px">' +
       (SALES_REQS_OK !== true ? '<div class="empty">The “Sales requests” list is not in SharePoint, or could not be read.</div>'
-        : all.length ? all.map(r => salesRequestHtml(r, true)).join("") : '<div class="empty">No requests yet.</div>') +
+        : (SALES_REQ_EXTRAS === false ? '<div class="sphn">Photos and complaint status are not shown yet: the list needs its new columns.</div>' : "") +
+          (all.length ? all.map(r => salesRequestHtml(r, true, { thumbs: true, actions: true })).join("") : '<div class="empty">No requests yet.</div>')) +
     '</div></div>';
   restoreInputs(host, kept);
+  const redraw = () => { if ($("#srhost")) renderSalesRequests(); };
+  salesWireMsgs(host, redraw);
+  salesLoadThumbs(all, redraw);
   $("#srscrim").onclick = closeWin(host);
   $("#srclose").onclick = closeWin(host);
   host.querySelectorAll(".jump").forEach(b => b.onclick = () => {

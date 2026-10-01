@@ -25,7 +25,8 @@ const salesCtx = () => ({
   CW, who: SALES_WHO, note: noteChange,
   tmplFor: id => LASTWB ? templateForJob(LASTWB.getWorksheet("Production"), id) : null,
   identCol: k => (PRODMAP && PRODMAP.ident && PRODMAP.ident[k]) || null,
-  hdrRow: () => (PRODMAP && PRODMAP.hdr && PRODMAP.hdr[0]) || 0
+  hdrRow: () => (PRODMAP && PRODMAP.hdr && PRODMAP.hdr[0]) || 0,
+  extras: SALES_REQ_EXTRAS === true               // Sales requests has Customer/Status/Photos (app.js)
 });
 /** " disabled" while nobody is picked or any Sales write or move is in flight. */
 const salesDis = () => (!SALES_WHO || SALESC.busy()) ? " disabled" : "";
@@ -73,6 +74,7 @@ async function salesStart() {
   const b = $("#whobtn");
   if (b) { b.textContent = "…"; b.onclick = () => salesPicker(); }
   const rq = $("#reqbtn"); if (rq) rq.onclick = () => salesRequestsWindow();
+  const sb = $("#sendbtn"); if (sb) sb.onclick = () => salesSendForm("");
   const dl = $("#delbtn"); if (dl) dl.onclick = () => salesDeletedWindow();
   await salesReadPeople();
   let saved = "";
@@ -298,11 +300,7 @@ function salesDrawerHtml(j) {
       '<div><button class="chip sdanger" id="sdel"' + dis + '>Delete job…</button></div></div>' +
     '<div class="sect" id="sreqs"><span class="kick">Requests for this job (' + reqs.length + ')</span>' +
       reqs.map(r => salesRequestHtml(r, false)).join("") +
-      '<div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">' +
-        '<select class="txt" id="sreqkind" data-keep="' + k("rk") + '"' + dis + '>' +
-          SALESC.REQUEST_KINDS.map(p => '<option value="' + p[0] + '">' + esc(p[1]) + '</option>').join("") + '</select>' +
-        '<textarea id="sreqtext" rows="2" data-keep="' + k("rt") + '" placeholder="Ask the office about this job…" style="flex:1;min-width:200px"' + dis + '></textarea>' +
-        '<button class="btn" id="sreqsend"' + dis + '>Send</button></div></div>';
+      '<div><button class="btn" id="sreqsend"' + dis + '>Send to office…</button></div></div>';
 }
 /** Run one Sales write with the drawer's buttons held, and say how it went. */
 async function salesRun(host, fn, ok) {
@@ -368,22 +366,8 @@ function salesWireDrawer(host, j) {
     try { await SALESC.moveJob(salesCtx(), j, Number(sel.value), BLOCKNAMES, moveJobsInSheet); }
     catch (e) { toast(friendly(e), true); }
   });
-  on("sreqmove", () => {
-    const k = host.querySelector("#sreqkind"), t = host.querySelector("#sreqtext");
-    if (k) k.value = "move";
-    if (t) { if (!t.value.trim()) t.value = "Please move " + j.id + " to "; try { t.focus(); } catch (e) {} }
-  });
-  on("sreqsend", () => {
-    const k = host.querySelector("#sreqkind"), t = host.querySelector("#sreqtext");
-    const text = t ? t.value : "", kind = k ? k.value : "other";
-    salesRun(host, async () => {
-      const made = await SALESC.sendRequest(salesCtx(), j.id, kind, text);
-      SALES_REQS.push({ id: made && made.id, fields: { Job: j.id, Kind: kind, Text: text.trim(), From: SALES_WHO,
-                                                      At: new Date().toISOString(), Reply: "", ReplySeen: "No" } });
-      if (t) t.value = "";
-      return true;
-    }, "Request sent to the office");
-  });
+  on("sreqmove", () => salesSendForm(j.id, "move", "Please move " + j.id + " to "));
+  on("sreqsend", () => salesSendForm(j.id));
   on("sdel", async () => {
     const section = salesSection(j);
     const yes = await salesConfirm("Delete " + j.id + " (" + (j.cust || "no customer") + ") from the Production sheet?",
@@ -430,12 +414,138 @@ function salesWindow(id, title, sub, body) {
   renderFab();
   return host;
 }
+/* ---- one form for every message to the office (2026-10-01) ------------------
+   Status / Move / Report / Customer complaint, free text, up to 8 photos shrunk
+   here (longest side 1600 px, JPEG 0.82) before anything is sent. Opened from
+   the drawer (job prefilled) and from "Send to office" in the top bar.
+   docs/specs/2026-10-01-sales-reports-complaints-photos.md                  */
+let SALES_FORM = null;              // { photos: [{ blob, url }] } while the form is open
+/** One picked file -> a shrunk JPEG Blob, or a plain refusal. */
+async function salesShrink(file) {
+  const bad = SALESC.photoRefusal([file], 0);
+  if (bad) throw new Error(bad);
+  let img;
+  try { img = await createImageBitmap(file); }
+  catch (e) { throw new Error("“" + file.name + "” could not be opened as a photo - this browser may not read it (an iPhone HEIC photo?). Send it as a JPEG."); }
+  const s = SALESC.fitSize(img.width, img.height);
+  const c = document.createElement("canvas"); c.width = s.w; c.height = s.h;
+  c.getContext("2d").drawImage(img, 0, 0, s.w, s.h);
+  if (img.close) img.close();
+  const blob = await new Promise(res => c.toBlob(res, "image/jpeg", SALESC.PHOTO_QUALITY));
+  if (!blob) throw new Error("“" + file.name + "” could not be made smaller, so it was not added.");
+  return blob;
+}
+/** Shrink every file, keeping the ones that work; a refusal is said once each. */
+async function salesShrinkAll(files, already) {
+  const why = SALESC.photoRefusal(files, already);
+  if (why) { toast(why, true); return []; }
+  const out = [];
+  for (const f of files) { try { out.push(await salesShrink(f)); } catch (e) { toast(friendly(e), true); } }
+  return out;
+}
+function salesFormClose() {
+  const h = $("#sfhost"); if (h) h.remove();
+  if (SALES_FORM) SALES_FORM.photos.forEach(p => { try { URL.revokeObjectURL(p.url); } catch (e) {} });
+  SALES_FORM = null;
+}
+function salesSendForm(job, kind, text) {
+  salesFormClose();
+  SALES_FORM = { photos: [] };
+  const host = document.createElement("div"); host.id = "sfhost";
+  const extras = SALES_REQ_EXTRAS === true;
+  host.innerHTML = '<div class="scrim"></div><div class="sdialog">' +
+    '<div class="cond" style="font-size:22px;font-weight:700;margin-bottom:10px">Send to office</div><div class="sfform">' +
+      '<div class="sfrow"><label>Type<select class="txt" id="sfkind">' +
+        SALESC.FORM_KINDS.map(k => '<option value="' + k + '"' + (k === (kind || "status") ? " selected" : "") + '>' + esc(SALESC.kindWord(k)) + '</option>').join("") +
+      '</select></label><label>Job no.<input class="txt" id="sfjob" value="' + esc(job || "") + '" autocomplete="off"></label></div>' +
+      '<label id="sfcustl">Customer (no job number)<input class="txt" id="sfcust" autocomplete="off"></label>' +
+      '<label>Message<textarea id="sftext" rows="5" placeholder="Write to the office…">' + esc(text || "") + '</textarea></label>' +
+      (extras ? '<div><label class="chip saddph">Add photos<input type="file" accept="image/*" multiple id="sffile" hidden></label>' +
+                ' <span class="sphn" id="sfcount"></span></div><div class="sphotos" id="sfthumbs"></div>'
+        : '<div class="sphn">Photos and complaint status cannot be sent yet: the “Sales requests” list needs its new columns.</div>') +
+      (SALES_WHO ? "" : '<div class="sphn">Pick your name (top right) before sending.</div>') +
+    '</div><div class="sfacts" style="margin-top:12px"><button class="chip" id="sfcancel">Cancel</button>' +
+      '<button class="btn" id="sfsend"' + salesDis() + '>Send</button></div></div>';
+  document.body.appendChild(host);
+  const q = s => host.querySelector(s);
+  const sync = () => {
+    const free = SALESC.NO_JOB_OK.indexOf(q("#sfkind").value) >= 0;
+    q("#sfcustl").style.display = free && !q("#sfjob").value.trim() ? "" : "none";
+    q("#sfjob").placeholder = free ? "optional" : "";
+  };
+  q("#sfkind").onchange = sync; q("#sfjob").oninput = sync; sync();
+  const paint = () => {
+    const t = q("#sfthumbs"); if (!t || !SALES_FORM) return;
+    t.innerHTML = SALES_FORM.photos.map((p, i) => '<span class="sfth"><img src="' + p.url + '" alt="photo ' + (i + 1) + '">' +
+      '<button type="button" data-sfrm="' + i + '" aria-label="Remove photo ' + (i + 1) + '">×</button></span>').join("");
+    q("#sfcount").textContent = SALES_FORM.photos.length ? SALES_FORM.photos.length + " of " + SALESC.PHOTO_MAX : "";
+    t.querySelectorAll("[data-sfrm]").forEach(b => b.onclick = () => {
+      const [gone] = SALES_FORM.photos.splice(Number(b.dataset.sfrm), 1);
+      try { URL.revokeObjectURL(gone.url); } catch (e) {}
+      paint();
+    });
+  };
+  const file = q("#sffile");
+  if (file) file.onchange = async () => {
+    const files = Array.from(file.files || []); file.value = "";
+    const blobs = await salesShrinkAll(files, SALES_FORM ? SALES_FORM.photos.length : 0);
+    if (!SALES_FORM) return;                                  // closed meanwhile
+    blobs.forEach(b => SALES_FORM.photos.push({ blob: b, url: URL.createObjectURL(b) }));
+    paint();
+  };
+  host.querySelector(".scrim").onclick = salesFormClose;
+  q("#sfcancel").onclick = salesFormClose;
+  q("#sfsend").onclick = async () => {
+    const b = q("#sfsend"); b.disabled = true;
+    const m = { kind: q("#sfkind").value, job: q("#sfjob").value, customer: q("#sfcust").value, text: q("#sftext").value,
+                photos: SALES_FORM.photos.map(p => p.blob) };
+    if (SALESC.NO_JOB_OK.indexOf(m.kind) < 0 || m.job.trim()) m.customer = "";
+    setStatus("sending to the office…", "busy");
+    try {
+      const r = await SALESC.sendMessage(salesCtx(), m);
+      SALES_REQS.push({ id: r.id, fields: Object.assign({ Reply: "" }, r.fields) });
+      salesFormClose();
+      toast(r.note || ("Sent to the office" + (r.landed ? " with " + r.landed + (r.landed === 1 ? " photo" : " photos") : "")), !!r.note);
+      salesRepaint();
+    } catch (e) { toast(friendly(e), true); b.disabled = false; }
+    setStatus("live");
+  };
+  try { q(job ? "#sftext" : "#sfjob").focus(); } catch (e) {}
+}
+/** "Add photos" on one of this person's own messages (a failed photo, again). */
+function salesWireAddPhotos(host, redraw) {
+  host.querySelectorAll("[data-saddph]").forEach(inp => inp.onchange = async () => {
+    const r = SALES_REQS.find(x => x.id === inp.dataset.saddph);
+    const files = Array.from(inp.files || []); inp.value = "";
+    if (!r || !files.length) return;
+    const blobs = await salesShrinkAll(files, SALESC.photoCount(r));
+    if (!blobs.length) return;
+    setStatus("sending photos…", "busy");
+    try {
+      const res = await SALESC.addPhotos(salesCtx(), r, blobs);
+      r.fields.Photos = res.photos;
+      toast(res.note || (res.landed + (res.landed === 1 ? " photo" : " photos") + " sent"), !!res.note);
+    } catch (e) { toast(friendly(e), true); }
+    setStatus("live"); redraw();
+  });
+}
+/** Mark resolved / Reopen from the Sales page (app.js salesWireMsgs). */
+function salesResolve(id, want) { return SALESC.resolve(salesCtx(), id, want); }
+
 /** Every request with its reply, newest first; the replies shown are marked seen. */
 function salesRequestsWindow() {
-  const all = SALESC.newestFirst(SALES_REQS);
-  salesWindow("sqhost", "Requests", SALESC.unreadReplies(all).length + " new repl" + (SALESC.unreadReplies(all).length === 1 ? "y" : "ies") +
-    " from the office", SALES_REQS_OK !== true ? '<div class="empty">The “Sales requests” list is not in SharePoint, or could not be read.</div>'
-    : all.length ? all.map(r => salesRequestHtml(r, false)).join("") : '<div class="empty">No requests yet.</div>');
+  const all = SALESC.newestFirst(SALES_REQS), unread = SALESC.unreadReplies(all).length, comps = all.filter(SALESC.openComplaint).length;
+  const host = salesWindow("sqhost", "Requests", unread + " new repl" + (unread === 1 ? "y" : "ies") + " from the office" +
+    (comps ? " · " + comps + " open complaint" + (comps === 1 ? "" : "s") : ""),
+    SALES_REQS_OK !== true ? '<div class="empty">The “Sales requests” list is not in SharePoint, or could not be read.</div>'
+    : '<div><button class="btn" id="sqsend"' + salesDis() + '>Send to office…</button></div>' +
+      (all.length ? all.map(r => salesRequestHtml(r, false, { thumbs: true, actions: true,
+        addPhotos: !!SALES_WHO && String(r.fields.From || "") === SALES_WHO })).join("") : '<div class="empty">No requests yet.</div>'));
+  const redraw = () => { if ($("#sqhost")) salesRequestsWindow(); };
+  const sq = host.querySelector("#sqsend"); if (sq) sq.onclick = () => salesSendForm("");
+  salesWireMsgs(host, redraw);
+  salesWireAddPhotos(host, redraw);
+  salesLoadThumbs(all, redraw);
   if (SALES_REQS_OK !== true || !SALES_WHO || !SALESC.unreadReplies(all).length) return;   // no write before a name
   const todo = SALESC.unreadReplies(all);
   SALESC.markSeen(salesCtx(), todo)
@@ -497,9 +607,11 @@ function salesDeletedPaint() {
 /* ---- after the two lists are read (every 30 s) ------------------------------ */
 function salesRepaint() {
   salesReqCount();
-  const sig = JSON.stringify(SALES_DELIV) + "|" + SALES_REQS.map(r => r.id + ":" + (r.fields.Reply ? 1 : 0)).join(",");
+  const sig = JSON.stringify(SALES_DELIV) + "|" + SALES_REQS.map(r => r.id + ":" + (r.fields.Reply ? 1 : 0) + ":" +
+    (r.fields.Status || "") + ":" + SALESC.photoCount(r)).join(",");
   if (sig === SALES_SIG) return;
   SALES_SIG = sig;
+  if ($("#sqhost")) salesRequestsWindow();           // a resolve or reply from the office shows at once
   if (!state.board) quietRows();
   if (state.sel && $("#dhost")) renderDrawer();      // typed text is kept (data-keep)
 }

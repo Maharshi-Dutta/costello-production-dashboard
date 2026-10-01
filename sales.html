@@ -94,6 +94,33 @@
   .sreply { margin-top:8px; padding-top:6px; border-top:1px dashed var(--line) }
   .sreq textarea { width:100%; margin-top:8px; border:1px solid var(--line); border-radius:5px; padding:7px 9px;
                    background:var(--surface); color:var(--ink); font:inherit; font-size:13px }
+  /* complaints and photos (2026-10-01), in the requests window and the send form */
+  .sreq.scomp { box-shadow:inset 3px 0 0 var(--urgent); border-color:var(--urgent) }
+  .scbad { display:inline-block; background:var(--urgent); color:#fff; border-radius:4px; padding:1px 7px; font-weight:700; font-size:11px }
+  .sphotos { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
+  .sphotos a, .sphotos .sfth { display:block; position:relative; width:84px; height:84px; border-radius:5px; overflow:hidden;
+                               border:1px solid var(--line); background:var(--surface) }
+  .sphotos img { width:100%; height:100%; object-fit:cover; display:block }
+  .sfth button { position:absolute; top:2px; right:2px; width:40px; height:40px; border-radius:50%; border:0;
+                 background:rgba(0,0,0,.6); color:#fff; font-size:18px; line-height:1; cursor:pointer }
+  .sphn { font-size:12px; color:var(--ink-4); margin-top:6px }
+  .sstate { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--ink-3) }
+  .saddph { margin-top:8px; display:inline-flex; align-items:center; cursor:pointer }
+  .saddph.off { opacity:.5; pointer-events:none }
+  #sfhost .sdialog { width:min(560px,96vw); max-height:92vh; overflow:auto; z-index:90 }
+  #sfhost .scrim { z-index:89 }
+  .sfform { display:flex; flex-direction:column; gap:10px }
+  .sfform label { display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:var(--ink-3) }
+  .sfform .txt, .sfform textarea { width:100%; box-sizing:border-box; min-height:40px; border:1px solid var(--line); border-radius:5px;
+                                   padding:7px 9px; background:var(--surface); color:var(--ink); font:inherit; font-size:14px }
+  .sfrow { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+  .sfacts { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap }
+  .sfform .btn, .sfform .chip, .sfacts .btn, .sfacts .chip, .sfform .saddph { min-height:40px }
+  @media (max-width:560px){
+    .sfrow { grid-template-columns:1fr }
+    #sfhost .sdialog { padding:14px }
+    #sqhost .sreq button, #sqhost .dhead .ghost, .saddph { min-height:40px; min-width:40px }
+  }
   /* ---- the Sales page's own (sales.js) ---- */
   .card .thead, .card .row.srow { grid-template-columns:28px 78px minmax(110px,1.4fr) minmax(80px,1fr) 86px 112px 72px 66px minmax(150px,1.3fr) 92px }
   .row.srow.s-urgent { color:var(--urgent) }
@@ -906,6 +933,7 @@
     <button class="ghost" id="changebtn" hidden>Changes</button>
     <button class="ghost" id="versbtn" hidden>Versions</button>
     <button class="ghost" id="alertbtn" hidden>Alerts</button>
+    <button class="ghost" id="sendbtn">Send to office</button>
     <button class="ghost" id="reqbtn">Requests</button>
     <button class="ghost" id="delbtn">Deleted jobs</button>
     <button class="ghost" id="exportbtn">Export</button>

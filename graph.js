@@ -144,8 +144,10 @@ let openingSession = false;
 async function call(method, path, body, asBuffer) {
   let lastStatus = 0, lastText = "", sessionRetried = false;
   for (let a = 0; a < 5; a++) {
-    const init = { method, headers: await headers(body ? { "Content-Type": "application/json" } : null, path) };
-    if (body) init.body = JSON.stringify(body);
+    /* a Blob (a photo for the Sales photos library) is sent as it is */
+    const raw = typeof Blob !== "undefined" && body instanceof Blob;
+    const init = { method, headers: await headers(body ? { "Content-Type": raw ? (body.type || "application/octet-stream") : "application/json" } : null, path) };
+    if (body) init.body = raw ? body : JSON.stringify(body);
     const r = await fetch(G + path, init);
     if (r.ok) {
       if (asBuffer) return await r.arrayBuffer();
@@ -1340,6 +1342,55 @@ async function listPatch(displayName, itemId, fields, opts) {
   const siteId = await listSiteId(opts);
   return call("PATCH", "/sites/" + siteId + "/lists/" + id + "/items/" + itemId + "/fields", fields || {});
 }
+/** The column names of a list (internal names), or null when the list is not
+    there - so a feature can tell a column that has not been added yet. */
+async function listColumns(displayName, opts) {
+  const id = await listId(displayName, opts);
+  if (!id) return null;
+  const siteId = await listSiteId(opts);
+  const r = await call("GET", "/sites/" + siteId + "/lists/" + id + "/columns?$select=name");
+  return (r.value || []).map(c => String(c.name));
+}
+
+/* ---- the Sales photos library (docs/specs/2026-10-01-sales-reports-complaints-photos.md)
+   A document library in the workbook's site, found by name the way listId()
+   finds a list. One folder per Sales message, named after the item's Title.
+   Paths are /sites/{id}/drives/{id}/... - the file scope (Files.ReadWrite.All)
+   the page already signs in with; nothing here touches the workbook.        */
+const SALES_PHOTOS = "Sales photos";
+let salesDriveMemo = null;
+/** The library's drive id, or null while there is no such library (not cached). */
+async function salesPhotoDrive() {
+  if (salesDriveMemo) return salesDriveMemo;
+  const f = await findFile();
+  const r = await call("GET", "/sites/" + f.siteId + "/drives?$select=id,name");
+  const hit = (r.value || []).find(d => String(d.name || "").toLowerCase() === SALES_PHOTOS.toLowerCase());
+  return (salesDriveMemo = hit ? { siteId: f.siteId, id: hit.id } : null);
+}
+const drivePath = (folder, name) => [folder, name].filter(Boolean).map(encodeURIComponent).join("/");
+/** Upload one photo (a Blob) into the message's folder. A name already there is
+    kept and this one renamed by SharePoint, so a re-send never overwrites. */
+async function salesPhotoPut(folder, name, blob) {
+  salesOnly();
+  const d = await salesPhotoDrive();
+  if (!d) throw new Error("The “" + SALES_PHOTOS + "” library is not in SharePoint.");
+  return call("PUT", "/sites/" + d.siteId + "/drives/" + d.id + "/root:/" + drivePath(folder, name) +
+                     ":/content?@microsoft.graph.conflictBehavior=rename", blob);
+}
+/** The photos in one message's folder: [{id, name, webUrl, thumb}]; [] when
+    the folder (or the library) is not there. */
+async function salesPhotoList(folder) {
+  const d = await salesPhotoDrive();
+  if (!d) return [];
+  try {
+    const r = await call("GET", "/sites/" + d.siteId + "/drives/" + d.id + "/root:/" + drivePath(folder) +
+                                ":/children?$expand=thumbnails");
+    return (r.value || []).filter(x => x.file).map(x => {
+      const t = (x.thumbnails || [])[0] || {};
+      return { id: x.id, name: x.name, webUrl: x.webUrl, thumb: (t.medium || t.small || {}).url || "" };
+    });
+  } catch (e) { if (isMissing(e)) return []; throw e; }
+}
 
 /* ---- where the floor's lists live -----------------------------------------
    The intended home is a separate SharePoint site on the same hostname as the
@@ -1624,12 +1675,13 @@ window.CW = {
   stationSite, forgetStationSite, isMissing, isRefused, stationSiteMoves, STATION_SITE_NAME,
   liveBlocks, locateJob, moveJobRow, captureRow, batchGet,
   salesLocate, salesSetCell, salesSetFont, salesDeleteRow, salesInsertRow,
+  listColumns, salesPhotoDrive, salesPhotoPut, salesPhotoList, SALES_PHOTOS,
   _setToken(fn) { tokenOverride = fn; }, _setFile(ref) { fileRef = ref; }, _setSession(id) { sessionId = id; },
   /* tests only: forget which dashboard sheets have been seen, so the creation
      branch of the ensure*Sheet functions can be exercised again */
   _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
   /* tests only: forget the list ids found so far */
-  _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); },
+  _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); salesDriveMemo = null; },
   /* tests only: which scopes a path is asked for - the same call headers()
      makes, so the answer cannot drift from what really goes out */
   _scopeFor: scopeFor,
