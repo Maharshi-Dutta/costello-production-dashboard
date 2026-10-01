@@ -55,6 +55,11 @@ let TYPED = false;              // the box changed since the last board draw
 const TAB_KEY = "cw_glztab";
 try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
 const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
+/* Ready first (owner, 2026-10-01): off unless somebody turns it on, remembered
+   on the device like the tab. It only re-orders the On floor tab. */
+const READY_KEY = "cw_glzreadyfirst";
+let READYFIRST = false;
+try { READYFIRST = localStorage.getItem(READY_KEY) === "1"; } catch (e) {}
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
@@ -591,6 +596,16 @@ function stepHtml(c, part) {
 
 /** Everything inside one card. The card element itself is kept between draws
     (see paintBoard), so only this string is ever rebuilt. */
+/** Where the job's glass and fabrication have got to - read only, fed by the
+    office. Nothing here is tappable. */
+function chipsHtml(c) {
+  const chips = [GZ.glzStatusChip("glass", c.glass), GZ.glzStatusChip("fab", c.fab)].filter(Boolean);
+  if (!chips.length) return "";
+  return '<div class="rchips">' +
+    (c.ready && !c.finished ? '<span class="rchip ready">Ready to glaze</span>' : "") +
+    chips.map(x => '<span class="rchip ' + x.cls + '">' + esc(x.words) + '</span>').join("") +
+    '</div>';
+}
 function cardInner(c) {
   const owed = owedFor(c.id), bad = badFor(c.id);
   const lost = lostFor(c.job);
@@ -604,6 +619,7 @@ function cardInner(c) {
         ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
       '<span class="cunits tab">' + esc(GZ.glzQtyWords(c)) + '</span>' +
     '</div>' +
+    chipsHtml(c) +
     (c.comment
       ? '<div class="cfacts">' +
         '<span class="ccmt">“' + esc(c.comment) + '”</span></div>'
@@ -819,7 +835,18 @@ function render() {
     return;
   }
 
-  const board = GZ.glzFilter(now.tabs[TAB], QUERY);
+  /* the switch belongs to the On floor tab: a finished job is not waiting */
+  const rb = $("#readybtn");
+  if (rb) {
+    const nready = now.tabs.floor.filter(c => c.ready).length;
+    const show = TAB === "floor" && nready > 0;
+    rb.hidden = !show; rb.style.display = show ? "" : "none";
+    rb.className = READYFIRST ? "on" : "";
+    rb.setAttribute("aria-pressed", READYFIRST ? "true" : "false");
+    rb.textContent = nready + " ready to glaze · Ready first: " + (READYFIRST ? "on" : "off");
+  }
+  let board = GZ.glzFilter(now.tabs[TAB], QUERY);
+  if (READYFIRST && TAB === "floor") board = GZ.glzReadyFirst(board);
   if (!board.length) {
     LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
@@ -980,6 +1007,12 @@ async function start() {
   });
   const mb = $("#more");
   if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
+  const rb = $("#readybtn");
+  if (rb) rb.onclick = () => {
+    READYFIRST = !READYFIRST;
+    try { localStorage.setItem(READY_KEY, READYFIRST ? "1" : "0"); } catch (e) {}
+    touch(); render();
+  };
   render();
   await readPeople();
   await readList();
