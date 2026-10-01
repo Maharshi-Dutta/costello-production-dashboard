@@ -110,6 +110,35 @@ the list is missing), a window with unanswered first, a reply box (writes
 `Reply`, `ReplyBy`, `ReplyAt`) and Open job, and "Delivery date: Wed 07 Oct
 &middot; set by ..." at the top of the drawer. Nothing else.
 
+**Reports, complaints and photos (2026-10-01).** Brief:
+[`specs/2026-10-01-sales-reports-complaints-photos.md`](specs/2026-10-01-sales-reports-complaints-photos.md).
+One form (`salesSendForm` in `sales.js`), opened from the drawer (job filled
+in), from "Send to office" in the top bar and from the Requests window: type
+Status / Move / Report / Customer complaint, job no. (optional for a report or
+complaint, then a Customer box), text, up to 8 photos. Each photo is shrunk in
+the browser (`createImageBitmap` + canvas, longest side 1600, JPEG 0.82,
+`SALESC.fitSize`); a non-image or a file the browser cannot decode (HEIC) is
+refused. `SALESC.sendMessage`: add the item (`Photos` 0, `Status` Open for a
+complaint), upload the photos one by one to the `Sales photos` library
+(`CW.salesPhotoPut`, `PUT /sites/{site}/drives/{drive}/root:/<folder>/<n>.jpg:/content`,
+`conflictBehavior=rename`, folder = the item's Title with `|`/`:` made `-`),
+then PATCH `Photos` to what landed; a failed photo leaves the message and the
+toast says "N of M photos failed - send them again from the message", and
+"Add photos" on the person's own message (`SALESC.addPhotos`) sends more. One
+`Dashboard Log` line per message: kind, job, photo count, never the text.
+Complaints: `SALESC.setComplaint` (both pages) reads the item first and refuses
+if it already says Resolved (or Open), naming who and when; writes `Status`,
+`ResolvedBy`, `ResolvedAt`; logged with `noteChange("Complaint")`. The office
+bell counts unanswered messages plus open complaints (`SALESC.bellCount`); open
+complaints come first, red. Thumbnails (`CW.salesPhotoList`, Graph
+`thumbnails`, click opens `webUrl`) are read only while a requests window is
+open, once per photo count. The five new columns (`Customer`, `Status`,
+`ResolvedBy`, `ResolvedAt`, `Photos`) are looked for with `CW.listColumns`;
+until all five are there they are neither read nor written, no photo is sent,
+and the form and window say so. At 400 px the form and the Requests window are
+one column with 40 px tap targets. Photos and message text never reach an
+export.
+
 **Exports.** On the Sales page the Default Excel template carries Phone no
 and Eircode beside Customer (`xpSales()` in `export.js`); the office's is
 unchanged. The PDF layouts are unchanged on both pages. Still one

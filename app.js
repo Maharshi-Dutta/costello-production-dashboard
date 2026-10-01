@@ -10316,7 +10316,8 @@ function salesRequestHtml(r, reply, o) {
   const f = r.fields || {}, answered = !!String(f.Reply || "").trim();
   const kind = SALESC.kindWord(f.Kind), comp = SALESC.isComplaint(r), open = SALESC.openComplaint(r);
   const n = SALESC.photoCount(r), th = SALES_THUMBS[r.id], extras = SALES_REQ_EXTRAS === true;
-  const dis = isSales() && (!(typeof salesWho === "function" && salesWho()) || SALESC.busy()) ? " disabled" : "";
+  /* no name, no write; a write in flight needs no hold here - SALESC.serial queues these */
+  const dis = isSales() && !(typeof salesWho === "function" && salesWho()) ? " disabled" : "";
   const about = f.Job ? '<button class="stn jump" data-j="' + esc(f.Job) + '" style="border:0;cursor:pointer">' + esc(f.Job) + '</button> '
     : f.Customer ? '<strong style="color:var(--ink-2)">' + esc(f.Customer) + '</strong> &middot; ' : "";
   const photos = !n ? ""

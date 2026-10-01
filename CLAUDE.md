@@ -216,7 +216,13 @@ the one that first wrote them down.
    sheet), `Sales job backups` (every delete, restore, customer edit and
    colour change; nothing ever deletes an item) and `Sales requests` (the
    Sales page writes a request and `ReplySeen`; the office writes only
-   `Reply`, `ReplyBy`, `ReplyAt`).
+   `Reply`, `ReplyBy`, `ReplyAt`). Since 2026-10-01
+   ([`docs/specs/2026-10-01-sales-reports-complaints-photos.md`](docs/specs/2026-10-01-sales-reports-complaints-photos.md))
+   a message may be a report or a customer complaint with photos: the Sales
+   page also writes `Customer`, `Photos` and a complaint's `Status`; **both**
+   pages may write `Status`, `ResolvedBy`, `ResolvedAt` (resolve / reopen,
+   read first). The photos go to the document library **`Sales photos`** in
+   the same site, one folder per message, uploaded from the Sales page only.
 
    There are **exactly seven** exceptions, each granted by the owner in a dated
    spec, each for a named case; an **eighth** is a new decision for the owner,
