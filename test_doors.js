@@ -514,6 +514,61 @@ const doorButtons = html => {
     "the John sheet still reads Production (2), phone and all");
   pass("the office shows Production's own values, drops other sheets' jobs and groups, and the John view is unchanged");
 
+  /* ---- feedJobs regression (2026-10-01): the four station slices off the
+     Production-only jobs equal the slices off the old merged jobs - except
+     exactly where the owner said Production only (glass, dates) - and a
+     comment written on another sheet still reaches the floor ---- */
+  run("welding-core.js"); global.WELDC = window.WELDC;
+  run("glazing-core.js"); global.GLZC = window.GLZC;
+  run("fabrication-core.js"); global.FABC = window.FABC;
+  const fwb = new ExcelJS.Workbook();
+  const fhead = ws => { const p = (r, c, v) => { ws.getCell(r, c).value = v; };
+    p(2, 1, "COMMENT"); p(2, 4, "DATES ON CONTRACT"); p(3, 4, "SOLD"); p(3, 5, "READY TO PRINT"); p(3, 6, "SENT TO FLOOR");
+    p(2, 9, "CUSTOMER"); p(2, 13, "QUANTITY"); p(3, 13, "WND"); p(3, 14, "DRS");
+    p(2, 20, "7000 CASEMENT"); p(3, 20, "F"); p(3, 21, "S"); p(3, 22, "T");
+    p(2, 51, "GLASS UNITS"); p(3, 51, "DG"); p(3, 52, "TG"); };
+  const fp = fwb.addWorksheet("Production"), fp2 = fwb.addWorksheet("Production (2)");
+  fhead(fp); fhead(fp2);
+  const fc = (ws, r, c, v) => { ws.getCell(r, c).value = v; };
+  const D = s => new Date(s + "T12:00:00Z");
+  [fp, fp2].forEach(ws => {
+    fc(ws, 4, 1, "Below is orders ready and customers won't take");
+    fc(ws, 6, 1, "Below is collect or supply only orders");
+    fc(ws, 8, 1, "Not sent to floor(No section) =");
+    fc(ws, 10, 1, "Not sent to floor(No section) =");
+  });
+  /* four jobs In production, the same on both sheets apart from what is noted */
+  [["R7201", 11], ["R7202", 12], ["R7203", 13], ["R7204", 14]].forEach(([id, r]) => [fp, fp2].forEach(ws => {
+    fc(ws, r, 3, id); fc(ws, r, 9, "Person A"); fc(ws, r, 13, 3); fc(ws, r, 20, 3); fc(ws, r, 21, 3); fc(ws, r, 51, 3);
+    fc(ws, r, 4, D("2026-08-01")); fc(ws, r, 5, D("2026-08-20")); fc(ws, r, 6, D("2026-09-01"));
+  }));
+  fc(fp2, 12, 1, "Please call first");          // R7202: a comment only on Production (2) - the floor keeps it
+  fc(fp2, 13, 52, 4);                           // R7203: TG 4 only on Production (2) - glass is Production's now
+  fp.getCell(14, 6).value = null;               // R7204: no sent-to-floor date on Production - dates are Production's now
+  const fmerged = parseWorkbook(fwb), fnames = fmerged.blockNames;
+  global.__F = productionOnly(fmerged);
+  vm.runInThisContext("ALL = __F;");
+  const fed = vm.runInThisContext("feedJobs()");
+  const key = r => r.title || r.Title;
+  const byKey = rows => { const o = {}; (rows || []).forEach(r => { o[key(r)] = JSON.stringify(r); }); return o; };
+  const slices = jobs => ({
+    glass: byKey(ST.glassSlice(jobs, fnames, [])), weld: byKey(WELDC.weldSlice(jobs, fnames, () => "")),
+    glz: byKey(GLZC.glzSlice(jobs, fnames)), fab: byKey(FABC.fbSlice(jobs, fnames)) });
+  const before = slices(fmerged), after = slices(fed);
+  const changed = {};
+  Object.keys(before).forEach(s => {
+    const ks = Object.keys(Object.assign({}, before[s], after[s]));
+    assert.ok(ks.length > 0, s + " slice is not empty");
+    changed[s] = ks.filter(k => before[s][k] !== after[s][k]).sort();
+  });
+  assert.deepStrictEqual(changed.glass, ["R7203"], "glass: only the job whose glass differed on Production (2)");
+  assert.deepStrictEqual(changed.weld, ["R7204|7000 CASEMENT"], "welding: only the job whose sent-to-floor date was Production (2)'s");
+  assert.deepStrictEqual(changed.glz, [], "glazing: unchanged");
+  assert.deepStrictEqual(changed.fab, [], "fabrication: unchanged");
+  assert.ok(Object.keys(after.weld).filter(k => k.indexOf("R7202") === 0).every(k => JSON.parse(after.weld[k]).comment === "Please call first"),
+    "and the comment written on Production (2) still reaches the floor (feedJobs, owner 2026-10-01)");
+  pass("feedJobs: the four station slices are the old ones except exactly where glass and dates became Production's");
+
   console.log("\n" + n + " checks passed");
   process.exit(0);
 })().catch(e => { console.error("FAIL", e); process.exit(1); });

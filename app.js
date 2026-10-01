@@ -284,9 +284,10 @@ function inView(j, view) {
 
 const live = () => ALL.filter(j => j.cat !== "past");
 /* the jobs as the station feeders see them: the page's own (Production only,
-   amendment E) with every sheet's notes put back, so the floor's COMMENT column
-   is exactly what it was before E - measured on the local copy, 16 rows would
-   otherwise lose a comment written on another sheet. The owner's call. */
+   amendment E - customer, WND/DRS, glass and dates are Production's) with
+   every sheet's notes put back, so the floor's COMMENT column keeps a comment
+   written on another sheet (16 rows on the local copy). Owner, 2026-10-01:
+   keep the floor's comments as they are. */
 const feedJobs = () => ALL.map(j => j.notesAll ? Object.assign({}, j, { notes: j.notesAll }) : j);
 const byId = id => ALL.find(j => j.id === id);
 const comp = j => j.prods.reduce((a, p) => ({ f: a.f + p.f, s: a.s + p.s, t: a.t + p.t }), { f: 0, s: 0, t: 0 });

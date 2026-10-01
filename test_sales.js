@@ -516,6 +516,18 @@ const job = id => ({ id, cust: "Person A", ph: "086", area: "Cork", eir: "", off
   assert.deepStrictEqual(mm, { moved: 1, refused: ["R0002"] }, "gold only on Production (2): refused; gold on Production: moves");
   pass("ready is a gold row on Production only: gold on Production (2) is not ready, and Sales cannot move it");
 
+  /* ---- 14. (review, 2026-10-01) a value applyPending holds survives the Sales overlay ---- */
+  const ready3 = pj.find(x => x.id === "R0003");                  // Production-only, ready (gold on Production)
+  assert.strictEqual(ready3.done, 1);
+  const held = Object.assign({}, ready3, { done: 0, raw: ready3 }); // the office's undo, held while the file catches up
+  const viaSales = vm.runInThisContext("salesOverlay")([held])[0];
+  assert.strictEqual(viaSales.done, 0, "the held 'not ready' is not re-derived from the gold row");
+  assert.strictEqual(viaSales.raw.done, 1, "and the raw (revert) job keeps the file's own value");
+  assert.strictEqual(S.moveAllowed(viaSales), false, "so the Sales move gate refuses it");
+  assert.deepStrictEqual(await S.moveMany(ctx(), [viaSales], 3, NAMES, async ids => ids.length), { moved: 0, refused: ["R0003"] });
+  assert.deepStrictEqual(productionJob(ready3), ready3, "a Production-only job passed through again is the same job");
+  pass("a held value survives the Sales overlay: productionJob does not re-run on a Production-only job");
+
   console.log("\n" + n + " checks passed");
   process.exit(0);
 })().catch(e => { console.error("FAIL", e); process.exit(1); });

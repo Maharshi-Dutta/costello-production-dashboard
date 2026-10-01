@@ -116,9 +116,9 @@ function salesOverlay(list) {
     shared rule (parser.js productionJob, amendment E), and the Sales page also
     names no other sheet. */
 function salesMainOnly(j) {
-  const c = productionJob(j);
-  c.sheets = (j.sheets || []).filter(s => s === "Production");
-  return c;
+  /* a job the load already made Production-only comes back as a plain copy,
+     so a value applyPending holds over it (done, a move) survives (review 2026-10-01) */
+  return productionJob(j);
 }
 
 /* ---- tiles, chips, rows ------------------------------------------------------ */

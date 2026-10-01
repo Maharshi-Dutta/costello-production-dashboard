@@ -486,6 +486,7 @@ function parseWorkbook(wb) {
       let j = jobs[jid];
       if (!j) { j = jobs[jid] = { id: jid, sheets: [], src: {}, prods: {}, prodsMain: {},
                                   glass: {}, status: {}, notes: [],
+                                  glassMain: {}, statusMain: {}, datesMain: {},
                                   doors: {},
                                   cp: { win: '', drs: '', glass: {}, prod: {} } }; }
       j.src[LABEL[name]] = r;
@@ -520,7 +521,9 @@ function parseWorkbook(wb) {
         j.identMain = j.identMain || {};
         for (const k in m.ident) if (!(k in j.identMain)) j.identMain[k] = cellText(row.getCell(m.ident[k])).trim();
       }
-      for (const k in m.dates) { const v = cellDate(row.getCell(m.dates[k])); if (v && !j['d_' + k]) j['d_' + k] = v; }
+      for (const k in m.dates) { const v = cellDate(row.getCell(m.dates[k])); if (v && !j['d_' + k]) j['d_' + k] = v;
+        /* the five dates off `Production` alone (owner, 2026-10-01) */
+        if (mainHere && v && !j.datesMain[k]) j.datesMain[k] = v; }
       for (const k in m.qty) {
         const c = row.getCell(m.qty[k]), v = num(c);
         if (v && !j[k]) j[k] = v;
@@ -536,6 +539,8 @@ function parseWorkbook(wb) {
       for (const k in m.glass) {
         const c = row.getCell(m.glass[k]), v = num(c);
         if (v) j.glass[k] = Math.max(j.glass[k] || 0, v);
+        /* the glass units off `Production` alone, per type (owner, 2026-10-01) */
+        if (mainHere && v) j.glassMain[k] = Math.max(j.glassMain[k] || 0, v);
         /* ASTRAGAL off `Production` alone (2026-09-24): the glazing station
            counts it as its own component, and stations read `Production` only */
         if (mainHere && v && k === 'astragal') j.astrMain = Math.max(j.astrMain || 0, v);
@@ -597,6 +602,11 @@ function parseWorkbook(wb) {
           const fill = fillOf(row.getCell(cols[sub]));
           if (YELLOW.has(fill)) { (j.status[pname] = j.status[pname] || {})['process'] = 1; }
           else if (GOLD.has(fill) && !rowDone) { (j.status[pname] = j.status[pname] || {})['done'] = 1; }
+          /* ... and the same words off `Production` alone, behind "In fab" (owner, 2026-10-01) */
+          if (mainHere) {
+            if (YELLOW.has(fill)) (j.statusMain[pname] = j.statusMain[pname] || {})['process'] = 1;
+            else if (GOLD.has(fill) && !rowDone) (j.statusMain[pname] = j.statusMain[pname] || {})['done'] = 1;
+          }
           /* only make an entry when there is a colour, so cp.prod stays small */
           const cst = cpHere ? cpOf(fill) : '';
           if (cst) cpBump(j.cp.prod[pname] = j.cp.prod[pname] || {}, sub, cst);
@@ -623,14 +633,14 @@ function parseWorkbook(wb) {
        job is none of its business, rather than feeding it another sheet's
        numbers. */
     const prodsMain = Object.keys(j.prodsMain).map(k => ({ n: k, f: j.prodsMain[k][0],
-      s: j.prodsMain[k][1], t: j.prodsMain[k][2], st: Object.keys(j.status[k] || {}) }));
+      s: j.prodsMain[k][1], t: j.prodsMain[k][2], st: Object.keys(j.statusMain[k] || {}) }));
     /* a whole gold row says the job is finished, so every checkpoint on it is -
        a gold row on PRODUCTION (2026-09-30): the checkpoint colours are that
        sheet's alone, and a gold row on John's sheet must not paint them */
     if (j.doneMain) {
       if (j.wndMain) j.cp.win = 'done';
       if (j.drsMain) j.cp.drs = 'done';
-      Object.keys(j.glass).forEach(k => { j.cp.glass[k] = 'done'; });
+      Object.keys(j.glassMain).forEach(k => { j.cp.glass[k] = 'done'; });
       prodsMain.forEach(p => {
         const o = j.cp.prod[p.n] = j.cp.prod[p.n] || {};
         ['f', 's', 't'].forEach(s => { if (p[s]) o[s] = 'done'; });
@@ -662,6 +672,10 @@ function parseWorkbook(wb) {
         eir: (j.identMain.eir || '').slice(0, 70), off: (j.identMain.off || '').slice(0, 70),
         colour: (j.identMain.colour || '').slice(0, 70), ph: (j.identMain.phone || '').slice(0, 40) } : null,
       dates: { sold: j.d_sold || null, stamp: j.d_stamp || null, ivana: j.d_ivana || null, ready: j.d_ready || null, floor: j.d_floor || null },
+      /* the same off `Production` alone, and the glass units likewise (2026-10-01) */
+      datesMain: { sold: j.datesMain.sold || null, stamp: j.datesMain.stamp || null, ivana: j.datesMain.ivana || null,
+                   ready: j.datesMain.ready || null, floor: j.datesMain.floor || null },
+      glassMain: j.glassMain,
       prods: prods, prodsMain: prodsMain, cp: j.cp,
       /* one entry per DOORS DONE cell that has text in it: { slot, code,
          status }. The status is the cell's fill, read the same way every other
@@ -691,7 +705,12 @@ function parseWorkbook(wb) {
    groups and the notes - taken from `Production` alone, blank where it is
    blank. Safe to apply twice. Station feeders get the same job objects. */
 function productionJob(j) {
+  /* already Production only (it carries notesAll): a copy, nothing re-applied -
+     so a value held over it since (applyPending's done, a section move, a
+     product status) is never undone by a second pass (review, 2026-10-01) */
+  if (j.notesAll) return Object.assign({}, j);
   const m = j.main || {}, d = String(m.ph || '').replace(/\D/g, '');
+  const dm = j.datesMain || {};
   const notes = (j.notes || []).filter(n => n.s === 'Production');
   return Object.assign({}, j, {
     cust: m.cust || '', ph: m.ph || '', ph3: d.length >= 3 ? d.slice(-3) : '', area: m.area || '',
@@ -700,6 +719,12 @@ function productionJob(j) {
     /* ready = a gold row on Production itself, never on John's sheet: the
        Sales page's move gate trusts this (2026-09-30) */
     done: j.doneMain || 0,
+    /* the glass units, the five dates and the stage they give, and the sheet
+       chips - Production's only (owner, 2026-10-01) */
+    glass: j.glassMain || {},
+    dates: { sold: dm.sold || null, stamp: dm.stamp || null, ivana: dm.ivana || null, ready: dm.ready || null, floor: dm.floor || null },
+    stage: dm.floor ? 'floor' : (dm.ready ? 'ready' : 'office'),
+    sheets: (j.sheets || []).filter(s => s === 'Production'),
     /* every sheet's notes, kept for the station feeders only: their COMMENT
        column is left exactly as it was (amendment E) - the owner's call */
     notesAll: j.notesAll || j.notes || [],

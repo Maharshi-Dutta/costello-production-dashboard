@@ -321,10 +321,13 @@ E. **The office reads the Production sheet only too** (owner, 2026-09-30: "if
    `prodsMain`, so the drawer's checkpoint lines, the job row, search and the
    Default export follow; the notes and the urgent word are Production's. The
    John print sheet view and template still read Production (2), unchanged.
-   The station feeders are fed exactly what they were: they get the same jobs
-   with every sheet's notes put back (`notesAll`), because their COMMENT
-   column would otherwise lose a comment written on another sheet (16 rows on
-   the local copy) - whether the floor should see those is the owner's call.
+   The station feeders get the same Production-only jobs - customer, WND/DRS
+   and (since 2026-10-01) glass units and dates are Production's - with one
+   exception: their notes are every sheet's (`notesAll`), so the COMMENT
+   column keeps a comment written on another sheet (16 rows on the local
+   copy). Owner, 2026-10-01: keep the floor's comments as they are.
+   (Corrected 2026-10-01: this paragraph first said the feeders were fed
+   "exactly what they were"; only the notes are.)
    Measured on the local copy of the workbook before the switch: the office's
    live list already held only jobs on Production (the other 524 parsed jobs
    were "past"), but a Changes line or an Open job link could open the drawer
@@ -346,3 +349,10 @@ E. **The office reads the Production sheet only too** (owner, 2026-09-30: "if
    sent-to-floor date Production has not got), and the product status words
    behind the row's "In fab" badge (3 jobs: R5051, R5105, S5136 show
    "process" from another sheet); and the feeders' notes (the owner's call).
+   **Owner, 2026-10-01:** glass units, the dates and the "In fab" status words
+   are Production's too (`glassMain`, `datesMain` and the stage from them,
+   `statusMain` behind `prodsMain`'s words), and the sheet chips name
+   Production only (the John view is untouched). Floor comments stay as they
+   are. The hidden product-group lines stay hidden while the owner decides.
+   `productionJob` no longer re-applies itself to a job that is already
+   Production-only, so a value `applyPending` holds over it survives.
