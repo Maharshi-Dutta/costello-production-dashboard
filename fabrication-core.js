@@ -70,7 +70,10 @@ const FB_FLOOR_FIELDS = ["FramesDone", "SashesDone", "TransomsDone",
 const FB_COUNTER_FIELDS = ["FramesDone", "SashesDone", "TransomsDone", "GlazeDone"];
 const FB_OFFICE_FIELDS = ["Urgent"];
 const FB_SEED_FIELDS = [];
-const FB_FIELDS = ["Title"].concat(FB_FEEDER_FIELDS, ["FedAt", "FedBy"], FB_FLOOR_FIELDS, FB_OFFICE_FIELDS);
+/* `Modified` is SharePoint's own column: the server's clock for the row's last
+   write. Read only - it is in no write list - and it is what the gold rule
+   compares instead of a tablet's clock (review C-1). */
+const FB_FIELDS = ["Title"].concat(FB_FEEDER_FIELDS, ["FedAt", "FedBy"], FB_FLOOR_FIELDS, FB_OFFICE_FIELDS, ["Modified"]);
 const FB_FEEDER_WRITES = ["Title"].concat(FB_FEEDER_FIELDS, ["FedAt", "FedBy"]);
 /* a row whose job or group has left the sheet: both flags off, never deleted
    (Active alone means "In production", so it cannot also mean "gone" - B31) */
@@ -176,8 +179,13 @@ function fbGlassStatus(g, hasGlass) {
   if (!g) return "none";
   const t = Math.max(0, fbInt(g.total, 0)), tt = Math.max(0, fbInt(g.tuffTotal, 0));
   if (!(t > 0) && !(tt > 0)) return g.officeDone ? "done" : "none";
-  const c = fbClamp(g.cut, t), h = fbClamp(g.hotmelt, t), tf = fbClamp(g.tuff, tt);
-  if (g.officeDone || (c >= t && h >= t && tf >= tt)) return "done";
+  /* THE TUFF RULE HOLDS FOR THE OFFICE'S "DONE" TOO (review A-1): OfficeDone
+     speaks for DG and TG only and has never known about tuff, so a job that
+     still owes tuff is not done whoever says the glass is. The office's done
+     stands in for cutting and hotmelting, and for nothing else. */
+  const c = g.officeDone ? t : fbClamp(g.cut, t), h = g.officeDone ? t : fbClamp(g.hotmelt, t);
+  const tf = fbClamp(g.tuff, tt);
+  if (c >= t && h >= t && tf >= tt) return "done";
   if (!(c > 0 || h > 0 || tf > 0)) return "none";
   return "part:" + c + "/" + t + ":" + h + "/" + t + (tt > 0 ? ":tuff " + tf + "/" + tt : "");
 }
@@ -299,6 +307,7 @@ function fbRecord(it) {
               doors: fbTxt(f.Doors), seq: fbNum(f.Seq, 99999), section: fbTxt(f.Section).trim(),
               active: fbActive(f), onSheet: fbOnSheet(f), fedAt: fbTxt(f.FedAt),
               doneAt: fbTxt(f.DoneAt), doneBy: fbTxt(f.DoneBy), urgent: fbTxt(f.Urgent),
+              modified: fbTxt(f.Modified),
               glass: fbTxt(f.Glass).trim(),
               by: {}, at: {}, lines: [], extra: [], raw: {} };
   g.sheetDone = fbSheetDone(g.section);
@@ -625,18 +634,28 @@ function fbCellWant(done, total, record, cell) {
        the AC codes);
      - never a door already done, never one with a write in the air, never a
        cell carrying a colour the checkpoints do not own;
-     - never over the office: a record the office (or a hand in Excel) wrote
-       at or after the glazing stamp stands - an office clear made after the
+     - never over the office: a row the office (or a hand in Excel) wrote AFTER
+       the glazing was recorded stands - an office clear made after the
        glazing finished is not gilded again.
-   `stateOf(slot)` -> { status, office, when (ms), pending, foreign }. */
+   WHO SPOKE LAST IS DECIDED ON THE SERVER'S CLOCK (review C-1), never on the
+   tablet's against the office browser's: `fabModified` is SharePoint's own
+   `Modified` of the fabrication row as the glazing was recorded, and each
+   state's `modified` is the record row's. A tablet whose clock runs fast or
+   slow changes nothing. Where either stamp is missing it FAILS SAFE: an
+   office / excel row is only ever raised from "process" - never from a clear.
+   `stateOf(slot)` -> { status, office, modified (ms), pending, foreign }. */
 function fbGoldPlan(o) {
   const t = Math.max(0, fbInt(o && o.total, 0));
   if (!(t > 0) || fbInt(o.done, 0) < t) return [];
-  const at = fbNum(o.glazeAt, 0);
+  const fab = fbNum(o.fabModified, 0);
   return ((o.doors) || []).filter(d => d && fbDoorGlazeGroup(d.code) === fbKey(o.group)).filter(d => {
     const s = (typeof o.stateOf === "function" && o.stateOf(d.slot)) || {};
     if (s.pending || s.foreign || s.status === "done") return false;
-    if (s.office && fbNum(s.when, 0) >= at) return false;
+    if (s.office) {
+      const rec = fbNum(s.modified, 0);
+      if (fab > 0 && rec > 0) { if (rec >= fab) return false; }
+      else if (s.status !== "process") return false;
+    }
     return true;
   }).map(d => d.slot);
 }

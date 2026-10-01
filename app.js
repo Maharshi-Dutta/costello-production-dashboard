@@ -4265,8 +4265,13 @@ async function fabrFeedWrite(fields, send) {
   if (fabrStampOnly(body)) return null;
   try { return await send(body); }
   catch (e) {
-    const news = FABC.FB_NEW_FEEDER_FIELDS.filter(k => k in body);
-    if (!news.length || !/->\s*400\b/.test((e && e.message) || "")) throw e;
+    /* ONLY when the refusal NAMES the column (review F-1): a 400 can be many
+       things - a wrong value, a unique-Title clash - and stripping `Glass` for
+       the session on any of them would hide the glass status for no reason.
+       The resend without it is still what confirms it. */
+    const msg = (e && e.message) || "";
+    const news = FABC.FB_NEW_FEEDER_FIELDS.filter(k => k in body && new RegExp("\\b" + k + "\\b").test(msg));
+    if (!news.length || !/->\s*400\b/.test(msg)) throw e;
     const tries = news.map(k => [k]).concat(news.length > 1 ? [news] : []);
     for (let i = 0; i < tries.length; i++) {
       const b = Object.assign({}, body);
@@ -4288,7 +4293,9 @@ let fabrSoonT = null;
     the feed's own hash makes it one read of nothing when it has not. */
 function fabrFeedSoon() {
   if (fabrSoonT || !fabrOn()) return;
-  fabrSoonT = setTimeout(() => { fabrSoonT = null; feedFabrication().catch(() => {}); }, 20000);
+  /* a minute, not twenty seconds (review F-2): every glass tap changes the
+     `part:` word, and each change is a PATCH on every fabrication row of the job */
+  fabrSoonT = setTimeout(() => { fabrSoonT = null; feedFabrication().catch(() => {}); }, 60000);
 }
 async function feedFabrication() {
   if (isSales()) return null;
@@ -4298,10 +4305,12 @@ async function feedFabrication() {
   fabrBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { FABR_FEED_ERR = ""; return null; }
-    /* the glass list has not been read yet this session: give it a moment
-       (three short waits at most) rather than feed every job's Glass as blank
-       and feed it all again when the list arrives */
-    if (STATION_OK === null && fabrGlassWaits < 3) { fabrGlassWaits++; fabrFeedAgain(5000); return null; }
+    /* the glass list has not been read yet this session: wait for it, however
+       long (review F-2), rather than write every job's Glass blank and write
+       it all again when the list arrives. Not-known is null; a list that is
+       not there or may not be read becomes false, and then - once - blank is
+       the honest thing to feed. Each wait costs no request. */
+    if (STATION_OK === null) { fabrGlassWaits++; fabrFeedAgain(10000); return null; }
     const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES, fabrGlassOf);
     const hash = ST.sliceHash(slice, FABC.FAB);
     if (hash === FABR_FEED.hash && Date.now() - (FABR_FEED.at || 0) < STATION_FEED_MS) { FABR_FEED_ERR = ""; return null; }
@@ -4509,7 +4518,9 @@ async function fabrOfficeEdit(id, part, act) {
     }
     const body = FABC.fbFloorOnly(FABC.fbOfficeFields(part, value, who, at));
     await CW.listPatch(FABC.FB_LIST, rec.id, body, fabrOpts());
-    merge(Object.assign({}, now.fields, body));
+    /* the row's server stamp is not known again until the next read: blank,
+       not the pre-write one (the gold rule fails safe on a blank) */
+    merge(Object.assign({}, now.fields, body, { Modified: "" }));
   } catch (e) {
     delete fabrWriting[k];
     console.warn("[fabrication] office edit refused:", (e && e.message) || e);
@@ -5142,12 +5153,12 @@ function fabrGoldPlan(j) {
   card.groups.forEach(g => {
     if (!(g.glazingTotal > 0)) return;
     const slots = FABC.fbGoldPlan({
-      doors: j.doors, group: g.group, done: g.raw.glazing, total: g.glazingTotal, glazeAt: stampMs(g.at.glazing),
+      doors: j.doors, group: g.group, done: g.raw.glazing, total: g.glazingTotal, fabModified: fabrGlazeMod(g),
       stateOf: slot => {
         const item = "door:" + slot, row = cpRow(j.id, item);
         return { status: cpStatus(j, item),
                  office: !!row && (row.source === "office" || row.source === "excel"),
-                 when: row ? stampMs(row.when) : 0,
+                 modified: row ? stampMs(row.modified) : 0,
                  pending: !!cpPending(j.id + "|" + item),
                  foreign: !cpColumn(item, PRODMAP) || cpFileStatus(j, item) === "cut" };
       } });
@@ -5156,24 +5167,47 @@ function fabrGoldPlan(j) {
   });
   return out.length ? out : null;
 }
+/** The SERVER's time for a row's glazing (review C-1): SharePoint's `Modified`
+    of the fabrication row as it stood when its `GlazeAt` last changed. Kept
+    per row for the session, so a later feeder patch of the same row (its
+    `Glass` word, say) does not make an old glazing look newer than an office
+    clear. 0 = not known (the first sight of a row this page has just written
+    itself), and the gold rule then fails safe. */
+const FABR_GLAZE_MOD = {};
+function fabrGlazeMod(g) {
+  const m = FABR_GLAZE_MOD[g.id];
+  if (!m || m.at !== g.at.glazing || !m.mod) FABR_GLAZE_MOD[g.id] = { at: g.at.glazing, mod: g.modified || "" };
+  return stampMs(FABR_GLAZE_MOD[g.id].mod);
+}
 /** One job, inside its checkpoint chain. Returns how many doors were raised. */
 async function fabrGoldWrite(job, plan) {
   const j = byId(job);
-  const now = (j && fabrGoldPlan(j)) || [];        // decided again, from the record as it is NOW
+  /* THE RECORD IS BROUGHT UP TO DATE FIRST (review C-2): another office screen
+     may have gilded these doors a moment ago, and a plan made from a record
+     ten seconds old would add a second row and a second log line */
+  try { await cpListPoll(); } catch (e) { /* the plan below reads what there is */ }
   let n = 0;
   for (let i = 0; i < plan.length; i++) {
     const p = plan[i];
+    /* decided again, per item, from the record as it is at THIS moment - a
+       write in the air on the item (cpPending) is part of that answer */
+    const now = (j && fabrGoldPlan(j)) || [];
     if (!now.some(x => x.item === p.item)) continue;
     const col = cpColumn(p.item, PRODMAP);
     if (!col) continue;
     const was = cpStatus(j, p.item);
     await cpWriteItem({ job: job, item: p.item, col: col, done: 1, total: 1, from: null, who: p.who,
       status: "done", fromText: CPWORD[was || ""],
-      toText: CPWORD.done + " · door glazing complete (" + p.group + ", fabrication)",
+      toText: CPWORD.done + " · door glazing complete (" + p.group + ", fabrication" +
+              (p.when ? ", glazed " + stWhen(p.when) : "") + ")",
       /* the record first. Quiet: this runs from a timer and may never open a
-         consent window; a row it cannot write is a door it does not paint. */
+         consent window; a row it cannot write is a door it does not paint.
+         Stamped with THIS office's clock at the gild (cpSaveRow's own
+         cpStampNow), never the tablet's GlazeAt: `When` is what cpRowsFrom
+         ranks duplicates by, and a tablet's clock must not out-rank a later
+         office clear. A row that is there is PATCHed, never added beside. */
       save: async o => {
-        const got = await cpSaveRow(Object.assign({}, o, { source: "fabrication", when: p.when || undefined,
+        const got = await cpSaveRow(Object.assign({}, o, { source: "fabrication",
                                                            quiet: true, add: !cpRow(job, p.item) }));
         if (!got) throw new Error("the record could not be written quietly");
         return got;

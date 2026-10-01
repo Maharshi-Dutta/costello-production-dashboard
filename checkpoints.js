@@ -45,7 +45,10 @@ const CP_SUB = { f: "frames", s: "sashes", t: "transoms" };
    The list is made by hand in SharePoint. When it is not there the dashboard
    says so and checkpoints are read-only - nothing is written anywhere. */
 const CP_LIST = "Dashboard progress";
-const CP_LIST_FIELDS = ["Title", "Job", "Item", "Done", "Total", "Status", "Who", "When", "Source"];
+/* `Modified` is SharePoint's own column - the server's clock for the row's last
+   write. Read only (cpRowFields never carries it); the fabrication gold rule
+   compares it with the fabrication row's (2026-10-01, review C-1). */
+const CP_LIST_FIELDS = ["Title", "Job", "Item", "Done", "Total", "Status", "Who", "When", "Source", "Modified"];
 const cpTitle = (job, item) =>
   String(job == null ? "" : job).trim().toUpperCase() + "|" + String(item == null ? "" : item).trim();
 
@@ -84,6 +87,7 @@ function cpRowsFrom(items) {
                   status: CP_WORDS[String(f.Status == null ? "" : f.Status).trim().toLowerCase()] || "",
                   who: String(f.Who == null ? "" : f.Who),
                   when: String(f.When == null ? "" : f.When),
+                  modified: String(f.Modified == null ? "" : f.Modified),
                   source: String(f.Source == null ? "" : f.Source).trim().toLowerCase() };
     const k = cpTitle(job, item);
     const had = out[k];

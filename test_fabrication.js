@@ -915,6 +915,12 @@ const pass = m => { n++; console.log("  ok  " + m); };
     "the Tuff rule: a job with Tuff is not done until Tuff is");
   assert.strictEqual(GS({ total: 20, cut: 20, hotmelt: 20, tuffTotal: 4, tuff: 4 }), "done");
   assert.strictEqual(GS({ total: 20, cut: 3, hotmelt: 0, officeDone: true }), "done", "the office's record says done");
+  /* A-1: OfficeDone speaks for DG and TG only - a job that owes tuff is not done */
+  assert.strictEqual(GS({ total: 20, cut: 3, hotmelt: 0, officeDone: true, tuffTotal: 4, tuff: 1 }), "part:20/20:20/20:tuff 1/4",
+    "A-1: the office's done with tuff owed is not done");
+  assert.strictEqual(GS({ total: 20, officeDone: true, tuffTotal: 4, tuff: 4 }), "done", "A-1: ... and is, once tuff is complete");
+  assert.strictEqual(GS({ total: 0, tuffTotal: 4, tuff: 2, officeDone: true }), "part:0/0:0/0:tuff 2/4", "A-1: the no-DG/TG branch too");
+  assert.strictEqual(GS({ total: 0, tuffTotal: 4, tuff: 4 }), "done");
   assert.deepStrictEqual(F.fbGlassChip("done"), { kind: "done", words: "Glass ✓ done" });
   assert.deepStrictEqual(F.fbGlassChip("part:12/20:5/20"), { kind: "part", words: "Glass: cut 12/20 · hotmelt 5/20" });
   assert.strictEqual(F.fbGlassChip("part:20/20:20/20:tuff 1/4").words, "Glass: cut 20/20 · hotmelt 20/20 · tuff 1/4");
@@ -990,15 +996,21 @@ const pass = m => { n++; console.log("  ok  " + m); };
 
   /* C. the gold plan (pure) */
   const gDoors = [{ slot: 1, code: "PVC" }, { slot: 2, code: "CD" }, { slot: 3, code: "SS" }, { slot: 4, code: "DD" }];
-  const GP = (o, states) => F.fbGoldPlan(Object.assign({ doors: gDoors, group: "PVC DOOR", total: 2, done: 2, glazeAt: 1000,
+  const GP = (o, states) => F.fbGoldPlan(Object.assign({ doors: gDoors, group: "PVC DOOR", total: 2, done: 2, fabModified: 1000,
     stateOf: s => (states || {})[s] || {} }, o));
   assert.deepStrictEqual(GP(), [1, 4], "full: the PVC DOOR doors; CD never; SS is PVC SMART's");
   assert.deepStrictEqual(GP({ done: 1 }), [], "partial paints nothing");
   assert.deepStrictEqual(GP({ done: 0 }), [], "a count that dropped raises nothing - and there is nothing in a plan that clears");
   assert.deepStrictEqual(GP({}, { 1: { status: "done" } }), [4], "already done: left");
   assert.deepStrictEqual(GP({}, { 1: { pending: true }, 4: { foreign: true } }), [], "a write in the air, or a colour not ours: skipped");
-  assert.deepStrictEqual(GP({}, { 1: { status: "", office: true, when: 2000 }, 4: { status: "process", office: true, when: 500 } }), [4],
-    "an office row written after the glazing stands (its clear is not gilded again); an older one is raised");
+  assert.deepStrictEqual(GP({}, { 1: { status: "", office: true, modified: 2000 }, 4: { status: "process", office: true, modified: 500 } }), [4],
+    "an office row modified (server clock) after the glazing stands - its clear is not gilded again; an older one is raised");
+  assert.deepStrictEqual(GP({}, { 1: { status: "", office: true, modified: 500 } }), [1, 4], "an office clear OLDER than the glazing is raised");
+  /* C-1 fail-safe: a server stamp missing on either side */
+  assert.deepStrictEqual(GP({ fabModified: 0 }, { 1: { status: "", office: true, modified: 500 }, 4: { status: "process", office: true, modified: 500 } }), [4],
+    "no fabrication stamp: an office row is only ever raised from process, never from a clear");
+  assert.deepStrictEqual(GP({}, { 1: { status: "", office: true, modified: 0 }, 4: { status: "", office: false, modified: 0 } }), [4],
+    "no record stamp: the office's clear stands; a row that is not the office's (import, floor) is raised");
   assert.deepStrictEqual(GP({ group: "PVC SMART", total: 1, done: 1 }), [3]);
   pass("gold plan: full only, mapped doors only, raise only, never over a later office row, CD never");
 
@@ -1041,11 +1053,35 @@ const pass = m => { n++; console.log("  ok  " + m); };
   setGlaze(0);
   assert.strictEqual(await A("fabrGoldRun()"), 0, "the count dropped: nothing is cleared");
   assert.deepStrictEqual([ADDS.length, FILLCALLS.length, A("cpStatus(__GJ, 'door:1')")], [nAdds, nFills, "done"]);
-  /* the office clears a door AFTER the glazing finished: it is not gilded again */
+  assert.ok(recs.every(a => a.fields.When !== "2026-10-01T09:00:00Z" && /^20\d\d-/.test(a.fields.When)),
+    "C-2: the record row is stamped with the office's own clock at the gild, never the tablet's GlazeAt");
+  assert.ok(/glazed /.test(LOGS[0].to), "... which stays in the log words only");
+
+  /* C-1: who spoke last is the SERVER's clock (Modified on both rows), never the tablet's */
+  const fabRow = (glazeAt, modified) => A("Object.keys(FABR_GLAZE_MOD).forEach(k => delete FABR_GLAZE_MOD[k]);" +
+    "FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { GlazeDone: 2, GlazeAt: '" + glazeAt +
+    "', Modified: '" + modified + "' }) }];");
+  const officeClear = (modified, status) => A("cpRowPut('R9100', 'door:1', { id: '900', job: 'R9100', item: 'door:1', status: '" +
+    (status || "") + "', done: 0, total: 1, source: 'office', when: '2026-10-01T10:00:00Z', modified: '" + modified + "' });");
+  fabRow("2026-10-01T09:00:00Z", "2026-10-01T09:00:05Z");
+  officeClear("2026-10-01T10:00:00Z");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "the office cleared the door after the glazing was recorded: it stands");
+  fabRow("2026-10-03T23:00:00Z", "2026-10-01T09:00:05Z");            // a FAST tablet: GlazeAt two days ahead
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "C-1 fast tablet clock: the office's later clear is still not gilded over");
+  fabRow("2026-09-20T08:00:00Z", "2026-10-01T11:00:00Z");            // a SLOW tablet: GlazeAt days behind, glazed after the clear
+  assert.deepStrictEqual(Array.from(A("fabrGoldPlan(__GJ).map(p => p.item)")), ["door:1"],
+    "C-1 slow tablet clock: glazing recorded after the office's clear is not blocked");
+  /* a feeder patch of the same row later (its Glass word) must not make an old glazing look new */
+  fabRow("2026-10-01T09:00:00Z", "2026-10-01T09:00:05Z");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null);
+  A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, FABR_ITEMS[0].fields, { Glass: 'done', Modified: '2026-10-01T12:00:00Z' }) }];");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "the glazing's server stamp is kept from when GlazeAt last changed");
+  /* fail-safe: a server stamp missing */
+  fabRow("2026-10-01T09:00:00Z", "");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "no fabrication stamp: an office clear is never gilded over");
+  officeClear("", "process");
+  assert.strictEqual(A("fabrGoldPlan(__GJ).length"), 1, "... but an office 'in fabrication' is raised");
   setGlaze(2);
-  A("cpRowPut('R9100', 'door:1', { id: '900', job: 'R9100', item: 'door:1', status: '', done: 0, total: 1," +
-    " source: 'office', when: '2026-10-01T10:00:00Z' });");
-  assert.strictEqual(await A("fabrGoldRun()"), 0, "an office clear made after the glazing stamp stands");
   /* ... a write in the air on that item, a gold row, and a finished-on-sheet job are skipped */
   A("cpRowPut('R9100', 'door:1', null);");
   assert.strictEqual(A("fabrGoldPlan(__GJ).length"), 1, "with no row it would be raised");
@@ -1065,6 +1101,37 @@ const pass = m => { n++; console.log("  ok  " + m); };
   A("CP_LIST_OK = true;");
   assert.ok(src("fabrication.js").indexOf("Dashboard progress") < 0 && src("fabrication-core.js").indexOf("cpSaveRow") < 0,
     "the tablet never writes the record");
+
+  /* C-2: a SECOND office screen whose record is stale. The list already holds
+     both doors done (the first screen gilded them); this screen has not heard.
+     Inside the chain it refreshes the record first, so it adds no second row
+     and no second log line. */
+  const serverRows = ["door:1", "door:4"].map((it, i) => ({ id: String(700 + i), fields: { Title: "R9100|" + it, Job: "R9100",
+    Item: it, Done: 1, Total: 1, Status: "done", Who: "Person G", When: "2026-10-01T09:10:00Z", Source: "fabrication",
+    Modified: "2026-10-01T09:10:00Z" } }));
+  let deltaAsked = 0;
+  const realDelta = CW.listDelta;
+  CW.listDelta = async name => {
+    if (name !== "Dashboard progress") throw new Error("no delta in this test");
+    deltaAsked++;
+    return { items: serverRows.map(x => ({ id: x.id, fields: Object.assign({}, x.fields) })), next: "t" };
+  };
+  A("cpRowsSet({}); CP_ITEMS = []; stationResetFeed('progress'); PAINTED = {};" +
+    "Object.keys(FABR_GLAZE_MOD).forEach(k => delete FABR_GLAZE_MOD[k]);");
+  setGlaze(2);
+  const a2 = ADDS.length, p2 = PATCHES.length, l2 = LOGS.length, f2 = FILLCALLS.length;
+  assert.strictEqual(A("fabrGoldPlan(__GJ).length"), 2, "the stale screen would plan both doors");
+  assert.strictEqual(await A("fabrGoldRun()"), 0, "C-2: after the refresh inside the chain there is nothing left to raise");
+  assert.ok(deltaAsked > 0, "the record was refreshed before the re-plan");
+  assert.deepStrictEqual([ADDS.length, PATCHES.length, LOGS.length, FILLCALLS.length], [a2, p2, l2, f2],
+    "C-2: no second row, no PATCH, no second log line, no fill");
+  /* (d) a row that is there is PATCHed, never added beside */
+  serverRows[0].fields.Status = "process"; serverRows[0].fields.Source = "import";
+  A("cpRowsSet({}); CP_ITEMS = []; stationResetFeed('progress');");
+  assert.strictEqual(await A("fabrGoldRun()"), 1);
+  assert.deepStrictEqual([ADDS.length, PATCHES.length - p2, PATCHES[PATCHES.length - 1].id], [a2, 1, "700"],
+    "C-2: the existing row is PATCHed by its id; nothing is added");
+  CW.listDelta = realDelta;
   pass("gold end to end: record first (Source fabrication), then the fill; raise only; office clear, pending, gold row, sheet-done skipped");
 
   /* the painter still knows nothing of glazing */
@@ -1113,6 +1180,40 @@ const pass = m => { n++; console.log("  ok  " + m); };
   await assert.rejects(A("fabrFeedWrite({ GlazeTotal: 2, FedAt: 'T' }, __SEND2)"), /503/, "anything but a 400 is just a failed write");
   assert.strictEqual(A("fabrColsMissing()").join(), "Glass", "and marks no column missing");
   A("delete FABR_NOCOL.Glass;");
+  /* F-1: a 400 that does not NAME the column is an ordinary failed write */
+  global.__SEND3 = async () => { throw new Error("POST x -> 400 {\"error\":\"The list item could not be added: duplicate Title\"}"); };
+  await assert.rejects(A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T' }, __SEND3)"), /duplicate Title/,
+    "F-1: a 400 about something else is not read as a missing column");
+  assert.strictEqual(A("fabrColsMissing()").join(), "", "F-1: and strips nothing");
+  let tries = 0;
+  global.__SEND4 = async body => { tries++; if ("GlazeTotal" in body) throw new Error("PATCH x -> 400 Field 'GlazeTotal' is not recognized"); return {}; };
+  await A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T' }, __SEND4)");
+  assert.deepStrictEqual([A("fabrColsMissing()").join(), tries], ["GlazeTotal", 2], "F-1: only the NAMED column is tried without, and remembered");
+  A("delete FABR_NOCOL.GlazeTotal;");
+
+  /* F-2: the fabrication feed waits for the glass list - it never writes a
+     blank Glass that it would have to write again */
+  const fabAdds = () => ADDS.filter(a => a.name === "Fabrication station");
+  global.__FJ = { id: "R9300", cust: "Person A", cat: "prod", blk: 1, seq: 1, glass: { dg: 10, tg: 10 }, doors: [], notes: [],
+    prods: [{ n: "casement windows", f: 2, s: 2, t: 0 }], prodsMain: [{ n: "casement windows", f: 2, s: 2, t: 0 }],
+    cp: { win: "", drs: "", glass: {}, prod: {} } };
+  CW.listItems = async () => [];
+  A("ALL = [__FJ]; BLOCKNAMES = ['Ready to fit', 'In production']; FABR_FEED = { hash: '', at: 0 }; fabrBusy = false; fabrPolling = false;" +
+    "STATION_OK = null; STATION_ITEMS = null;");
+  const fa0 = fabAdds().length;
+  for (let i = 0; i < 5; i++) { await A("feedFabrication()"); A("clearTimeout(fabrAgainT); fabrAgainT = null;"); }
+  assert.strictEqual(fabAdds().length, fa0, "F-2: glass list not read yet: nothing is fed, however many turns pass");
+  A("STATION_OK = true; STATION_ITEMS = [{ id: '1', fields: { Title: 'R9300', Job: 'R9300', Total: 20, Cut: 20, Hotmelt: 4, Active: 'Yes' } }];");
+  await A("feedFabrication()");
+  A("clearTimeout(fabrAgainT); fabrAgainT = null;");
+  assert.deepStrictEqual(fabAdds().slice(fa0).map(a => a.fields.Glass), ["part:20/20:4/20"],
+    "F-2: fed once, with the glass word - never blank first");
+  A("STATION_OK = false; FABR_FEED = { hash: '', at: 0 };");
+  ADDS.length = 0;
+  await A("feedFabrication()");
+  A("clearTimeout(fabrAgainT); fabrAgainT = null;");
+  assert.deepStrictEqual(fabAdds().map(a => a.fields.Glass), [""], "F-2: a glass list that is not there feeds blank");
+  assert.ok(/fabrSoonT = setTimeout\([\s\S]{0,120}, 60000\)/.test(src("app.js")), "F-2: the glass-follow debounce is a minute");
   pass("glass word from the glass row; a missing new column is stripped, remembered and said, the feed carries on");
 
   /* D. welding and glazing boards are told after a feed that wrote rows */

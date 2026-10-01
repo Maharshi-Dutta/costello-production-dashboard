@@ -1180,6 +1180,28 @@ the gold fill and the log line, exactly as an office tick on a door. Raise
 only: a partial count does nothing, a count that drops clears nothing, an
 office row written after the glazing stands, CD-type cells are never touched.
 
+- **Who spoke last is the server's clock.** The office's row and the
+  fabrication row are compared on SharePoint's own `Modified` (kept for a row
+  from the moment its `GlazeAt` last changed, so a later feeder patch does not
+  make an old glazing look new) — never the tablet's `GlazeAt` against the
+  office browser's clock. If either stamp is missing, an office row is only
+  ever raised from "in fabrication", never from a clear.
+- **Two office screens.** The record is refreshed inside the job's checkpoint
+  chain before anything is written, each door is decided again at that moment,
+  a row that is already there is PATCHed rather than added beside, and the row
+  is stamped with the office's own clock (the tablet's `GlazeAt` is only in
+  the log words).
+- **The door codes come from the download** (accepted, review C-3). Which
+  doors a group's glazing covers is read from the workbook copy the office
+  last downloaded, which is about 36 s behind Excel. A door code typed or
+  changed in that window is counted on the next download.
+- **A changed door code leaves earlier gold** (accepted, review B-1). If a
+  door's code is changed after its cell was gilded (PVC → CD, say), the cell
+  stays gold: nothing here ever clears. Only the office clears a door.
+- **Churn.** The `Glass` word follows the glass list at most once a minute,
+  and the fabrication feed waits for the glass list to be read before its
+  first feed rather than writing every job's `Glass` blank and then again.
+
 **A list without the 2026-10-01 columns.** If `Glass` or `GlazeTotal` is not on
 the list yet, the write that names it is refused (400); the office sends it
 again without that column, remembers the column for the session, says which

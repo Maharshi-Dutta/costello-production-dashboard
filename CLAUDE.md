@@ -112,8 +112,13 @@ the one that first wrote them down.
      = fabrication`, `Who` = the glazer, then the fill from the record).
      **Gold only, raise only**: a partial count paints nothing; a count that
      drops clears nothing (only the office clears); a door already done is
-     left; an office or hand-painted row written at or after the glazing stamp
-     stands; CD / SFCD / BF / AC* cells are never touched; gold rows, jobs off
+     left; an office or hand-painted row modified after the glazing was
+     recorded stands — decided on the server's clock (SharePoint's `Modified`
+     of the two rows), never a tablet's, and failing safe when either stamp is
+     missing (an office row is then only ever raised from "process"); the
+     record row is stamped with the office's own clock at the gild and an
+     existing row is PATCHed, never added beside; CD / SFCD / BF / AC* cells
+     are never touched; gold rows, jobs off
      the sheet or finished on the sheet, a write in the air on that item, an
      unreadable record and a pending import are all skipped, and the plan is
      made again inside the job's checkpoint chain right before writing
