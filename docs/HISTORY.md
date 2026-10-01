@@ -65,6 +65,9 @@ that wants to change one has to ask. The date is when the owner said it.
 | A36 | 2026-09-24 | **The glass and glazing tablets get the same On floor / Finished tabs as welding**, and all three tablets gain search that reaches across both tabs: typing auto-switches to the other tab when only it matches, shows "N more in …" when both match, and restores the pre-search tab on clearing. Glass's `Active` on `Glass station` keeps meaning "In production" only — the board, drawer, `OfficeDone` lock and colour writer all keep reading it that way; the tablet's own Finished tab covers the rest via new `Section`/`OnSheet` columns. No remake and no "Sent to floor" button on glass or glazing. | Owner, 2026-09-24, approving the brief that followed the welding Finished tab: bring the same tabs to the other two tablets in one push, with the search behaviour spelled out as four rules (switch on single-tab match, "N more" line on both, no save of a search-driven tab, restore on clear). |
 | A37 | 2026-09-25 | **The fourth floor station, fabrication (windows and doors after welding, no glass), and the fourth sanctioned fill.** F/S/T per product group and job, off `Production` alone; everybody sees every line, a person moves only the groups (later, groups and parts) their `Stages` name. The office paints a group's own F/S/T cell lavender `#D9D2E9` (started) / purple `#B4A7D6` (done) — **never lowers the office's own checkpoint record; the office may lower or clear its own record at any time.** Widened 2026-09-28: eligibility is per group **and** part (`Stages` gains `GROUP:parts`), and a job in Ready to fit / Ready, customer won't take / Collect & supply only is shown finished, green, display only. | Owner, 2026-09-25, approving the brief's rule 6 (the fourth fill, "never lowers office but office can lower theirs"); 2026-09-28 demo feedback: *"some people can do frames but not sash or transom and other combinations"* and *"ready to fit, customer won't take but ready, and collect & supply should be green as they are finished in the main excel sheet."* |
 | A38 | 2026-09-28 | **Day sheets for welding (squares only) and hotmelting (typed DG/TG beside the tablet's own tap count), no weekly target for either; the cutting sheet is unchanged; the Floor log window covers every station and also shows the office's own edits to floor counters, marked office.** | Owner, 2026-09-28, answering the same morning: *"on the top of welding dashboard she can write in a separate box how many squares she welded on a daily basis, her welding machine tells her how many she did daily"* (squares, nothing else); glass cutting's existing sheet already covers the cutter's need, don't touch it; for hotmelting, *"maybe more automated like a counter"* — chose the mix, typed DG/TG beside a tablet-counted total; weekly targets for the two new stages "maybe in the future", not now; *"the floor log should cover fabrication and welding dashboard logs"* — chose option B, office edits included, tagged office. |
+| A39 | 2026-09-30/10-01 | **The Sales page (`sales.html`) with three new sanctioned `Production` writes, made from Sales only:** a row's text colour (red / green / black), six customer cells written as text, and a whole-row delete after a read-back backup, with restore to the same section. Phone numbers and eircodes appear in Sales exports only. Sales moves only jobs the office has marked ready (gold on `Production`); drag and multi-move are gated the same way. A requests channel (office bell) and a delivery date kept in a list. Four lists created by script 2026-09-30 in the workbook's site: `Sales people`, `Sales jobs`, `Sales job backups`, `Sales requests` — rehearsed on a throwaway list first (a 60k `Row` round-trip), and the writes rehearsed on a server-side copy of the workbook (phone and office leading zeros kept, red to black, delete then restore at the section bottom, every other row unchanged). | Owner, 2026-09-30/10-01: Sales needs to colour, edit, remove and bring back its own jobs without the office doing it for them, and only ever move what the office has said is ready. Spec `docs/specs/2026-09-30-sales-page.md`; note [[sales-page]]. |
+| A40 | 2026-10-01 | **The office's top search bar drives every station board.** One search, not one per board. | Owner, 2026-09-30. Spec `docs/specs/2026-09-30-office-one-search.md`. |
+| A41 | 2026-10-01 | **"Only data on the `Production` sheet is visible on the main page; `Production (2)` is the John sheet."** The office page and Sales read Production-only fields: identity cells, counts, product groups, glass, dates, status words, the ready flag, sheets. Floor tablets keep comments from every sheet (owner's call). 25 window-type checkpoint lines on 9 jobs are now hidden because they exist only on other sheets; their records in `Dashboard progress` are untouched. | Owner, in the Sales demo, after cross-sheet data showed up on the main page; extends the 2026-09-18 standing rule (stations read `Production` only) to the office and Sales. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -620,6 +623,33 @@ array cannot catch this: every `test_floorlog.js` assertion passed against
 hand-built fixtures while the live path silently skipped three stations; only
 a review that traced which reader actually gets called, and when, found it.
 
+### B34. The open drawer flickered; Sales delete could hit the wrong row; Sales move raced Sales writes
+
+**The flicker (B28's cause, found and fixed, 2026-09-30/10-01).** An open job
+drawer was rebuilt wholesale on every poll that reported a change, replaying
+its slide/fade and resetting its scroll. And a poll nearly always reported a
+change: a full list read (no delta) always counted as "changed" — the demo
+stub had no delta at all, and live lists that refuse delta behave the same.
+Fix, three parts: skip the rebuild when the new data is identical, patch the
+open drawer in place instead of rebuilding it, and have the full-read path
+compare rows (rows-differ check) before it reports a change. Measured in the
+rig: 0 identical writes.
+
+**Review blocker 1 — delete could back up one row and delete another.** The
+backup found the row with `rowForJob` (first match) while the delete used
+`locateJob` (last match); on a sheet with a repeated job number they pick
+different rows. Fix: an exactly-once check on the 600-row read-back, and the
+row about to be deleted must equal the backed-up row, or nothing is deleted.
+
+**Review blocker 2 — Sales move was not serialised with Sales writes.** A move
+could land between a colour write and a delete. Fix: one queue for every
+Sales write and move, and the controls are disabled while it is busy.
+
+**Lesson:** reusing the office job model for Sales brought the cross-sheet
+merge back with it (the owner caught it in the demo, A41). When a new page
+reuses a model, check what the model reads, not just what it returns. And a
+"find the row" helper used in two places must be one helper.
+
 ---
 
 ## C. Build log
@@ -802,6 +832,14 @@ zero counters lowered.
 | Commit | What it added |
 |---|---|
 | `a6eff05` brief → `8a99bc7` build → `6218f77` fix pass → `91ab2c2` build stamp, build 20260928-1149, live | **End-of-day sheets for welding (squares) and hotmelting (typed DG/TG beside the tablet's own count of that person's taps today, `Counted`), and one Floor log window covering every station** (`docs/specs/2026-09-28-day-sheets-welding-hotmelt-floor-log.md`, A38). Neither new stage has a weekly target (`target: false`: no target read, no target line, no `WeekTarget` written, no "Set target" control) — the owner said "maybe in the future"; the existing cutting sheet is untouched. Four new Number columns (`Squares`, `DG`, `TG`, `Counted`) added to `Station day sheets` in the workbook's site, and a second `Station day sheets` list (17 columns, Title unique) created in `Floor stations` for welding — **both by script before the push** (scratchpad `62f30e18…/add_daysheet_columns.py`, modes check/rehearse/create; rehearsed on throwaway list `DaySheetsColsTest` in `Floor stations`, since `FloorStationsTest` returns 403). The tablet day-sheet UI moved out of `station.js` into `station-ui.js` (`STU.stuDaySheet`, one controller shared by `station.js` and `welding.js`) so welding did not need its own copy. Welding gets an End of day button beside the Frames/Sashes capsules, saving to its own `Floor stations` list. The hotmelt tablet (`glass.html?stage=hotmelt`) reads today's own `Station log` lines on opening the sheet (`ST.dayCounted`, net of `−` taps, floor 0, local day boundary) and shows "You hotmelted N units today"; DG/TG are typed, never prefilled, and a mismatch against N asks one plain confirmation before saving. The office's Day sheets window gains a Cutting/Hotmelting/Welding selector (`ST.daySheetStages`), with `Counted` shown read-only beside DG/TG and a small "≠ counted" flag. Station reports carry the new day-sheet columns the same way cutting's do. The Floor log window (`openStationLog`) gains a station filter (All/Glass/Welding/Glazing/Fabrication) and now also shows the office's own edits to floor counters, read from the already-parsed `Dashboard Log`/`CHANGES` (no new workbook read), tagged **office** (`ST.OFFICE_FLOOR_EDITS`, `ST.officeLogRows`, `ST.floorLogMerge` sorting by parsed local time, `dd/mm/yyyy hh:mm` and ISO both). No workbook write anywhere in the feature. Independent review: 1 blocker (B33 — the merge window called each station's *board* reader instead of its *log* reader, so welding/glazing/fabrication taps were invisible until that station's own board had been opened this session) + 8 minors; one fix pass closed the blocker and 7 minors, the 8th (a refused day sheet would retry every 5 s forever) sidestepped by getting the lists created before the push rather than coded around. Suites: pages 5/5, station 274 (was 270), welding 66 (was 65), daysheets 62, fabrication 22 (was 21), `test_floorlog.js` 4 (new), rest unchanged. |
+
+---
+
+### 2026-09-30/10-01 — the Sales page, one search bar, Production only
+
+| Commit | What it added |
+|---|---|
+| `f2f703c` brief → `2232e2a` One search build → `4b900d0` fix pass; `73bf42d` brief (Sales) → `574c8a2`, `677a143`, `11d2359`, `e29161e` WIP → `a3b3916` fix pass → `b194b88` amendments brief → `696b250` amendments A-C → `717b501` Production-only Sales → `a431ede`, `5853a0f`, `7a4022f` office Production only → `35e5147` merge → `41acf61` build stamp, build 20261001-0826, live | **The Sales page** (`sales.html`, `sales.js`, `sales-core.js`; A39, B34, note [[sales-page]]): three new sanctioned `Production` writes from Sales only (row text colour, six customer cells as text, whole-row delete with backup and restore), Sales moves of ready jobs only, requests channel with office bell, delivery date in a list, phone/eircode in Sales exports only. Four lists created by script 2026-09-30 (`Sales people`, `Sales jobs`, `Sales job backups`, `Sales requests`). **One search bar** (A40): the office's top bar filters every station board. **Production only** (A41): the office page and Sales read `Production`-only fields; amendment A-C also brought the sheet-order view, gated drag/multi-move and the flicker fix (B34). Independent reviews found the two blockers recorded in B34. Suites: pages 6, sales 19 (new), doors 31, station 275, export 55, rest unchanged. Browser rigs: `sales_check` 57/57, `one-search` 16/16, flicker rig 0 identical writes. |
 
 ---
 
