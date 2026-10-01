@@ -411,6 +411,13 @@
   .fawblock { border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:var(--surface) }
   .fawline { font-size:12.5px; padding:3px 0 }
   .weldline.c-lavender .weldnum { color:var(--lav) }
+  /* the job's glass on the fabrication board (2026-10-01) */
+  .gchip { font-size:11px; font-weight:700; white-space:nowrap; border-radius:10px; padding:0 7px;
+           border:1px solid var(--line); color:var(--ink-3) }
+  .gchip.g-done { color:var(--sht); border-color:var(--sht); background:var(--sht-bg) }
+  .gchip.g-part { color:var(--fab); border-color:var(--fab); background:var(--fab-bg) }
+  .gstart { padding:6px 9px; border-radius:5px; font-size:12.5px; font-weight:700; color:var(--sht);
+            background:var(--sht-bg); border:1px solid var(--sht) }
   /* finished on the sheet (2026-09-28): green, not fabrication's purple */
   .worow.c-sheet, .wogrp.c-sheet { border-color:var(--sht); background:var(--sht-bg) }
   .c-sheet .wobarfill { background:var(--sht) }
@@ -903,7 +910,7 @@
       <span class="kick">Glass</span><span class="kick">On sheets</span>
     </div>
     <div id="rows"></div>
-    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20261001-1231</span></span></div>
+    <div class="foot"><span id="count"></span><span><span id="srcinfo"></span><span id="stationfeedwrap" hidden> &middot; <span id="stationfeed"></span></span> &middot; <span id="build">build 20261001-1642</span></span></div>
     <div class="legend">
       <strong style="color:var(--ink-2)">Sheet colours:</strong>
       <span><i class="sw" style="background:#ffff00"></i>In fabrication &middot; <code>#FFFF00</code></span>
@@ -920,15 +927,15 @@
 
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
-<script src="parser.js?v=20261001-1231"></script>
-<script src="graph.js?v=20261001-1231"></script>
-<script src="checkpoints.js?v=20261001-1231"></script>
-<script src="station-core.js?v=20261001-1231"></script>
-<script src="welding-core.js?v=20261001-1231"></script>
-<script src="glazing-core.js?v=20261001-1231"></script>
-<script src="fabrication-core.js?v=20261001-1231"></script>
-<script src="sales-core.js?v=20261001-1231"></script>
-<script src="export.js?v=20261001-1231"></script>
-<script src="app.js?v=20261001-1231"></script>
+<script src="parser.js?v=20261001-1642"></script>
+<script src="graph.js?v=20261001-1642"></script>
+<script src="checkpoints.js?v=20261001-1642"></script>
+<script src="station-core.js?v=20261001-1642"></script>
+<script src="welding-core.js?v=20261001-1642"></script>
+<script src="glazing-core.js?v=20261001-1642"></script>
+<script src="fabrication-core.js?v=20261001-1642"></script>
+<script src="sales-core.js?v=20261001-1642"></script>
+<script src="export.js?v=20261001-1642"></script>
+<script src="app.js?v=20261001-1642"></script>
 </body>
 </html>

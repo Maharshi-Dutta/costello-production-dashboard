@@ -2291,6 +2291,8 @@ async function stationPoll() {
          poll must be back for its next turn whatever the workbook is doing, and
          the write reports its own failures. */
       glassColourRun().catch(e => console.warn("[glass] " + ((e && e.message) || e)));
+      /* ... and the fabricators' `Glass` word follows the glass list */
+      fabrFeedSoon();
     }
     return moved;
   } catch (e) {
@@ -2915,7 +2917,10 @@ async function feedWelding() {
                 plan.unchanged + " already right)");
     if (r.sent) {
       const after = await CW.listItems(WELDC.WELD_LIST, opts);
-      if (after) { WELD_ITEMS = after; WELD_TOK.items = null; }
+      /* and the board is told (2026-10-01, as feedFabrication): the next poll's
+         full read equals this one and sameRows() calls that "no change", so a
+         feed continuing past the 60-write cap left the board on its first run */
+      if (after) { WELD_ITEMS = after; WELD_TOK.items = null; redrawWelding(); }
     }
     return r;
   } catch (e) {
@@ -3623,7 +3628,8 @@ async function feedGlazing() {
                 plan.unchanged + " already right)");
     if (r.sent) {
       const after = await CW.listItems(GLZC.GLZ_LIST, opts);
-      if (after) { GLZ_ITEMS = after; GLZ_TOK.items = null; }
+      /* ... and the glazing board the same (2026-10-01) */
+      if (after) { GLZ_ITEMS = after; GLZ_TOK.items = null; redrawGlazing(); }
     }
     return r;
   } catch (e) {
@@ -4227,9 +4233,62 @@ async function fabrAdd(fields, opts) {
   }
 }
 let fabrAgainT = null;
-function fabrFeedAgain() {
+function fabrFeedAgain(ms) {
   if (fabrAgainT) return;
-  fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, 30000);
+  fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, ms || 30000);
+}
+/* ---- the job's glass, for the fabricators (2026-10-01) ----------------------
+   One word per job (FABC.fbGlassStatus), from what this page already holds:
+   the glass station's row for the job. No new read of anything, and the
+   fabrication tablet never reads the glass list itself. A glass list this page
+   cannot read answers "" - no chip - rather than a "not started" nobody said. */
+let fabrGlassWaits = 0;
+function fabrGlassOf(j) {
+  if (typeof ST === "undefined" || !j) return "";
+  if (!(ST.glassTotal(j) > 0 || ST.tuffTotal(j) > 0)) return "";
+  if (STATION_OK !== true) return "";
+  return FABC.fbGlassStatus(stationForJob(j.id), true);
+}
+/* ---- the two feeder columns added 2026-10-01 (`Glass`, `GlazeTotal`) --------
+   A list that has not got one of them yet refuses any write that names it. That
+   must not stop the feed: the refused write is tried again without the new
+   column(s), and the one whose absence let it through is remembered for the
+   session, stripped from every later write, and said on the board. Only a 400
+   is read this way - a dropped connection says nothing about columns. */
+const FABR_NOCOL = {};
+const fabrColsMissing = () => Object.keys(FABR_NOCOL);
+const fabrStampOnly = b => !Object.keys(b).some(k => k !== "FedAt" && k !== "FedBy");
+async function fabrFeedWrite(fields, send) {
+  const body = Object.assign({}, fields);
+  fabrColsMissing().forEach(k => delete body[k]);
+  /* FedAt/FedBy alone are not worth a write: the change they rode with is gone */
+  if (fabrStampOnly(body)) return null;
+  try { return await send(body); }
+  catch (e) {
+    const news = FABC.FB_NEW_FEEDER_FIELDS.filter(k => k in body);
+    if (!news.length || !/->\s*400\b/.test((e && e.message) || "")) throw e;
+    const tries = news.map(k => [k]).concat(news.length > 1 ? [news] : []);
+    for (let i = 0; i < tries.length; i++) {
+      const b = Object.assign({}, body);
+      tries[i].forEach(k => delete b[k]);
+      try {
+        const r = await send(b);
+        tries[i].forEach(k => {
+          if (!FABR_NOCOL[k]) console.warn("[fabrication] the list has no “" + k + "” column yet: feeding without it");
+          FABR_NOCOL[k] = true;
+        });
+        return r;
+      } catch (e2) { /* not that one: try the next */ }
+    }
+    throw e;
+  }
+}
+let fabrSoonT = null;
+/** The glass list moved: the fabricators' `Glass` word may have. Debounced, and
+    the feed's own hash makes it one read of nothing when it has not. */
+function fabrFeedSoon() {
+  if (fabrSoonT || !fabrOn()) return;
+  fabrSoonT = setTimeout(() => { fabrSoonT = null; feedFabrication().catch(() => {}); }, 20000);
 }
 async function feedFabrication() {
   if (isSales()) return null;
@@ -4239,7 +4298,11 @@ async function feedFabrication() {
   fabrBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { FABR_FEED_ERR = ""; return null; }
-    const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES);
+    /* the glass list has not been read yet this session: give it a moment
+       (three short waits at most) rather than feed every job's Glass as blank
+       and feed it all again when the list arrives */
+    if (STATION_OK === null && fabrGlassWaits < 3) { fabrGlassWaits++; fabrFeedAgain(5000); return null; }
+    const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES, fabrGlassOf);
     const hash = ST.sliceHash(slice, FABC.FAB);
     if (hash === FABR_FEED.hash && Date.now() - (FABR_FEED.at || 0) < STATION_FEED_MS) { FABR_FEED_ERR = ""; return null; }
     FABR_SITEID = await fabrSiteId();
@@ -4251,8 +4314,8 @@ async function feedFabrication() {
     if (items == null) { FABR_OK = false; FABR_WHY = FABR_LIST_MISSING; FABR_ERR = ""; return null; }
     FABR_OK = true; FABR_WHY = ""; FABR_ERR = ""; FABR_ITEMS = items; FABR_TOK.items = null;
     const plan = ST.feedPlan(slice, items, { at: new Date().toISOString(), by: feedWho(), def: FABC.FAB });
-    const all = plan.adds.map(f => () => fabrAdd(f, opts))
-      .concat(plan.patches.map(p => () => CW.listPatch(FABC.FB_LIST, p.id, p.fields, opts)));
+    const all = plan.adds.map(f => () => fabrFeedWrite(f, b => fabrAdd(b, opts)))
+      .concat(plan.patches.map(p => () => fabrFeedWrite(p.fields, b => CW.listPatch(FABC.FB_LIST, p.id, b, opts))));
     const work = all.slice(0, STATION_FEED_MAX);
     const r = await stationSend(work);
     FABR_FEED_ERR = r.failed ? r.failed + " write" + (r.failed > 1 ? "s" : "") + " refused: " + r.err : "";
@@ -4349,7 +4412,10 @@ async function fabrPoll() {
     if (moved) redrawFabrication();
     /* a counter moved: the sheet's colours follow. Not awaited - the poll must be
        back for its next turn whatever the workbook is doing. */
-    if (items) fabrColourRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+    if (items) {
+      fabrColourRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+      fabrGoldRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+    }
     return moved;
   } catch (e) {
     fabrTrouble(e);
@@ -4458,6 +4524,7 @@ async function fabrOfficeEdit(id, part, act) {
   noteChange(rec.job, FABC.fbLogWords(rec.job, rec.group, part), String(from), String(value));
   /* the sheet's colour follows from the new counter */
   fabrColourRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
+  if (part === FABC.FB_GLAZE) fabrGoldRun().catch(e => console.warn("[fabrication] " + ((e && e.message) || e)));
   return true;
 }
 
@@ -4637,7 +4704,8 @@ const fabrUrgBtn = (on, attrs) => '<button class="wobtn furg' + (on ? " on" : ""
   (fabrAssignWriting ? " disabled" : "") + ' title="urgent">! urgent</button>';
 /** Under one line of an opened job: its assignments, Assign, urgent. */
 function fabrAssignHtml(g, line) {
-  if (FABR_ASSIGN_OK !== true || g.sheetDone) return "";
+  /* door glazing is a role, never an assignment: no picker, no Take, no split */
+  if (FABR_ASSIGN_OK !== true || g.sheetDone || line.part === FABC.FB_GLAZE) return "";
   const idx = fabrAssignNow().idx;
   const L = FABC.fbLineOf(idx, g.job, g.group, line.part);
   const free = Math.max(0, line.total - FABC.fbAssignedSum(idx, g.job, g.group, line.part));
@@ -4679,11 +4747,15 @@ function fabrRowHtml(c) {
   const notes = fabrNotesFor(c.job);
   const urgent = FABC.fbCardUrgent(c);            // also fills g.urgentOf
   const jobUrgent = c.groups.some(g => g.urgentOf.job);
+  /* the job's glass, as it is fed to the fabricators: in the customer cell, so
+     the row keeps its tracks */
+  const glass = FABC.fbGlassChip(c.glass);
   return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") + '" data-fwjob="' + esc(c.job) + '">' +
     '<div class="wohead" data-fwtog="' + esc(c.job) + '">' +
       '<span class="wotog">' + (open ? "▾" : "▸") + '</span>' +
       '<span class="cond tab stjob">' + (urgent ? '<span class="urgi">!</span>' : "") + esc(c.job) + '</span>' +
-      '<span class="wocust">' + esc(c.customer || "—") + '</span>' +
+      '<span class="wocust">' + (glass.kind ? '<span class="gchip g-' + glass.kind + '" title="' + esc(glass.words) +
+        '">' + esc(glass.words) + '</span> ' : "") + esc(c.customer || "—") + '</span>' +
       '<span class="wosect">' + esc(c.section || "—") + (c.sheetDone ? ' · finished on sheet' : "") + '</span>' +
       '<span class="wototal tab">' + c.done + ' / ' + c.total + '</span>' +
       weldBarHtml(c.done, c.total) +
@@ -4699,12 +4771,15 @@ function fabrRowHtml(c) {
     (open ? '<div class="wobody">' +
       '<div class="fajob">' + fabrUrgBtn(jobUrgent, 'data-furg="job" data-fjob="' + esc(c.job) + '"') +
         ' <span class="fafree">whole job</span></div>' +
+      (c.glassStart ? '<div class="gstart">Glass is ready and nothing is fabricated yet — start this job</div>' : "") +
       c.groups.map(g =>
         '<div class="wogrp c-' + (g.colour || "none") + '"><div class="woghead"><span class="cond wogname">' +
         (g.urgentOf.group ? '<span class="urgi">!</span>' : "") + esc(g.group) + (g.doors ? ' · ' + esc(g.doors) : "") +
         '</span>' + fabrUrgBtn(g.urgentOf.group, 'data-furg="group" data-fjob="' + esc(c.job) + '" data-fgid="' + esc(g.id) + '"') +
         '<span class="wogcount tab">' +
-        g.done + ' / ' + g.total + '</span></div>' + g.lines.map(l => fabrOfficeLineHtml(g, l)).join("") + '</div>').join("") +
+        g.done + ' / ' + g.total + '</span></div>' +
+        /* door glazing, where the group has it: its own count, the last line */
+        g.lines.concat(g.extra || []).map(l => fabrOfficeLineHtml(g, l)).join("") + '</div>').join("") +
       (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
       (notes.length ? '<div class="wonotelist">' + notes.map(n =>
         '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
@@ -4731,13 +4806,19 @@ function fabrBoardHtml() {
     '</select><span class="wocount">' + cards.length + ' job' + (cards.length === 1 ? "" : "s") + '</span></div>';
   const assign = FABR_ASSIGN_OK === false ? '<div class="cphint fanote">' + esc(FABR_ASSIGN_MISSING) + '</div>'
     : FABR_ASSIGN_OK === true ? fabrRequestsHtml() : "";
-  if (FABR_VIEW === "who") return trouble + bar + assign + fabrWhoHtml();
+  /* a list without one of the columns added 2026-10-01: said plainly; the
+     rest of the feed and the board carry on */
+  const nocol = fabrColsMissing().length ? '<div class="cphint fanote">The “Fabrication station” list has no ' +
+    esc(fabrColsMissing().map(k => "“" + k + "”").join(" or ")) + ' column yet, so ' +
+    esc(fabrColsMissing().map(k => k === "Glass" ? "the glass status" : "door glazing").join(" and ")) +
+    ' cannot be shown. Ask the manager to add it — nothing in the Excel file is involved.</div>' : "";
+  if (FABR_VIEW === "who") return trouble + bar + nocol + assign + fabrWhoHtml();
   const body = !cards.length
     ? (boardQueryEmptyHtml(fabrRecordsNow().cards.length) ||
       '<div class="empty" style="line-height:1.6">No fabrication jobs on the floor’s board yet. ' +
       'Jobs appear here once this dashboard has fed them across.</div>')
     : cards.map(fabrRowHtml).join("");
-  return trouble + bar + assign + '<div class="wolist">' + body + '</div>' + fabrLogPanelHtml();
+  return trouble + bar + nocol + assign + '<div class="wolist">' + body + '</div>' + fabrLogPanelHtml();
 }
 /** The Requests strip: every Take waiting for the office. */
 function fabrRequestsHtml() {
@@ -5031,6 +5112,112 @@ async function fabrColourRun() {
   return todo.length;
 }
 
+/* ---- gold on the DOORS DONE cells when door glazing is complete ---------------
+   Section C of docs/specs/2026-10-01-fabrication-glass-status-door-glazing.md
+   (owner: "when door glazing is done make door done/golden in excel"), and
+   CLAUDE.md rule 1: the door cells - the third sanctioned fill - gain a second
+   writer, gold only, raise only.
+
+   IT GOES THROUGH THE CHECKPOINT RECORD, exactly as an office tick on a door
+   does: `cpWriteItem` with `cpSaveRow` (the `Dashboard progress` row first,
+   Source `fabrication`, Who the glazer), then the fill from the record, then
+   `cpPainted` and the log line. Nothing here writes a cell of its own.
+
+   WHICH doors is FABC.fbGoldPlan: a FULL glazing count only; the doors glazed in
+   that group only (never CD / SFCD / BF / AC*); never one already done; never
+   over an office (or hand-painted) row written at or after the glazing stamp.
+   Nothing is ever cleared: a count that drops again leaves the gold to the
+   office. And, as HISTORY B32 taught the colour painter, the plan is only a
+   proposal: inside the job's own checkpoint chain it is made AGAIN from the
+   record as it stands at that moment, and only what is in both is written. */
+const FABR_GOLD_MAX = 10;              // jobs per pass
+const FABR_GOLD_FAIL = {};             // job -> when its write was last refused
+let fabrGilding = false;
+function fabrGoldPlan(j) {
+  if (!fabrOn() || !j || j.done || j.cat === "past") return null;           // a gold row is whole
+  if (!PRODMAP || !cpWritable() || cpImportPending()) return null;          // no record to decide from
+  const card = (fabrRecordsNow().byJob || {})[String(j.id).trim().toUpperCase()];
+  if (!card || card.sheetDone || FABC.fbSheetDone(BLOCKNAMES[j.blk])) return null;
+  const out = [];
+  card.groups.forEach(g => {
+    if (!(g.glazingTotal > 0)) return;
+    const slots = FABC.fbGoldPlan({
+      doors: j.doors, group: g.group, done: g.raw.glazing, total: g.glazingTotal, glazeAt: stampMs(g.at.glazing),
+      stateOf: slot => {
+        const item = "door:" + slot, row = cpRow(j.id, item);
+        return { status: cpStatus(j, item),
+                 office: !!row && (row.source === "office" || row.source === "excel"),
+                 when: row ? stampMs(row.when) : 0,
+                 pending: !!cpPending(j.id + "|" + item),
+                 foreign: !cpColumn(item, PRODMAP) || cpFileStatus(j, item) === "cut" };
+      } });
+    slots.forEach(slot => out.push({ item: "door:" + slot, group: g.group,
+                                     who: g.by.glazing || "the floor", when: g.at.glazing }));
+  });
+  return out.length ? out : null;
+}
+/** One job, inside its checkpoint chain. Returns how many doors were raised. */
+async function fabrGoldWrite(job, plan) {
+  const j = byId(job);
+  const now = (j && fabrGoldPlan(j)) || [];        // decided again, from the record as it is NOW
+  let n = 0;
+  for (let i = 0; i < plan.length; i++) {
+    const p = plan[i];
+    if (!now.some(x => x.item === p.item)) continue;
+    const col = cpColumn(p.item, PRODMAP);
+    if (!col) continue;
+    const was = cpStatus(j, p.item);
+    await cpWriteItem({ job: job, item: p.item, col: col, done: 1, total: 1, from: null, who: p.who,
+      status: "done", fromText: CPWORD[was || ""],
+      toText: CPWORD.done + " · door glazing complete (" + p.group + ", fabrication)",
+      /* the record first. Quiet: this runs from a timer and may never open a
+         consent window; a row it cannot write is a door it does not paint. */
+      save: async o => {
+        const got = await cpSaveRow(Object.assign({}, o, { source: "fabrication", when: p.when || undefined,
+                                                           quiet: true, add: !cpRow(job, p.item) }));
+        if (!got) throw new Error("the record could not be written quietly");
+        return got;
+      },
+      paint: cpPainted, log: noteChange });
+    n++;
+  }
+  if (n) {
+    /* the Doors cell above them follows its aggregate, as after an office tick */
+    cpAggregatePaint(job, plan[0].item).catch(() => {});
+    scheduleReconcile();
+  }
+  return n;
+}
+async function fabrGoldRun() {
+  if (typeof isSales === "function" && isSales()) return 0;                 // the office's, never the Sales page's
+  if (!fabrOn() || typeof CW === "undefined" || !CW || !CW.setFill) return 0;
+  if (FABR_OK !== true || !PRODMAP || !ALL.length || !cpWritable() || cpImportPending()) return 0;
+  if (fabrGilding) return 0;
+  const all = [];
+  ALL.forEach(j => {
+    const f = FABR_GOLD_FAIL[j.id];
+    if (f && Date.now() - f < FABR_BACKOFF_MS) return;
+    const plan = fabrGoldPlan(j);
+    if (plan) all.push({ id: j.id, plan: plan });
+  });
+  if (!all.length) return 0;
+  const todo = all.slice(0, FABR_GOLD_MAX);
+  fabrGilding = true;
+  let raised = 0;
+  try {
+    await stationSend(todo.map(x => () => cpChain(x.id, async () => {
+      try { raised += await fabrGoldWrite(x.id, x.plan); delete FABR_GOLD_FAIL[x.id]; }
+      catch (e) {
+        FABR_GOLD_FAIL[x.id] = Date.now();
+        console.warn("[fabrication] could not mark " + x.id + "'s glazed doors done: " + ((e && e.message) || e));
+        throw e;
+      }
+    })));
+    if (raised) cpRedraw();
+  } finally { fabrGilding = false; }
+  return raised;
+}
+
 /* ---- the floor's voice in the phase bar (section E) --------------------------
    checkpoints.js owns the phase and takes the floor as a third opinion beside
    the sheet's own evidence and the hand-set phase; this is the hook that hands
@@ -5148,7 +5335,7 @@ function stationAfterFeedBody() {
   /* fabrication has no voice on the job list; its list is read here so the
      colour painter has something to paint from on a page nobody opened the
      board on (fabrReadIfNeeded is quiet and once per session) */
-  fabrReadIfNeeded("board", () => { fabrColourRun().catch(() => {}); });
+  fabrReadIfNeeded("board", () => { fabrColourRun().catch(() => {}); fabrGoldRun().catch(() => {}); });
   /* the floor's notes are read once per page here, not when a drawer happens to
      open: the Changes line is the whole notification, and a note nobody has
      opened a drawer to look for is exactly the one that needs announcing. The
@@ -5355,6 +5542,8 @@ async function load(reason, force) {
       /* and the fabrication colours, after the glass ones, in their own link:
          neither painter can stop the other */
       .then(() => fabrColourRun(), () => fabrColourRun())
+      /* ... and the door cells whose glazing the floor has finished (2026-10-01) */
+      .then(() => fabrGoldRun(), () => fabrGoldRun())
       .catch(e => console.warn("[glass] " + ((e && e.message) || e)));
   } catch (e) {
     /* A station account signing in here has no access to the workbook at all.

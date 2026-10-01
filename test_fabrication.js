@@ -903,6 +903,260 @@ const pass = m => { n++; console.log("  ok  " + m); };
   T("TAB = 'floor'; setView('all'); pickPerson(PEOPLE[0]);");
   pass("M1: empty state from the current tab: plain / other tab offered / switch to Everything");
 
+  /* ================= 16. glass status, door glazing, gold (2026-10-01) ================= */
+  /* A. the job's glass, in one word */
+  const GS = (g, has) => F.fbGlassStatus(g, has === undefined ? true : has);
+  assert.strictEqual(GS(null, false), "", "no glass: blank");
+  assert.strictEqual(GS(null), "none", "glass and no row: none");
+  assert.strictEqual(GS({ total: 20, cut: 0, hotmelt: 0 }), "none");
+  assert.strictEqual(GS({ total: 20, cut: 12, hotmelt: 5 }), "part:12/20:5/20");
+  assert.strictEqual(GS({ total: 20, cut: 20, hotmelt: 20 }), "done", "cut and hotmelt complete, no tuff: done");
+  assert.strictEqual(GS({ total: 20, cut: 20, hotmelt: 20, tuffTotal: 4, tuff: 1 }), "part:20/20:20/20:tuff 1/4",
+    "the Tuff rule: a job with Tuff is not done until Tuff is");
+  assert.strictEqual(GS({ total: 20, cut: 20, hotmelt: 20, tuffTotal: 4, tuff: 4 }), "done");
+  assert.strictEqual(GS({ total: 20, cut: 3, hotmelt: 0, officeDone: true }), "done", "the office's record says done");
+  assert.deepStrictEqual(F.fbGlassChip("done"), { kind: "done", words: "Glass ✓ done" });
+  assert.deepStrictEqual(F.fbGlassChip("part:12/20:5/20"), { kind: "part", words: "Glass: cut 12/20 · hotmelt 5/20" });
+  assert.strictEqual(F.fbGlassChip("part:20/20:20/20:tuff 1/4").words, "Glass: cut 20/20 · hotmelt 20/20 · tuff 1/4");
+  assert.deepStrictEqual([F.fbGlassChip("none").kind, F.fbGlassChip("").kind, F.fbGlassChip("junk").kind], ["none", "", ""]);
+  pass("glass status: blank, none, part, done incl. the Tuff rule and the office's done; the chip words");
+
+  /* B. door codes -> group; the slice; Stages; the gate */
+  assert.deepStrictEqual(["SS", "CD", "SFCD", "BF", "ACSD", "ACSS", "PVC", "DD", "SD", "1 DOOR", "xyz", ""].map(F.fbDoorGlazeGroup),
+    ["PVC SMART", "", "", "", "", "", "PVC DOOR", "PVC DOOR", "PVC DOOR", "PVC DOOR", "PVC DOOR", ""],
+    "SS is PVC SMART; CD / SFCD / BF / AC* never; every other code, known or not, is PVC DOOR");
+  const gJob = { id: "R9100", cust: "Person A", cat: "prod", blk: 1, seq: 1,
+    doors: [{ slot: 1, code: "PVC" }, { slot: 2, code: "CD" }, { slot: 3, code: "SS" }, { slot: 4, code: "DD" }],
+    prodsMain: [{ n: "pvc door", f: 2, s: 2, t: 0 }, { n: "casement windows", f: 1, s: 1, t: 0 }] };
+  const gSlice = F.fbSlice([gJob], names, () => "part:1/2:0/2");
+  const gPvc = gSlice.find(r => r.group === "PVC DOOR"), gCas = gSlice.find(r => r.group === "CASEMENT WINDOWS");
+  assert.deepStrictEqual([gPvc.glazeTotal, gCas.glazeTotal], [2, 0], "PVC + DD on the PVC DOOR row; no PVC SMART row, so SS is fed nowhere");
+  assert.ok(gSlice.every(r => r.glass === "part:1/2:0/2"), "Glass on every row of the job");
+  assert.deepStrictEqual([F.fbFeederFields(gPvc).GlazeTotal, F.fbFeederFields(gPvc).Glass], [2, "part:1/2:0/2"]);
+  assert.notStrictEqual(ST.sliceHash(gSlice, F.FAB), ST.sliceHash(F.fbSlice([gJob], names, () => "done"), F.FAB),
+    "a glass change re-feeds");
+  ["GlazeDone", "GlazeBy", "GlazeAt"].forEach(k => assert.ok(F.FB_FEEDER_WRITES.indexOf(k) < 0 && F.FB_FLOOR_FIELDS.indexOf(k) >= 0,
+    k + " is the floor's, never the feeder's"));
+  assert.deepStrictEqual(P("PVC DOOR"), { "pvc door": all3 }, "a bare group is still frames+sashes+transoms only");
+  assert.deepStrictEqual(P("PVC DOOR:glazing"), { "pvc door": { glazing: true } });
+  assert.deepStrictEqual(P("ALL:glazing"), { "pvc door": { glazing: true }, "pvc smart": { glazing: true } },
+    "ALL:glazing is the two glazed groups");
+  assert.deepStrictEqual(P("CASEMENT WINDOWS:glazing"), {}, "glazing exists on PVC DOOR and PVC SMART only");
+  const glazer = F.fbPeople([{ id: "1", fields: { Title: "Person G", Station: "Fabrication", Active: "Yes", Stages: "ALL:glazing" } }])[0];
+  const fabber = F.fbPeople([{ id: "2", fields: { Title: "Person F", Station: "Fabrication", Active: "Yes", Stages: "PVC DOOR" } }])[0];
+  [true, false, null].forEach(st => {
+    assert.ok(F.fbCanTap(glazer, "PVC DOOR", "glazing", {}, st, "R9100"), "role only: no assignment needed (state " + st + ")");
+    assert.ok(!F.fbCanTap(fabber, "PVC DOOR", "glazing", {}, st, "R9100"), "a bare PVC DOOR person may not glaze");
+  });
+  assert.ok(!F.fbCanTap(glazer, "PVC DOOR", "frames", {}, false, "R9100"), "and the glazer may not fabricate");
+  assert.ok(F.fbActAllowed(glazer, {}, true, "R9100", "PVC DOOR", "glazing", 2, "all"), "All / None allowed on glazing");
+  assert.strictEqual(F.fbRequestFields("R9100", "PVC DOOR", "glazing", "Person G", 1, "T"), null, "no Take on glazing");
+  /* its own count: not in the fabrication totals, colour or tabs */
+  const gItems = [{ id: "1", fields: Object.assign({ Title: gPvc.title }, F.fbFeederFields(gPvc),
+                    { FramesDone: 2, SashesDone: 2, GlazeDone: 1, GlazeBy: "Person G", GlazeAt: "2026-10-01T09:00:00Z" }) },
+                  { id: "2", fields: Object.assign({ Title: gCas.title }, F.fbFeederFields(gCas), { FramesDone: 1, SashesDone: 1 }) }];
+  const gCard = F.fbOfficeBoard(gItems)[0], gRec = gCard.groups.find(g => g.group === "PVC DOOR");
+  assert.deepStrictEqual([gRec.total, gRec.done, gRec.colour, gRec.lines.length, gRec.extra.length], [4, 4, "purple", 2, 1],
+    "the group's fabrication total, done and colour do not count glazing");
+  assert.deepStrictEqual([gRec.extra[0].part, gRec.extra[0].done, gRec.extra[0].total], ["glazing", 1, 2]);
+  assert.ok(gCard.finished && F.fbTabs(gItems).finished.length === 1, "finished for the tabs exactly as before, glazing owed or not");
+  assert.strictEqual(F.fbApplyTap(gRec, "glazing", "all"), 2);
+  assert.deepStrictEqual(Object.keys(F.fbFloorOnly(F.fbTapFields("glazing", 2, "Person G", "T"))).sort(),
+    ["DoneAt", "DoneBy", "GlazeAt", "GlazeBy", "GlazeDone"]);
+  assert.strictEqual(F.fbLogEntry({ job: "R9100", group: "PVC DOOR", part: "glazing", from: 1, to: 2 }).stage, "glazing");
+  assert.deepStrictEqual(F.FB_PARTS, ["frames", "sashes", "transoms"], "the painter's and the assignments' parts are unchanged");
+  /* the views: My work shows it to the glazer and places the card by it; Assigned never */
+  const gMine = F.fbViewTabs(F.fbTabs(gItems), glazer, "mine", {});
+  assert.deepStrictEqual([gMine.floor.map(c => c.job), gMine.floor[0].groups.map(g => g.group + ":" + g.lines.length + "+" + g.extra.length)],
+    [["R9100"], ["PVC DOOR:0+1"]], "My work for a glazer: only the glazing line, and the job is On floor while it is owed");
+  assert.strictEqual(F.fbViewFilter(F.fbOfficeBoard(gItems), glazer, "assigned", {}).length, 0, "Assigned to me never shows glazing");
+  assert.strictEqual(F.fbViewFilter(F.fbOfficeBoard(gItems), fabber, "mine", {})[0].groups[0].extra.length, 0);
+  const sdItems = gItems.map(it => ({ id: it.id, fields: Object.assign({}, it.fields, { Section: "Ready to fit", Active: "No" }) }));
+  const sdRec = F.fbOfficeBoard(sdItems)[0].groups.find(g => g.group === "PVC DOOR");
+  assert.deepStrictEqual([sdRec.extra[0].done, sdRec.extra[0].colour, sdRec.raw.glazing], [2, "sheet", 1], "finished on sheet: drawn full, raw kept");
+  pass("door glazing: code table, slice, Stages (named only), role-only gate, its own count, views, finished-on-sheet");
+
+  /* Glass ready first */
+  const gfCards = F.fbOfficeBoard([
+    { id: "1", fields: { Title: "A1|X", Job: "A1", Group: "X", Frames: 1, Seq: 1, OnSheet: "Yes", Active: "Yes", Glass: "none" } },
+    { id: "2", fields: { Title: "B2|X", Job: "B2", Group: "X", Frames: 1, Seq: 2, OnSheet: "Yes", Active: "Yes", Glass: "done" } },
+    { id: "3", fields: { Title: "C3|X", Job: "C3", Group: "X", Frames: 1, Seq: 3, OnSheet: "Yes", Active: "Yes", Urgent: "job" } },
+    { id: "4", fields: { Title: "D4|X", Job: "D4", Group: "X", Frames: 1, FramesDone: 1, Seq: 4, OnSheet: "Yes", Active: "Yes", Glass: "done" } }]);
+  assert.deepStrictEqual(F.fbGlassFirst(gfCards, true).map(c => c.job), ["C3", "B2", "A1", "D4"],
+    "urgent stays first, then glass-ready and unfinished; a finished job is not lifted");
+  assert.deepStrictEqual(F.fbGlassFirst(gfCards, false).map(c => c.job), ["C3", "A1", "B2", "D4"], "off: urgent first only");
+  assert.deepStrictEqual(gfCards.map(c => !!c.glassStart), [false, true, false, false], "the start line: glass done, nothing fabricated");
+  pass("Glass ready first: after urgent, unfinished glass-done jobs; the start line");
+
+  /* C. the gold plan (pure) */
+  const gDoors = [{ slot: 1, code: "PVC" }, { slot: 2, code: "CD" }, { slot: 3, code: "SS" }, { slot: 4, code: "DD" }];
+  const GP = (o, states) => F.fbGoldPlan(Object.assign({ doors: gDoors, group: "PVC DOOR", total: 2, done: 2, glazeAt: 1000,
+    stateOf: s => (states || {})[s] || {} }, o));
+  assert.deepStrictEqual(GP(), [1, 4], "full: the PVC DOOR doors; CD never; SS is PVC SMART's");
+  assert.deepStrictEqual(GP({ done: 1 }), [], "partial paints nothing");
+  assert.deepStrictEqual(GP({ done: 0 }), [], "a count that dropped raises nothing - and there is nothing in a plan that clears");
+  assert.deepStrictEqual(GP({}, { 1: { status: "done" } }), [4], "already done: left");
+  assert.deepStrictEqual(GP({}, { 1: { pending: true }, 4: { foreign: true } }), [], "a write in the air, or a colour not ours: skipped");
+  assert.deepStrictEqual(GP({}, { 1: { status: "", office: true, when: 2000 }, 4: { status: "process", office: true, when: 500 } }), [4],
+    "an office row written after the glazing stands (its clear is not gilded again); an older one is raised");
+  assert.deepStrictEqual(GP({ group: "PVC SMART", total: 1, done: 1 }), [3]);
+  pass("gold plan: full only, mapped doors only, raise only, never over a later office row, CD never");
+
+  /* C. end to end, through the checkpoint record path */
+  const FILLCALLS = [];
+  CW.setFill = async (sheet, addr, color) => { FILLCALLS.push({ sheet: sheet, addr: addr, color: color }); };
+  const goldJob = { id: "R9100", src: { Production: 7 }, done: 0, cat: "prod", blk: 1, drs: 4, wnd: 0,
+    doors: gDoors.map(d => Object.assign({ status: "" }, d)), prods: [], prodsMain: [], glass: {},
+    cp: { win: "", drs: "", glass: {}, prod: {} } };
+  global.__GJ = goldJob;
+  global.__GI = [{ id: "1", fields: { Title: "R9100|PVC DOOR", Job: "R9100", Group: "PVC DOOR", Frames: 2, Sashes: 2,
+    GlazeTotal: 2, GlazeDone: 1, GlazeBy: "Person G", GlazeAt: "2026-10-01T09:00:00Z", Section: "In production",
+    Active: "Yes", OnSheet: "Yes" } }];
+  const setGlaze = n => A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { GlazeDone: " + n + " }) }];");
+  A("ALL = [__GJ]; BLOCKNAMES = ['Ready to fit', 'In production']; PRODMAP = { prod: {}, glass: {}, qty: { drs: 14 }, hdr: [2, 3]," +
+    " doors: { 1: 72, 2: 73, 3: 74, 4: 75 } }; CP_LIST_OK = true; cpSetImportPending(false); cpRowsSet({}); CP_ITEMS = [];" +
+    " PAINTED = {}; FABR_OK = true; Object.keys(FABR_GOLD_FAIL).forEach(k => delete FABR_GOLD_FAIL[k]);");
+  /* the job list's own row renderer wants a whole parsed job; it is not under test */
+  A("renderRows = function () {}; renderDrawer = function () {};");
+  ADDS.length = 0; PATCHES.length = 0; LOGS.length = 0;
+  setGlaze(1);
+  assert.strictEqual(await A("fabrGoldRun()"), 0, "partial: nothing");
+  assert.deepStrictEqual([ADDS.length, FILLCALLS.length], [0, 0]);
+  setGlaze(2);
+  assert.strictEqual(await A("fabrGoldRun()"), 2, "full: the two PVC DOOR doors raised");
+  const recs = ADDS.filter(a => a.name === "Dashboard progress");
+  assert.deepStrictEqual(recs.map(a => [a.fields.Title, a.fields.Status, a.fields.Source, a.fields.Who]),
+    [["R9100|door:1", "done", "fabrication", "Person G"], ["R9100|door:4", "done", "fabrication", "Person G"]],
+    "the RECORD first: a Dashboard progress row per door, Source fabrication, Who the glazer");
+  const doorFills = FILLCALLS.filter(f => /^(BT|BW)7$/.test(f.addr));
+  assert.deepStrictEqual(doorFills.map(f => [f.sheet, f.addr]), [["Production", "BT7"], ["Production", "BW7"]],
+    "then the fill, from the record, on the job's own row, those two door cells");
+  assert.ok(doorFills.every(f => f.color === A("CP_WORD_HEX.done")), "gold");
+  assert.ok(!FILLCALLS.some(f => /^(BU|BV)7$/.test(f.addr)), "the CD cell and the SS cell are never touched");
+  assert.deepStrictEqual(LOGS.map(l => l.what), ["Door 1", "Door 4"], "logged as an office tick on a door is");
+  assert.ok(/door glazing complete/.test(LOGS[0].to));
+  assert.deepStrictEqual(A("[paintedOf('R9100', 'door:1'), cpStatus(__GJ, 'door:1')]").join(), "done,done", "painted and recorded");
+  const nAdds = ADDS.length, nFills = FILLCALLS.length;
+  assert.strictEqual(await A("fabrGoldRun()"), 0, "already done: nothing again");
+  setGlaze(0);
+  assert.strictEqual(await A("fabrGoldRun()"), 0, "the count dropped: nothing is cleared");
+  assert.deepStrictEqual([ADDS.length, FILLCALLS.length, A("cpStatus(__GJ, 'door:1')")], [nAdds, nFills, "done"]);
+  /* the office clears a door AFTER the glazing finished: it is not gilded again */
+  setGlaze(2);
+  A("cpRowPut('R9100', 'door:1', { id: '900', job: 'R9100', item: 'door:1', status: '', done: 0, total: 1," +
+    " source: 'office', when: '2026-10-01T10:00:00Z' });");
+  assert.strictEqual(await A("fabrGoldRun()"), 0, "an office clear made after the glazing stamp stands");
+  /* ... a write in the air on that item, a gold row, and a finished-on-sheet job are skipped */
+  A("cpRowPut('R9100', 'door:1', null);");
+  assert.strictEqual(A("fabrGoldPlan(__GJ).length"), 1, "with no row it would be raised");
+  A("CPBURST['R9100|door:1'] = { key: 'R9100|door:1' };");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "cpPending: skipped");
+  A("delete CPBURST['R9100|door:1'];");
+  goldJob.done = 1;
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "a gold row is whole");
+  goldJob.done = 0;
+  A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { GlazeDone: 2, Section: 'Ready to fit', Active: 'No' }) }];");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "finished on sheet: skipped");
+  setGlaze(2);
+  A("cpSetImportPending(true);");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "import pending: skipped");
+  A("cpSetImportPending(false); CP_LIST_OK = false;");
+  assert.strictEqual(A("fabrGoldPlan(__GJ)"), null, "the record list unreadable: skipped");
+  A("CP_LIST_OK = true;");
+  assert.ok(src("fabrication.js").indexOf("Dashboard progress") < 0 && src("fabrication-core.js").indexOf("cpSaveRow") < 0,
+    "the tablet never writes the record");
+  pass("gold end to end: record first (Source fabrication), then the fill; raise only; office clear, pending, gold row, sheet-done skipped");
+
+  /* the painter still knows nothing of glazing */
+  A("FABR_PAINTED = {}; cpRowsSet({}); PRODMAP.prod = { 'pvc door': { f: 62, s: 63 } };");
+  goldJob.prodsMain = [{ n: "pvc door", f: 2, s: 2, t: 0 }]; goldJob.prods = goldJob.prodsMain;
+  A("FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { FramesDone: 1, GlazeDone: 2, DoneAt: '2026-10-01T09:00:00Z' }) }];");
+  assert.deepStrictEqual(Array.from(A("(fabrColourPlan(__GJ) || []).map(p => p.item)")), ["prod:pvc door:f"],
+    "the lavender/purple painter plans F/S/T cells only");
+
+  /* the office board: the chip, the glazing line with steppers and no Assign, an office edit */
+  A("FABR_ASSIGN_OK = true; FABR_ASSIGN = []; FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { Glass: 'done', GlazeDone: 1 }) }];");
+  const gRow = A("FABR_OPEN = { R9100: 1 }; fabrRowHtml(fabrRecordsNow().byJob['R9100'])");
+  assert.ok(/gchip g-done/.test(gRow) && /Glass ✓ done/.test(gRow), "the chip on the board");
+  assert.ok(/Glass is ready and nothing is fabricated yet — start this job/.test(gRow), "the start line");
+  assert.ok(/Door glazing/.test(gRow) && /data-fwpart="glazing" data-fwact="1"/.test(gRow), "the glazing line has steppers");
+  assert.ok(!/data-fasg="1\|glazing"/.test(gRow) && /data-fasg="1\|frames"/.test(gRow), "and no Assign: a role, not an assignment");
+  CW.listItem = async (name, id) => { const it = A("FABR_ITEMS").find(x => String(x.id) === String(id)); return it ? { id: it.id, fields: Object.assign({}, it.fields) } : null; };
+  PATCHES.length = 0; LOGS.length = 0;
+  assert.strictEqual(await A("fabrOfficeEdit('1', 'glazing', 'all')"), true);
+  assert.deepStrictEqual(Object.keys(PATCHES[0].fields).sort(), ["DoneAt", "DoneBy", "GlazeAt", "GlazeBy", "GlazeDone"],
+    "the office edit: the counter, GlazeBy/At, DoneBy/At");
+  assert.ok(/^Fabrication: R9100 PVC DOOR glazing$/.test(LOGS[0].what) && !ADDS.some(a => a.name === "Station log"),
+    "one Dashboard Log line, never Station log");
+  await new Promise(r => setTimeout(r, 30));           // the gold run the edit started
+  pass("office: chip, start line, glazing line with steppers and no Assign, the five-field edit, painter unchanged");
+
+  /* A. the office's glass word, and a list without the new columns */
+  global.__GLJ = { id: "R9200", glass: { dg: 10, tg: 10 } };
+  A("STATION_OK = true; STATION_ITEMS = [{ id: '1', fields: { Title: 'R9200', Job: 'R9200', Total: 20, Cut: 12, Hotmelt: 5, Active: 'Yes' } }];");
+  assert.strictEqual(A("fabrGlassOf(__GLJ)"), "part:12/20:5/20", "derived from the glass row this page already holds");
+  assert.strictEqual(A("fabrGlassOf({ id: 'R9201', glass: {} })"), "", "no glass: blank");
+  A("STATION_OK = false;");
+  assert.strictEqual(A("fabrGlassOf(__GLJ)"), "", "the glass list unreadable: blank, never a 'not started' nobody said");
+  const sent = [];
+  global.__SEND = async body => {
+    if ("Glass" in body) throw new Error("PATCH x -> 400 {\"error\":\"Field 'Glass' is not recognized\"}");
+    sent.push(body); return {};
+  };
+  await A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T', FedBy: 'o' }, __SEND)");
+  assert.deepStrictEqual([Object.keys(sent[0]).sort(), A("fabrColsMissing()").join()],
+    [["Customer", "FedAt", "FedBy", "GlazeTotal"], "Glass"], "a 400 on the new column: sent without it, and that column remembered");
+  await A("fabrFeedWrite({ Glass: 'done', FedAt: 'T', FedBy: 'o' }, __SEND)");
+  assert.strictEqual(sent.length, 1, "afterwards a write that only carried it is not sent at all");
+  assert.ok(/has no “Glass” column yet/.test(A("fabrBoardHtml()")), "and the board says which column is missing");
+  global.__SEND2 = async () => { throw new Error("PATCH x -> 503 busy"); };
+  await assert.rejects(A("fabrFeedWrite({ GlazeTotal: 2, FedAt: 'T' }, __SEND2)"), /503/, "anything but a 400 is just a failed write");
+  assert.strictEqual(A("fabrColsMissing()").join(), "Glass", "and marks no column missing");
+  A("delete FABR_NOCOL.Glass;");
+  pass("glass word from the glass row; a missing new column is stripped, remembered and said, the feed carries on");
+
+  /* D. welding and glazing boards are told after a feed that wrote rows */
+  global.__RD = { w: 0, g: 0 };
+  A("redrawWelding = function () { __RD.w++; }; redrawGlazing = function () { __RD.g++; };" +
+    "WELD_FEED = { hash: '', at: 0 }; GLZ_FEED = { hash: '', at: 0 }; ALL = [__JOB]; BLOCKNAMES = ['Ready to fit', 'In production'];");
+  job.wndMain = 3; job.blk = 1; job.done = 0;
+  CW.listItemsFor = async () => [];
+  const rw = await A("feedWelding()"), rz = await A("feedGlazing()");
+  assert.ok(rw && rw.sent > 0 && global.__RD.w > 0, "D: feedWelding redraws the welding board after writing rows");
+  assert.ok(rz && rz.sent > 0 && global.__RD.g > 0, "D: feedGlazing redraws the glazing board after writing rows");
+  pass("D: redrawWelding / redrawGlazing after a feed that wrote rows");
+
+  /* the tablet page: the glazing line, the chip, the toggle */
+  T("ITEMS = " + JSON.stringify([
+      { id: "1", fields: Object.assign({}, gItems[0].fields, { Glass: "done", FramesDone: 0, SashesDone: 0 }) },
+      { id: "2", fields: { Title: "R9050|CASEMENT WINDOWS", Job: "R9050", Group: "CASEMENT WINDOWS", Frames: 1, Seq: 0,
+                           Section: "In production", Active: "Yes", OnSheet: "Yes", Glass: "part:1/2:0/2" } }]) +
+    "; PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person G', Station: 'Fabrication', Active: 'Yes', Stages: 'ALL:glazing' } }," +
+    " { id: '2', fields: { Title: 'Person F', Station: 'Fabrication', Active: 'Yes', Stages: 'PVC DOOR' } }]);" +
+    " QUERY = ''; TAB = 'floor'; QUEUE = {}; LOST = {}; HINT = {};");
+  setAssign(null);
+  T("pickPerson(PEOPLE[1]); setView('all'); setGlassFirst(false); render();");     // Person G
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify(boardNow().tabs.floor.map(c => c.job))")), ["R9050", "R9100"], "board order");
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify([lineState(recordById('1'), 'glazing'), lineState(recordById('1'), 'frames').words])")),
+    [{ can: true, words: "" }, "not your part"], "the glazer: the glazing line is theirs, with no assignment and no Take");
+  T("READY = false; tap('1', 'glazing', 'all'); READY = true;");
+  assert.strictEqual(T("QUEUE['1|glazing'].value"), 2, "a tap queues with the assignments list unknown: role only; All allowed");
+  T("QUEUE = {}; boardNow(); pickPerson(PEOPLE[0]);");                           // Person F: bare PVC DOOR
+  assert.strictEqual(T("lineState(recordById('1'), 'glazing').words"), "not your part", "a non-glazing person: locked");
+  T("READY = false; tap('1', 'glazing', 1); READY = true;");
+  assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("HINT['R9100'].why")], [0, "part"]);
+  const gHtml = T("cardInner(boardNow().tabs.floor.find(c => c.job === 'R9100'))");
+  assert.ok(/gchip g-done">Glass ✓ done/.test(gHtml) && /Glass is ready and nothing is fabricated yet — start this job/.test(gHtml) &&
+            /Door glazing/.test(gHtml), "the chip, the start line and the glazing line on the card");
+  assert.ok(/gchip g-part">Glass: cut 1\/2 · hotmelt 0\/2/.test(T("cardInner(boardNow().tabs.floor.find(c => c.job === 'R9050'))")));
+  T("setGlassFirst(true);");
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify(boardNow().tabs.floor.map(c => c.job))")), ["R9100", "R9050"], "Glass ready first");
+  assert.strictEqual(T("localStorage.getItem('cw_fabglassfirst')"), "1", "remembered per tablet");
+  T("setView('mine');");
+  assert.deepStrictEqual(JSON.parse(T("JSON.stringify(boardNow().tabs.floor.map(c => c.job))")), ["R9100"], "and it works under My work");
+  T("setGlassFirst(false); setView('all');");
+  pass("tablet: glazing line for a glazer and a non-glazer, chip states, start line, Glass ready first");
+
   /* ================= 10. the gates ================= */
   const fsrc = src("fabrication-core.js") + src("fabrication.js") + src("fabrication.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",

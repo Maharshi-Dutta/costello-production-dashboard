@@ -102,6 +102,22 @@ the one that first wrote them down.
      anything.** The "vice versa" is the safeguard, not a colour read: a door
      cell painted in Excel by hand is adopted into the record like any other
      managed cell.
+     **Since 2026-10-01 the door cells have a second writer: fabrication's
+     door glazing** (owner, [`docs/specs/2026-10-01-fabrication-glass-status-door-glazing.md`](docs/specs/2026-10-01-fabrication-glass-status-door-glazing.md)
+     section C: *"when door glazing is done make door done/golden in excel"*).
+     When a job's door glazing count on PVC DOOR or PVC SMART is **full**, the
+     office dashboard (never the tablet) raises the record of each door cell
+     glazed in that group to done — through the same path an office tick uses
+     (`cpWriteItem` + `cpSaveRow`: the `Dashboard progress` row first, `Source
+     = fabrication`, `Who` = the glazer, then the fill from the record).
+     **Gold only, raise only**: a partial count paints nothing; a count that
+     drops clears nothing (only the office clears); a door already done is
+     left; an office or hand-painted row written at or after the glazing stamp
+     stands; CD / SFCD / BF / AC* cells are never touched; gold rows, jobs off
+     the sheet or finished on the sheet, a write in the air on that item, an
+     unreadable record and a pending import are all skipped, and the plan is
+     made again inside the job's checkpoint chain right before writing
+     (`fabrGoldRun` in `app.js`; which doors is `FABC.fbGoldPlan`).
      The **Windows (M) and Doors (N)** cells stay ticks of their own, as they
      have been since 2026-09-04, and from that day they are **also** painted
      from what is under them — yellow when any window type or any door has
@@ -343,6 +359,12 @@ the one that first wrote them down.
      Take) — it never PATCHes Status, Qty or Person. The feeder never writes
      `Urgent` (it is not a feeder field). Every office write here leaves one
      `Dashboard Log` line.
+     **Door glazing (2026-10-01):** a fourth counter on PVC DOOR and PVC SMART
+     rows, `GlazeDone` with `GlazeBy`/`GlazeAt`, written by the tablet and by
+     the office's board through the same five-field body (`fbTapFields`
+     with part `glazing`); `GlazeTotal` and `Glass` are feeder columns and the
+     feeder never writes `GlazeDone/By/At`. A role, not an assignment: `Stages`
+     must name it (`PVC DOOR:glazing`, `ALL:glazing`).
    Only the tablet (`station.js`, `welding.js`, `glazing.js`, `fabrication.js`) writes a By, an At,
    a last touch or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.

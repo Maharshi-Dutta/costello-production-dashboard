@@ -92,7 +92,7 @@ function cleanQueue(raw) {
   const out = {};
   Object.keys(raw || {}).forEach(k => {
     const e = raw[k];
-    if (!e || !e.id || F.FB_PARTS.indexOf(String(e.part)) < 0) return;
+    if (!e || !e.id || F.FB_TAP_PARTS.indexOf(String(e.part)) < 0) return;
     const v = Number(e.value);
     if (!isFinite(v)) return;
     const from = Number(e.from);
@@ -219,7 +219,7 @@ async function flushQueue() {
       /* THE GATE AGAIN, AT THE MOMENT OF SENDING (review P5). A tap queued
          while the person held the line is not theirs to send once the office
          has taken the assignment away. Unknown gate: hold it for now. */
-      if (ASSIGN_OK === null) continue;
+      if (ASSIGN_OK === null && e.part !== F.FB_GLAZE) continue;   // door glazing has no assignment to wait for
       /* a job that has moved on to a finished section on the sheet is shown
          finished and takes no taps, queued or not */
       /* decided from the list as it is now, not from the drawn records, which
@@ -397,7 +397,8 @@ function tap(id, part, delta) {
      group this person does not do - or, once assignments exist, a part they do
      not hold an Assigned row on - is never queued. It says why. */
   const why = rec.sheetDone ? "sheet" : !mayDo(rec.group) ? "group"
-    : !F.fbEligible(PERSON, rec.group, part) ? "part" : ASSIGN_OK === null ? "checking"
+    : !F.fbEligible(PERSON, rec.group, part) ? "part"
+    : part !== F.FB_GLAZE && ASSIGN_OK === null ? "checking"
     : !mayTap(rec, part) ? "assign" : !mayAct(rec, part, delta) ? "whole" : "";
   if (why) {
     HINT[rec.job] = { group: rec.group, at: Date.now(), why: why };
@@ -429,13 +430,25 @@ function boardNow() {
   /* the view filter (2026-10-01) narrows what is DRAWN, after the records the
      tap gate reads were taken from the whole board above */
   /* ... and places each card by the lines it shows (review M2) */
-  return { tabs: F.fbViewTabs(tabs, PERSON, VIEW, IDX), all: tabs };
+  const view = F.fbViewTabs(tabs, PERSON, VIEW, IDX);
+  /* urgent stays first; then, when asked, the jobs whose glass is ready */
+  view.floor = F.fbGlassFirst(view.floor, GLASSFIRST);
+  view.finished = F.fbGlassFirst(view.finished, GLASSFIRST);
+  return { tabs: view, all: tabs };
 }
 
 /* ---- the view: Everything | My work | Assigned to me (2026-10-01) ----------
    Display only. Remembered per person in cw_fabview; Everything by default. */
 const VIEW_KEY = "cw_fabview";
 let VIEW = "all";
+/* "Glass ready first" (2026-10-01): remembered per TABLET, not per person */
+const GLASSFIRST_KEY = "cw_fabglassfirst";
+let GLASSFIRST = false;
+try { GLASSFIRST = localStorage.getItem(GLASSFIRST_KEY) === "1"; } catch (e) {}
+function setGlassFirst(on) {
+  GLASSFIRST = !!on;
+  try { localStorage.setItem(GLASSFIRST_KEY, GLASSFIRST ? "1" : "0"); } catch (e) {}
+}
 function viewStore() {
   try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "{}") || {}; } catch (e) { return {}; }
 }
@@ -546,6 +559,7 @@ function lineState(rec, part) {
   if (rec.sheetDone) return { can: false, words: "finished on sheet" };
   if (!mayDo(rec.group)) return { can: false, words: "not your line" };
   if (!F.fbEligible(PERSON, rec.group, part)) return { can: false, words: "not your part" };
+  if (part === F.FB_GLAZE) return { can: true, words: "" };          // a role, no assignment, no Take
   if (ASSIGN_OK === false) return { can: true, words: "" };           // no list: Part A
   if (ASSIGN_OK !== true) return { can: false, words: "checking assignments…" };
   const mine = F.fbMine(IDX, PERSON, rec.job, rec.group, part);
@@ -582,13 +596,15 @@ function groupHtml(rec) {
     '<div class="wghead"><span class="wgname cond">' + (rec.urgentOf.group ? URG : "") + esc(rec.group) + '</span>' +
       (rec.doors ? '<span class="wgdoors tab">' + esc(rec.doors) + '</span>' : "") +
       '<span class="wgcount tab">' + rec.done + ' / ' + rec.total + '</span></div>' +
-    '<div class="steps">' + rec.lines.map(l => stepHtml(rec, l)).join("") + '</div>' +
+    /* door glazing, when the group has it, is the last line: its own count */
+    '<div class="steps">' + rec.lines.concat(rec.extra || []).map(l => stepHtml(rec, l)).join("") + '</div>' +
   '</div>';
 }
 function cardInner(c) {
   const owed = owedForCard(c), bad = badForCard(c), lost = lostFor(c.job), hint = hintFor(c.job);
   const jobUrgent = c.groups.some(g => F.fbUrgentOf(g.urgent).job);
   const badge = badgeFor(c.job);
+  const glass = F.fbGlassChip(c.glass);
   return '<div class="chead">' +
       (jobUrgent ? URG : "") +
       '<span class="cond job">' + esc(c.job) + '</span>' +
@@ -596,8 +612,11 @@ function cardInner(c) {
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
       (c.section && !c.active ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
       (c.sheetDone ? '<span class="csheet">finished on sheet</span>' : "") +
+      /* the job's glass, as the office fed it (read only; nothing when blank) */
+      (glass.kind ? '<span class="gchip g-' + glass.kind + '">' + esc(glass.words) + '</span>' : "") +
     '</div>' +
     (c.comment ? '<div class="cfacts"><span class="ccmt">“' + esc(c.comment) + '”</span></div>' : "") +
+    (c.glassStart ? '<div class="gstart">Glass is ready and nothing is fabricated yet — start this job</div>' : "") +
     '<div class="wgroups">' + c.groups.map(groupHtml).join("") + '</div>' +
     (hint ? '<div class="hint">' + (hint.why === "assign"
       ? "Not assigned to you yet — tap Take on the line, and the office approves it."
@@ -658,7 +677,7 @@ function qState(c) {
          (hint ? "h" + hint.group + hint.why : "") + "/" + NOTES.sig(c.job) +
          /* the assignment state of every line, and the notice badge: neither is
             in the Fabrication station list, so boardDiff cannot see them */
-         "/" + c.groups.map(g => F.FB_PARTS.map(p => JSON.stringify(lineState(g, p))).join("")).join(";") +
+         "/" + c.groups.map(g => F.FB_TAP_PARTS.map(p => JSON.stringify(lineState(g, p))).join("")).join(";") +
          "/" + badgeFor(c.job) + (Object.keys(TAKING).length ? "t" : "");
 }
 /* the view is in here too: a switch redraws every card, since the card
@@ -740,6 +759,12 @@ function render() {
   if (now) noticesNow(now.all.floor.concat(now.all.finished)); else UNSEEN = [];
   const vw = $("#wview");
   if (vw) { vw.hidden = !boarding; vw.style.display = boarding ? "" : "none"; }
+  const gf = $("#glassfirst");
+  if (gf) {
+    gf.hidden = !boarding; gf.style.display = boarding ? "" : "none";
+    gf.className = GLASSFIRST ? "on" : "";
+    gf.setAttribute("aria-pressed", GLASSFIRST ? "true" : "false");
+  }
   [["#vall", "all"], ["#vmine", "mine"], ["#vasg", "assigned"]].forEach(([s, v]) => {
     const b = $(s);
     if (!b) return;
@@ -956,6 +981,8 @@ async function start() {
   if (mb) mb.onclick = () => goTab(TAB === "floor" ? "finished" : "floor");
   const ban = $("#banner");
   if (ban) ban.onclick = () => { touch(); markSeen(""); };
+  const gfb = $("#glassfirst");
+  if (gfb) gfb.onclick = () => { setGlassFirst(!GLASSFIRST); touch(); render(); };
   [["#vall", "all"], ["#vmine", "mine"], ["#vasg", "assigned"]].forEach(([s, v]) => {
     const b = $(s);
     if (b) b.onclick = () => {

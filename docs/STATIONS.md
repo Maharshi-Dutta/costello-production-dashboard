@@ -1146,6 +1146,44 @@ station**. Definition: `FABC.FAB` in `fabrication-core.js`, `site: "floor"`.
 | `FramesBy/At`, `SashesBy/At`, `TransomsBy/At` | Single line | the tablet; the office | last mover of that counter |
 | `DoneBy` / `DoneAt` | Single line | the tablet; the office | last touch of any counter |
 | `Urgent` | Single line | the office only (Part B) | blank, or a comma list of `job`, `group`, `frames`, `sashes`, `transoms`. `job` is the job-level flag, written on every row of the job. Never written by the feeder |
+| `Glass` | Single line | feeder (2026-10-01) | the job's glass, in one word, on every row of the job: blank (no glass), `none`, `part:<cut>/<total>:<hotmelt>/<total>` (plus `:tuff <n>/<m>` when the job has Tuff), or `done` (cut and hotmelt complete, and Tuff when the job has Tuff — or the office says the glass is done). Worked out by the office from the glass station's row it already holds; the fabrication tablet never reads the glass list |
+| `GlazeTotal` | Number | feeder (2026-10-01) | door glazing to do on this row: the job's DOORS DONE cells whose code is glazed in this group. PVC DOOR and PVC SMART rows only; 0 elsewhere |
+| `GlazeDone` | Number | the tablet; the office board | doors glazed so far |
+| `GlazeBy` / `GlazeAt` | Single line | the tablet; the office | last mover of that counter |
+
+**The job's glass on the card (2026-10-01).** A chip on the card head, tablet
+and office board: green "Glass ✓ done", amber "Glass: cut 12/20 · hotmelt
+5/20", grey "Glass: not started", nothing when blank. A job In production with
+glass done and nothing fabricated at all also says "Glass is ready and nothing
+is fabricated yet — start this job". The tablet's **Glass ready first** toggle
+(under the header; remembered per tablet, `cw_fabglassfirst`) lifts unfinished
+glass-done jobs to the top, after urgent, in every view. A glass list the
+office cannot read feeds blank, never "not started".
+
+**Door glazing — a fourth part (2026-10-01).** On **PVC DOOR** and **PVC
+SMART** rows only, drawn as a last line "Door glazing" when `GlazeTotal` > 0.
+Which door code counts where: `SS` → PVC SMART; `CD`, `SFCD`, `BF`, `ACSD`,
+`ACSS` → never; every other non-empty code (PVC, DD, SD, …) → PVC DOOR. A job
+with glazeable doors and no such group row is fed nothing. It is **its own
+count**: in no fabrication total, colour, tab or lavender/purple paint. It is a
+**role with no assignment**: `Stages` must name it (`PVC DOOR:glazing`,
+`ALL:glazing` — a bare group name is still frames + sashes + transoms only),
+and whoever has the role may tap, All and None included; Take, Assign, splits
+and the whole-line rule do not apply. My work shows the line to a glazer;
+Assigned to me never does. `Station log`: `Stage = glazing`.
+
+**Gold when door glazing is complete (2026-10-01, CLAUDE.md rule 1).** When a
+row's `GlazeDone` reaches `GlazeTotal`, the office (never the tablet) marks
+each door glazed in that group done **through the checkpoint record** — the
+`Dashboard progress` row first (`Source = fabrication`, `Who` = `GlazeBy`), then
+the gold fill and the log line, exactly as an office tick on a door. Raise
+only: a partial count does nothing, a count that drops clears nothing, an
+office row written after the glazing stands, CD-type cells are never touched.
+
+**A list without the 2026-10-01 columns.** If `Glass` or `GlazeTotal` is not on
+the list yet, the write that names it is refused (400); the office sends it
+again without that column, remembers the column for the session, says which
+one is missing on the board, and the rest of the feed carries on.
 
 ### `Fabrication assignments` — one row per piece of work given to a person (Part B)
 

@@ -35,17 +35,39 @@ const FB_DONE_FIELD = { frames: "FramesDone", sashes: "SashesDone", transoms: "T
 const FB_BY_FIELD = { frames: "FramesBy", sashes: "SashesBy", transoms: "TransomsBy" };
 const FB_AT_FIELD = { frames: "FramesAt", sashes: "SashesAt", transoms: "TransomsAt" };
 
+/* ---- door glazing: a fourth part, on PVC DOOR and PVC SMART only (owner,
+   2026-10-01). NOT one of FB_PARTS: it is its own count. It is in no
+   fabrication total, colour, tab, assignment or sheet paint; it has a role
+   (`Stages` must name it: "PVC DOOR:glazing") and no assignment. Its total is
+   the number of the job's DOORS DONE cells whose code belongs to the group. */
+const FB_GLAZE = "glazing";
+const FB_TAP_PARTS = FB_PARTS.concat([FB_GLAZE]);        // every counter a tap may move
+FB_PART_LABEL[FB_GLAZE] = "Door glazing";
+FB_TOTAL_FIELD[FB_GLAZE] = "GlazeTotal";
+FB_DONE_FIELD[FB_GLAZE] = "GlazeDone";
+FB_BY_FIELD[FB_GLAZE] = "GlazeBy";
+FB_AT_FIELD[FB_GLAZE] = "GlazeAt";
+const FB_GLAZE_GROUPS = ["PVC DOOR", "PVC SMART"];
+/* door codes that are never door glazing here (owner: "… but not CD") */
+const FB_GLAZE_NEVER = ["CD", "SFCD", "BF", "ACSD", "ACSS"];
+
 /* ---- the columns ----------------------------------------------------------
    The feeder writes Title, the job facts and FedAt/FedBy. The floor (and the
    office's own board) writes FB_FLOOR_FIELDS and nothing else. `Urgent` is the
    office's alone and is Part B's: it is in FB_FIELDS so a read carries it, and
    in neither write list. No seed: there is no office record of fabrication. */
 const FB_FEEDER_FIELDS = ["Job", "Group", "GroupSeq", "Customer", "Comment", "Seq", "Doors",
-                          "Frames", "Sashes", "Transoms", "Section", "Active", "OnSheet"];
+                          "Frames", "Sashes", "Transoms", "Section", "Active", "OnSheet",
+                          "Glass", "GlazeTotal"];
+/* the two feeder columns added 2026-10-01. A list that has not got them yet
+   must not have its whole feed refused: the office strips whichever is
+   missing from its writes and says so (app.js, fabrFeedWrite). */
+const FB_NEW_FEEDER_FIELDS = ["Glass", "GlazeTotal"];
 const FB_FLOOR_FIELDS = ["FramesDone", "SashesDone", "TransomsDone",
                          "FramesBy", "FramesAt", "SashesBy", "SashesAt", "TransomsBy", "TransomsAt",
+                         "GlazeDone", "GlazeBy", "GlazeAt",
                          "DoneBy", "DoneAt"];
-const FB_COUNTER_FIELDS = ["FramesDone", "SashesDone", "TransomsDone"];
+const FB_COUNTER_FIELDS = ["FramesDone", "SashesDone", "TransomsDone", "GlazeDone"];
 const FB_OFFICE_FIELDS = ["Urgent"];
 const FB_SEED_FIELDS = [];
 const FB_FIELDS = ["Title"].concat(FB_FEEDER_FIELDS, ["FedAt", "FedBy"], FB_FLOOR_FIELDS, FB_OFFICE_FIELDS);
@@ -122,10 +144,70 @@ function fbCommentOf(j) {
   const hit = ((j && j.notes) || []).find(x => x && x.k === "comment");
   return fbStrip(hit ? hit.t : "");
 }
+/** Which group a DOORS DONE code's glazing belongs to: SS is PVC SMART; CD,
+    SFCD, BF and the AC codes are never glazed here; every other non-empty code
+    (PVC, DD, SD, ...) is PVC DOOR. "" = not counted. */
+function fbDoorGlazeGroup(code) {
+  const c = fbKey(code);
+  if (!c || FB_GLAZE_NEVER.indexOf(c) >= 0) return "";
+  return c === "SS" ? "PVC SMART" : "PVC DOOR";
+}
+/** { "PVC DOOR": n, "PVC SMART": m } for one job, off j.doors (Production alone). */
+function fbGlazeTotals(j) {
+  const out = {};
+  ((j && j.doors) || []).forEach(d => {
+    const g = fbDoorGlazeGroup(d && d.code);
+    if (g) out[g] = (out[g] || 0) + 1;
+  });
+  return out;
+}
+
+/* ---- the job's glass, as the fabricators are told it (2026-10-01) -----------
+   One word per job, worked out by the OFFICE from what it already holds (the
+   glass station's row and its own "glass done" answer) and fed as the `Glass`
+   column. The tablet never reads the glass list.
+     ""                         the job has no glass
+     "none"                     it has glass and nothing is recorded
+     "part:c/t:h/t[:tuff n/m]"  started, not complete
+     "done"                     cut and hotmelt complete, and tuff when the job
+                                has tuff - or the office says the glass is done */
+function fbGlassStatus(g, hasGlass) {
+  if (!hasGlass) return "";
+  if (!g) return "none";
+  const t = Math.max(0, fbInt(g.total, 0)), tt = Math.max(0, fbInt(g.tuffTotal, 0));
+  if (!(t > 0) && !(tt > 0)) return g.officeDone ? "done" : "none";
+  const c = fbClamp(g.cut, t), h = fbClamp(g.hotmelt, t), tf = fbClamp(g.tuff, tt);
+  if (g.officeDone || (c >= t && h >= t && tf >= tt)) return "done";
+  if (!(c > 0 || h > 0 || tf > 0)) return "none";
+  return "part:" + c + "/" + t + ":" + h + "/" + t + (tt > 0 ? ":tuff " + tf + "/" + tt : "");
+}
+/** The chip a `Glass` word draws: { kind: "done" | "part" | "none" | "", words }. */
+function fbGlassChip(text) {
+  const s = fbTxt(text).trim();
+  if (!s) return { kind: "", words: "" };
+  if (s === "done") return { kind: "done", words: "Glass ✓ done" };
+  if (s === "none") return { kind: "none", words: "Glass: not started" };
+  const m = /^part:(\d+\/\d+):(\d+\/\d+)(?::tuff (\d+\/\d+))?$/.exec(s);
+  if (!m) return { kind: "", words: "" };
+  return { kind: "part", words: "Glass: cut " + m[1] + " · hotmelt " + m[2] + (m[3] ? " · tuff " + m[3] : "") };
+}
+/** Glass is ready and this job is not finished: the ones "Glass ready first"
+    lifts. With nothing fabricated at all it also gets the "start this job" line. */
+const fbGlassReady = c => !!c && fbTxt(c.glass) === "done" && !!c.active && !c.sheetDone && !c.finished;
+const fbGlassStart = c => fbGlassReady(c) && !(c.done > 0);
+/** Urgent first, then (when asked) glass-ready, then the rest - each keeping
+    the board's own order. */
+function fbGlassFirst(cards, on) {
+  const u = [], g = [], rest = [];
+  (cards || []).forEach(c => (fbCardUrgent(c) ? u : on && fbGlassReady(c) ? g : rest).push(c));
+  return u.concat(g, rest);
+}
+
 /** One row per job and allowed product group with F, S or T > 0, off
     `Production` ALONE (j.prodsMain; never j.prods - HISTORY B20). Every section
-    on the sheet: Active says In production, OnSheet says still on the sheet. */
-function fbSlice(jobs, blockNames) {
+    on the sheet: Active says In production, OnSheet says still on the sheet.
+    `glassOf(j)` is the office's word for the job's glass (fbGlassStatus). */
+function fbSlice(jobs, blockNames, glassOf) {
   const names = blockNames || (jobs && jobs.blockNames) || [];
   const out = [], emitted = {};
   (jobs || []).forEach(j => {
@@ -137,6 +219,9 @@ function fbSlice(jobs, blockNames) {
                    seq: fbNum(j.seq, 99999), section: section,
                    active: fbSectionLive(section), onSheet: true };
     const doors = fbDoorLabels(j);
+    const glaze = fbGlazeTotals(j);
+    let glass = "";
+    if (typeof glassOf === "function") { try { glass = fbTxt(glassOf(j)); } catch (e) { glass = ""; } }
     (j.prodsMain || []).forEach((p, i) => {
       if (!p || !p.n || !fbAllowed(p.n)) return;
       const group = fbKey(p.n);
@@ -151,7 +236,8 @@ function fbSlice(jobs, blockNames) {
       emitted[title] = 1;
       out.push(Object.assign({ title: title, group: group, groupSeq: i,
                                doors: fbIsDoorGroup(group) ? doors : "",
-                               frames: f, sashes: s, transoms: t }, base));
+                               frames: f, sashes: s, transoms: t,
+                               glass: glass, glazeTotal: glaze[group] || 0 }, base));
     });
   });
   out.sort(fbRowOrder);
@@ -168,11 +254,13 @@ function fbFeederFields(r) {
            Doors: fbTxt(r.doors),
            Frames: Math.max(0, fbInt(r.frames, 0)), Sashes: Math.max(0, fbInt(r.sashes, 0)),
            Transoms: Math.max(0, fbInt(r.transoms, 0)),
-           Section: fbTxt(r.section), Active: r.active ? "Yes" : "No", OnSheet: r.onSheet ? "Yes" : "No" };
+           Section: fbTxt(r.section), Active: r.active ? "Yes" : "No", OnSheet: r.onSheet ? "Yes" : "No",
+           Glass: fbTxt(r.glass), GlazeTotal: Math.max(0, fbInt(r.glazeTotal, 0)) };
 }
 const fbSeedFields = () => ({});
 const fbHashRow = r => [r.title, r.job, r.group, r.groupSeq, r.customer, r.comment, r.seq, r.doors,
-                        r.frames, r.sashes, r.transoms, r.section, !!r.active, !!r.onSheet];
+                        r.frames, r.sashes, r.transoms, r.section, !!r.active, !!r.onSheet,
+                        fbTxt(r.glass), fbInt(r.glazeTotal, 0)];
 
 /* ---- what the screens draw ------------------------------------------------ */
 const fbYes = v => fbTxt(v).trim().toLowerCase() === "yes";
@@ -211,8 +299,21 @@ function fbRecord(it) {
               doors: fbTxt(f.Doors), seq: fbNum(f.Seq, 99999), section: fbTxt(f.Section).trim(),
               active: fbActive(f), onSheet: fbOnSheet(f), fedAt: fbTxt(f.FedAt),
               doneAt: fbTxt(f.DoneAt), doneBy: fbTxt(f.DoneBy), urgent: fbTxt(f.Urgent),
-              by: {}, at: {}, lines: [], raw: {} };
+              glass: fbTxt(f.Glass).trim(),
+              by: {}, at: {}, lines: [], extra: [], raw: {} };
   g.sheetDone = fbSheetDone(g.section);
+  /* door glazing: its own line, drawn under the group's others, in NONE of the
+     fabrication totals, colours or tabs below (`extra`, never `lines`) */
+  {
+    const k = FB_GLAZE;
+    const t = FB_GLAZE_GROUPS.indexOf(g.group) >= 0 ? Math.max(0, fbInt(f[FB_TOTAL_FIELD[k]], 0)) : 0;
+    const real = fbClamp(f[FB_DONE_FIELD[k]], t);
+    const d = g.sheetDone ? t : real;
+    g.raw[k] = real; g[k] = d; g[k + "Total"] = t;
+    g.by[k] = fbTxt(f[FB_BY_FIELD[k]]); g.at[k] = fbTxt(f[FB_AT_FIELD[k]]);
+    if (t > 0) g.extra.push({ part: k, label: FB_PART_LABEL[k], done: d, total: t, by: g.by[k], at: g.at[k],
+                              colour: g.sheetDone ? "sheet" : fbColour(d, t) });
+  }
   let done = 0, total = 0;
   FB_PARTS.forEach(k => {
     const t = Math.max(0, fbInt(f[FB_TOTAL_FIELD[k]], 0));
@@ -250,8 +351,8 @@ function fbCards(items, keep) {
   Object.keys(best).map(t => fbRecord(best[t])).forEach(r => {
     if (!r.job) return;
     const c = byJob[r.job] || (byJob[r.job] = { job: r.job, customer: "", comment: "", doors: "",
-      seq: r.seq, section: "", active: false, doneAt: "", doneBy: "", groups: [], done: 0, total: 0 });
-    ["customer", "comment", "section", "doors"].forEach(k => { if (!c[k] && r[k]) c[k] = r[k]; });
+      seq: r.seq, section: "", active: false, doneAt: "", doneBy: "", glass: "", groups: [], done: 0, total: 0 });
+    ["customer", "comment", "section", "doors", "glass"].forEach(k => { if (!c[k] && r[k]) c[k] = r[k]; });
     if (r.seq < c.seq) c.seq = r.seq;
     if (r.active) c.active = true;
     if (r.doneAt && (!c.doneAt || Date.parse(r.doneAt) > Date.parse(c.doneAt))) {
@@ -267,6 +368,9 @@ function fbCards(items, keep) {
     c.sheetDone = c.groups.some(g => g.sheetDone);
     c.finished = c.sheetDone || (c.total > 0 && c.done >= c.total);
     c.left = Math.max(0, c.total - c.done);
+    /* decided on the WHOLE job, before any view narrows the card: glass ready
+       and nothing fabricated at all */
+    c.glassStart = fbGlassStart(c);
     return c;
   });
   out.sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
@@ -319,19 +423,24 @@ function fbParseStages(text) {
        types (review N2): an entry made only of part words continues the
        previous entry's group */
     const words = entry.split(/[+\s]+/).map(fbLow).filter(Boolean);
-    if (prev && entry.indexOf(":") < 0 && words.length && words.every(w => FB_PARTS.indexOf(w) >= 0))
+    if (prev && entry.indexOf(":") < 0 && words.length && words.every(w => FB_TAP_PARTS.indexOf(w) >= 0))
       entry = prev + ":" + entry;
     const i = entry.indexOf(":");
     const gk = fbKey(i >= 0 ? entry.slice(0, i) : entry);
     if (!gk) return;
     prev = entry.slice(0, i >= 0 ? i : entry.length);
+    /* a bare group is frames + sashes + transoms and NOT door glazing: glazing
+       is a role and has to be named ("PVC DOOR:glazing", "ALL:glazing") */
     const parts = i < 0 ? FB_PARTS.slice()
-      : entry.slice(i + 1).split(/[+\s]+/).map(fbLow).filter(p => FB_PARTS.indexOf(p) >= 0);
+      : entry.slice(i + 1).split(/[+\s]+/).map(fbLow).filter(p => FB_TAP_PARTS.indexOf(p) >= 0);
     if (!parts.length) return;
     const groups = gk === "ALL" ? FB_GROUP_KEYS : FB_GROUP_KEYS.indexOf(gk) >= 0 ? [gk] : [];
     groups.forEach(g => {
+      /* ... and it only exists on the two groups that are glazed here */
+      const mine = parts.filter(p => p !== FB_GLAZE || FB_GLAZE_GROUPS.indexOf(g) >= 0);
+      if (!mine.length) return;
       const k = g.toLowerCase(), m = out[k] || (out[k] = {});
-      parts.forEach(p => { m[p] = true; });
+      mine.forEach(p => { m[p] = true; });
     });
   });
   return out;
@@ -361,7 +470,7 @@ function fbEligible(person, group, part) {
   if (!person.parts) return (person.stages || []).indexOf(g) >= 0 && (!part || FB_PARTS.indexOf(fbLow(part)) >= 0);
   const m = person.parts[g];
   if (!m) return false;
-  return part ? !!m[fbLow(part)] : FB_PARTS.some(p => m[p]);
+  return part ? !!m[fbLow(part)] : FB_TAP_PARTS.some(p => m[p]);
 }
 
 /* ---- the tablet's view filter (owner, 2026-10-01) -----------------------------
@@ -387,10 +496,13 @@ function fbViewFilter(cards, person, mode, idx) {
     const groups = [];
     (c.groups || []).forEach(g => {
       const lines = (g.lines || []).filter(l => keepPart(c, g, l.part));
-      if (!lines.length) return;
+      /* door glazing is a role with no assignment: My work shows it to
+         somebody who has the role, Assigned to me never does */
+      const extra = m === "mine" ? (g.extra || []).filter(l => fbEligible(person, g.group, l.part)) : [];
+      if (!lines.length && !extra.length) return;
       const done = lines.reduce((n, l) => n + l.done, 0), total = lines.reduce((n, l) => n + l.total, 0);
-      groups.push(Object.assign({}, g, { lines: lines, done: done, total: total, left: Math.max(0, total - done),
-        colour: fbRollUp(lines.map(l => l.colour)) }));
+      groups.push(Object.assign({}, g, { lines: lines, extra: extra, done: done, total: total,
+        left: Math.max(0, total - done), colour: fbRollUp(lines.map(l => l.colour)) }));
     });
     if (!groups.length) return;
     const done = groups.reduce((n, g) => n + g.done, 0), total = groups.reduce((n, g) => n + g.total, 0);
@@ -412,7 +524,7 @@ function fbViewTabs(tabs, person, mode, idx) {
   cards.sort((a, b) => (a.seq - b.seq) || (a.job < b.job ? -1 : a.job > b.job ? 1 : 0));
   const out = { floor: [], finished: [] };
   cards.forEach(c => {
-    const shownDone = c.groups.every(g => g.lines.every(l => l.done >= l.total));
+    const shownDone = c.groups.every(g => g.lines.concat(g.extra || []).every(l => l.done >= l.total));
     out[c.active && !c.sheetDone && !shownDone ? "floor" : "finished"].push(c);
   });
   return { floor: fbUrgentFirst(out.floor), finished: fbUrgentFirst(out.finished) };
@@ -423,7 +535,7 @@ const fbViewFor = (store, name) => fbViewOf((store || {})[fbTxt(name)]);
 /* ---- the writes one tap makes ------------------------------------------------ */
 function fbApplyTap(row, part, delta) {
   const k = fbTxt(part).trim().toLowerCase();
-  if (FB_PARTS.indexOf(k) < 0) return null;
+  if (FB_TAP_PARTS.indexOf(k) < 0) return null;
   const total = Math.max(0, fbInt(row && row[k + "Total"], 0));
   const now = fbClamp(row && row[k], total);
   if (delta === "all") return total;
@@ -435,7 +547,7 @@ function fbApplyTap(row, part, delta) {
     By/At and the last-touch pair. Nothing else can get in. */
 function fbTapFields(part, value, who, at) {
   const k = fbTxt(part).trim().toLowerCase();
-  if (FB_PARTS.indexOf(k) < 0) return null;
+  if (FB_TAP_PARTS.indexOf(k) < 0) return null;
   const when = fbTxt(at) || new Date().toISOString(), name = fbTxt(who);
   const out = {};
   out[FB_DONE_FIELD[k]] = Math.max(0, fbInt(value, 0));
@@ -458,7 +570,7 @@ const fbLogWords = (job, group, part) =>
 function fbRebase(e, fields) {
   const f = fields || {};
   const k = fbTxt(e && e.part).trim().toLowerCase();
-  if (FB_PARTS.indexOf(k) < 0) return { action: "keep" };
+  if (FB_TAP_PARTS.indexOf(k) < 0) return { action: "keep" };
   const now = Number(f[FB_DONE_FIELD[k]]), was = Number(e && e.from);
   if (!isFinite(now) || !isFinite(was)) return { action: "keep" };
   if (now < was) {
@@ -471,8 +583,8 @@ function fbRebase(e, fields) {
   return { action: "rebase", value: fbClamp(Math.round(now + (Number(e.value) - was)), total), from: Math.round(now) };
 }
 function fbCardSig(c) {
-  return JSON.stringify([c.job, c.customer, c.comment, c.doors, c.section, c.seq, c.finished, c.colour,
-    c.groups.map(g => [g.id, g.group, g.colour, g.doors, g.urgent, FB_PARTS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
+  return JSON.stringify([c.job, c.customer, c.comment, c.doors, c.section, c.seq, c.finished, c.colour, c.glass,
+    c.groups.map(g => [g.id, g.group, g.colour, g.doors, g.urgent, FB_TAP_PARTS.map(k => [g[k], g[k + "Total"], g.by[k], g.at[k]])])]);
 }
 
 /* ---- the colour painter's rule (rule 6) -------------------------------------
@@ -503,6 +615,32 @@ function fbCellWant(done, total, record, cell) {
   return want === cell ? null : want;
 }
 
+/* ---- gold on the DOORS DONE cells when door glazing is complete (section C,
+   owner 2026-10-01: "when door glazing is done make door done/golden in excel")
+   The pure half: WHICH of a job's door items should be raised to done. The
+   office does the raising, through the checkpoint record (app.js fabrGoldRun).
+     - only a FULL count (done >= total > 0) raises anything; a partial count
+       and a count that has dropped raise and clear nothing;
+     - only the doors whose code is glazed in this group (never CD, SFCD, BF,
+       the AC codes);
+     - never a door already done, never one with a write in the air, never a
+       cell carrying a colour the checkpoints do not own;
+     - never over the office: a record the office (or a hand in Excel) wrote
+       at or after the glazing stamp stands - an office clear made after the
+       glazing finished is not gilded again.
+   `stateOf(slot)` -> { status, office, when (ms), pending, foreign }. */
+function fbGoldPlan(o) {
+  const t = Math.max(0, fbInt(o && o.total, 0));
+  if (!(t > 0) || fbInt(o.done, 0) < t) return [];
+  const at = fbNum(o.glazeAt, 0);
+  return ((o.doors) || []).filter(d => d && fbDoorGlazeGroup(d.code) === fbKey(o.group)).filter(d => {
+    const s = (typeof o.stateOf === "function" && o.stateOf(d.slot)) || {};
+    if (s.pending || s.foreign || s.status === "done") return false;
+    if (s.office && fbNum(s.when, 0) >= at) return false;
+    return true;
+  }).map(d => d.slot);
+}
+
 /** The station report's Jobs sheet: one row per job and group. */
 function fbReportJobs(data) {
   const S = fbST();
@@ -514,11 +652,14 @@ function fbReportJobs(data) {
     jobs.push({ job: c.job, done: c.groups.reduce((n, g) => n + rawDone(g), 0), total: c.total });
     c.groups.forEach(g => { const r = g.raw || g, d = rawDone(g); rows.push([c.job, fbStrip(c.customer, cap),
       c.section, g.group, g.doors, r.frames, g.framesTotal, r.sashes, g.sashesTotal, r.transoms, g.transomsTotal,
-      g.total, d, Math.max(0, g.total - d), g.doneBy, g.doneAt, g.total > 0 && d >= g.total ? "Yes" : "No"]); });
+      g.total, d, Math.max(0, g.total - d), g.doneBy, g.doneAt, g.total > 0 && d >= g.total ? "Yes" : "No",
+      /* door glazing: its own count, in none of the totals to its left */
+      g.glazingTotal > 0 ? r.glazing : "", g.glazingTotal > 0 ? g.glazingTotal : ""]); });
   });
   return { columns: ["Job", "Customer", "Section", "Group", "Doors", "Frames done", "Frames",
                      "Sashes done", "Sashes", "Transoms done", "Transoms", "Total", "Done", "Left",
-                     "Last moved by", "When", "Complete"], rows: rows, jobs: jobs };
+                     "Last moved by", "When", "Complete", "Door glazing done", "Door glazing"],
+           rows: rows, jobs: jobs };
 }
 
 /* ==== Part B: assignments, approval, urgent, notifications ===================
@@ -605,6 +746,9 @@ function fbSplitCheck(idx, job, group, part, total, qty, exceptId) {
       null  - not known yet (never read successfully): nothing may be tapped. */
 function fbCanTap(person, group, part, idx, state, job) {
   if (!fbEligible(person, group, part)) return false;
+  /* door glazing is a role and has no assignment (owner, 2026-10-01): the
+     person who has it may tap, whatever the assignments list says */
+  if (fbLow(part) === FB_GLAZE) return true;
   if (state === false) return true;
   if (state !== true) return false;
   return fbMine(idx, person, job, group, part) > 0;
@@ -614,6 +758,7 @@ function fbCanTap(person, group, part, idx, state, job) {
     all of it. − and + are always within the clamp. */
 function fbActAllowed(person, idx, state, job, group, part, total, act) {
   if (act !== "all" && act !== "none") return true;
+  if (fbLow(part) === FB_GLAZE) return true;           // no assignment on door glazing: All / None allowed
   if (state !== true) return true;                     // Part A, or locked anyway
   return fbMine(idx, person, job, group, part) >= Math.max(0, fbInt(total, 0));
 }
@@ -747,6 +892,9 @@ const FABC = {
   fbActive, fbOnSheet, fbColour, fbRollUp, fbRecord, fbCards, fbOfficeBoard, fbJobCard,
   fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible, fbParseStages, fbSheetDone,
   FB_VIEWS, fbViewOf, fbViewFilter, fbViewTabs, fbViewFor,
+  FB_GLAZE, FB_TAP_PARTS, FB_GLAZE_GROUPS, FB_GLAZE_NEVER, FB_NEW_FEEDER_FIELDS,
+  fbDoorGlazeGroup, fbGlazeTotals, fbGlassStatus, fbGlassChip, fbGlassReady, fbGlassStart, fbGlassFirst,
+  fbGoldPlan,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
   fbCellWord, fbCellWant, fbReportJobs,
   FB_ASSIGN_LIST, FB_ASSIGN_FIELDS, FB_STATUS, FB_URGENT_WORDS, fbLineKey, fbAssignTitle,

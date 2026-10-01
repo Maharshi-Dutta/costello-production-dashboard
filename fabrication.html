@@ -20,6 +20,7 @@
     --lav:#c9bff0; --lav-bg:#2a2638; --lav-line:#5b5280;
     --pur:#b19cf0; --pur-bg:#352a55; --pur-line:#7b66c4;
     --sht:#7fca7f; --sht-bg:#1c3320; --sht-line:#3d6b42;
+    --amb:#e8c65a; --amb-bg:#39310f; --amb-line:#6b5a1c;
   }
   :root[data-theme="light"] {
     --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
@@ -29,6 +30,7 @@
     --lav:#5e4f9e; --lav-bg:#f1eef9; --lav-line:#d9d2e9;
     --pur:#4b3591; --pur-bg:#e3dcf3; --pur-line:#b4a7d6;
     --sht:#1f6b2c; --sht-bg:#e8f6e8; --sht-line:#a9d8ac;
+    --amb:#8a6d00; --amb-bg:#fff6dd; --amb-line:#e4cf8a;
   }
   * { box-sizing:border-box }
   [hidden] { display:none !important }
@@ -97,6 +99,18 @@
           color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
   #more[hidden] { display:none }
   .grp { display:flex; flex-direction:column; gap:12px }
+  /* the job's glass (2026-10-01): a chip on the card head, read only */
+  .gchip { font-size:13px; font-weight:700; white-space:nowrap; flex:none; border-radius:12px;
+           padding:1px 9px; border:1px solid var(--line); color:var(--ink-3) }
+  .gchip.g-done { color:var(--sht); border-color:var(--sht-line); background:var(--sht-bg) }
+  .gchip.g-part { color:var(--amb); border-color:var(--amb-line); background:var(--amb-bg) }
+  .gstart { margin:0 0 10px; padding:8px 11px; border-radius:6px; font-size:15px; font-weight:700;
+            color:var(--sht); background:var(--sht-bg); border:1px solid var(--sht-line) }
+  #glassfirst { display:inline-flex; align-items:center; min-height:44px; margin:0 0 10px; padding:0 16px;
+                border:1px solid var(--line); border-radius:22px; background:var(--surface);
+                color:var(--ink-2); font-size:14px; font-weight:600; font-family:inherit }
+  #glassfirst.on { background:var(--sht-bg); border-color:var(--sht-line); color:var(--sht) }
+  #glassfirst[hidden] { display:none }
   /* Part B: a new or changed assignment, or an urgent flag on your line */
   #banner { display:block; width:100%; min-height:52px; margin:0 0 10px; padding:8px 16px;
             border:2px solid var(--pur-line); border-radius:8px; background:var(--pur-bg);
@@ -274,15 +288,18 @@
   <div id="soft" hidden></div>
   <button id="banner" hidden></button>
   <button id="more" hidden></button>
+  <!-- sorts the jobs whose glass is ready to the top (after urgent). Under the
+       header, not in it: the header's two rows are full at 700 px. -->
+  <button id="glassfirst" aria-pressed="false" hidden>Glass ready first</button>
   <div id="board"></div>
   <div id="afoot" hidden></div>
 </div>
 
 <script src="vendor/msal-browser.min.js"></script>
-<script src="graph.js?v=20261001-1231"></script>
-<script src="station-core.js?v=20261001-1231"></script>
-<script src="station-ui.js?v=20261001-1231"></script>
-<script src="fabrication-core.js?v=20261001-1231"></script>
-<script src="fabrication.js?v=20261001-1231"></script>
+<script src="graph.js?v=20261001-1642"></script>
+<script src="station-core.js?v=20261001-1642"></script>
+<script src="station-ui.js?v=20261001-1642"></script>
+<script src="fabrication-core.js?v=20261001-1642"></script>
+<script src="fabrication.js?v=20261001-1642"></script>
 </body>
 </html>
