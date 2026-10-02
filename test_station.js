@@ -2832,22 +2832,22 @@ const person = (name, stages, pin, active, station) =>
   await stationPoll();
   pass("a whole read (delta refused) reports a change only when the rows differ from what is held");
 
-  /* the job list itself is a fourth reason to watch now that its rows carry the
-     floor's chip (section 14b tests that one on its own), so each of the other
-     three is set out here with the last draw's answer to it deliberately off */
-  A("state.board = null; state.sel = null; ROWS_GLASS = false;");
-  assert.strictEqual(stationWatching(), false, "nobody looking at the floor: the slow rate");
-  A("state.board = 'glass'");
-  assert.strictEqual(stationWatching(), true);
-  A("state.board = null; state.sel = 'R5303';");
+  /* 2026-10-02: one rate, whatever is on screen. The minute the poll used to
+     drop to when nobody was looking at the floor also delayed the sheet's
+     colours, which ride the same clock. */
+  {
+    const realTimeout = global.setTimeout;
+    const armed = [];
+    global.setTimeout = (fn, ms) => { armed.push(ms); return realTimeout(() => {}, 0); };
+    ["null", "'glass'", "'john'"].forEach(b => { A("state.sel = null; state.board = " + b + ";"); stationTick(); });
+    global.setTimeout = realTimeout;
+    A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; } state.board = null;");
+    assert.deepStrictEqual(armed, [10000, 10000, 10000], "nothing on screen, a floor board, John's sheet: ten seconds each");
+    assert.ok(A("typeof STATION_SLOW_MS") === "undefined" && A("typeof stationWatching") === "undefined");
+  }
   useJobs([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6 }, blk: 4, seq: 0 }),
            mkJob({ id: "R9000", cust: "No glass", glass: {}, blk: 4, seq: 1 })]);
-  assert.strictEqual(stationWatching(), true, "a drawer for a job with glass counts");
-  A("state.sel = 'R9000'");
-  assert.strictEqual(stationWatching(), false, "a drawer for a job without glass does not");
-  assert.ok(A("STATION_FAST_MS") === 10000 && A("STATION_SLOW_MS") === 60000);
-  A("state.sel = null;");
-  pass("the poll runs every ten seconds while somebody is looking at the floor, and every minute otherwise");
+  pass("the poll runs every ten seconds whatever is on screen");
 
   const realItems = CW.listItems, realDelta = CW.listDelta;
   A("STATION_OK = true; STATION_ERR = ''; stationWarned = true;");
@@ -2974,40 +2974,30 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(A("logRowsNow()") === rowsA, false, "and parsed again the moment the list changes");
   pass("the log is parsed and sorted once per change, not six times a minute");
 
-  /* AMENDMENT 15: the poll's rate follows what is on screen, from the moment
-     it goes on screen - not from whenever the next tick happened to be armed */
+  /* AMENDMENT 15 used to re-arm the tick when a board, a drawer or the log
+     window opened, to change its rate. One rate since 2026-10-02: opening any
+     of them leaves the clock that is already running alone. */
   LOGITEMS = lItems.slice();
-  A("state.board = null; state.sel = null; STATION_TICK_MS = 0;");
-  A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
-  stationTick();
-  assert.strictEqual(A("STATION_TICK_MS"), 60000, "nobody looking at the floor: the slow rate");
+  A("state.board = null; state.sel = null;");
   useJobs([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6 }, blk: 4, seq: 0 }),
            mkJob({ id: "R9000", cust: "Customer Nine", glass: {}, blk: 4, seq: 1 })]);
   renderChips();
   const showsel = REG["showsel"];
   assert.ok(showsel, "the Show dropdown is on the page");
+  stationTick();
+  const clockWas = A("stationPollT");
   showsel.value = "glass";
   showsel.onchange();
   assert.strictEqual(A("state.board"), "glass");
-  assert.strictEqual(A("STATION_TICK_MS"), 10000,
-    "picking the board re-arms the tick fast, so the first delta lands within ten seconds");
-  pass("choosing the Glass station board speeds the poll up at once rather than up to a minute later");
-
-  A("state.board = null; STATION_TICK_MS = 0; state.sel = 'R9000';");
-  stationTick();
-  assert.strictEqual(A("STATION_TICK_MS"), 60000, "a drawer for a job with no glass changes nothing");
-  A("state.sel = 'R5303';");
+  A("state.board = null; state.sel = 'R5303';");
   openDrawer();
-  assert.strictEqual(A("STATION_TICK_MS"), 10000, "but opening one for a job with glass does");
   const dh = $("#dhost"); if (dh) dh.remove();
-  A("state.sel = null; STATION_TICK_MS = 0;");
-  stationTick();
-  assert.strictEqual(A("STATION_TICK_MS"), 60000);
+  A("state.sel = null;");
   openStationLog("");
-  assert.strictEqual(A("STATION_TICK_MS"), 10000, "and so does opening the log window");
   if (REG["lhost"]) REG["lhost"].remove();
+  assert.strictEqual(A("stationPollT"), clockWas, "the same timer: none of the three pushed the next poll back");
   A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
-  pass("opening the drawer or the log window re-arms the fast tick the same way the dropdown does");
+  pass("choosing a board, opening the drawer or the log window never restarts the poll's clock");
 
   /* AMENDMENT 2: the drawer lists its own job and no other */
   A("STATION_OK = true; STATION_LOG_OK = true; LOGROWS = null; LOGROWS_OF = false;");
@@ -3200,16 +3190,14 @@ const person = (name, stages, pin, active, station) =>
      read anything, and nothing drew them again afterwards unless a board or a
      drawer was open - so the default screen had no chips on it for up to a
      minute, and polled slowly while it waited. */
-  A("STATION_ITEMS = null; STATION_OK = null; stationReading = null; STATION_TICK_MS = 0;");
+  A("STATION_ITEMS = null; STATION_OK = null; stationReading = null;");
   A("state.board = null; state.sel = null; state.q = ''; state.picked = {};");
   renderRows();
   assert.ok(EL["#rows"].innerHTML.indexOf("Glass ") < 0, "nothing is read yet, so nothing is claimed");
-  assert.strictEqual(A("ROWS_GLASS"), false, "and the rows are worth nothing to the poll");
   A("STATION_ITEMS = " + JSON.stringify(chipItems) + "; STATION_OK = true;");   // the feeder read it, feeding
   stationAfterFeed();
   assert.ok(rowFor(EL["#rows"].innerHTML, "R6001").indexOf("Glass 7/16") > 0,
     "once the feeder has been, the rows are drawn again with the chips on them");
-  assert.strictEqual(A("STATION_TICK_MS"), 10000, "and the poll is put on the fast clock at once");
   pass("the first load of a session ends with the chips on screen, on the plain list, without a board or a drawer");
 
   /* FINDING 1: the feeder skips a slice it fed less than ten minutes ago, and a
@@ -3220,7 +3208,7 @@ const person = (name, stages, pin, active, station) =>
   consent(true);
   ITEMS = chipItems.slice();
   A("STATION_ITEMS = null; STATION_OK = null; STATION_WHY = ''; stationReading = null;");
-  A("STATION_FEEDS.items.token = null; STATION_TICK_MS = 0;");
+  A("STATION_FEEDS.items.token = null;");
   const fedHash = A("ST.sliceHash(ST.glassSlice(ALL, BLOCKNAMES, glassCounts))");
   A("STATION_FEED = { hash: " + JSON.stringify(fedHash) + ", at: Date.now() - 360000 };");
   reset();
@@ -3337,7 +3325,6 @@ const person = (name, stages, pin, active, station) =>
   await tickBody();
   global.renderRows = drawWas;
   assert.ok(A("stationPollT") !== null, "the clock was armed again even though the repaint threw");
-  assert.ok(A("STATION_TICK_MS") === 10000 || A("STATION_TICK_MS") === 60000, "at one of its two rates");
   A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; } ROWS_STALE = false;");
   renderRows();
   assert.strictEqual(await stationPoll(), false, "and the next pass runs as if nothing had happened");
@@ -3390,27 +3377,10 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(/animation-delay:/.test(EL["#rows"].innerHTML), "the next list somebody asks for fades in again");
   pass("a repaint the poll asked for arrives without the animation the whole list would otherwise replay");
 
-  /* ---- the rate follows what the rows are showing ---- */
+  /* (the rate no longer follows what the rows are showing: one rate since
+     2026-10-02, tested with the poll's clock above) */
   A("state.board = null; state.sel = null; state.q = '';");
   renderRows();
-  assert.strictEqual(stationWatching(), true,
-    "the list is showing jobs the floor is working on: somebody is looking at the floor");
-  assert.strictEqual(A("STATION_TICK_MS"), 10000, "so the poll is armed at ten seconds");
-  A("state.q = 'R6009';");
-  renderRows();
-  assert.strictEqual(stationWatching(), false,
-    "filtered down to a job the floor has never seen, there is nothing to wait for");
-  assert.strictEqual(A("STATION_TICK_MS"), 60000, "and the rate drops as the list is drawn, not a minute later");
-  A("state.board = 'glass'");
-  assert.strictEqual(stationWatching(), true, "the board is still a reason of its own");
-  A("state.board = null;");
-  openStationLog("");
-  assert.strictEqual(stationWatching(), true, "and so is the log window");
-  if (REG["lhost"]) REG["lhost"].remove();
-  A("state.sel = 'R6001';");
-  assert.strictEqual(stationWatching(), true, "and so is a drawer open on a job with glass");
-  A("state.sel = null; state.q = '';");
-  pass("the poll runs fast while the rows on screen carry the floor's work, and slowly when they do not");
 
   /* the whole point: everything above came out of memory. Section 17 proves it
      over the entire run; this proves it of the drawing itself. */

@@ -5,7 +5,8 @@
    comments"), PATCH the Glazed counter of a Glazing station row - with its By
    and At and the last-touch pair beside it - POST one line to the Station log
    for each counter write that succeeded, and POST one note per word somebody
-   types for the office. That is all.
+   types for the office. That is all - but for two more lists it only READS
+   (2026-10-02): `Glass station` and `Fabrication station`, for the chips.
 
    There is no workbook here - no exceljs, no parser.js, no download, no Excel
    API path anywhere in this file - no delete, no editing of a job's facts, no
@@ -382,6 +383,35 @@ const NOTES = ST.stationComments({
   opts: commentOpts
 });
 
+/* ---- the glass and the fabrication lists, READ ONLY --------------------------
+   2026-10-02: one owner per fact. Where a job's glass and its windows'
+   fabrication have got to is read off `Glass station` (the workbook's site)
+   and `Fabrication station` (`Floor stations`) themselves, through the shared
+   reader (STU.stuListReader) - each with its own site, token and retry clock,
+   neither with a write path, and neither able to take this board away or set
+   PROBLEM or SOFT. A list not read yet, or one this account cannot read, is
+   "checking" on the chip and never ready. */
+const OGLASS = STU.stuListReader({ site: ST.GLASS.site, list: ST.GLASS.list,
+                                   fields: ST.GLASS.fields, tag: "[glazing]" });
+const OFAB = STU.stuListReader({ site: FABC.FB_SITE, list: FABC.FB_LIST, tag: "[glazing]",
+  fields: ["Title", "Job", "Group", "GroupSeq", "Seq", "Section", "Active", "OnSheet",
+           "Frames", "Sashes", "Transoms", "FramesDone", "SashesDone", "TransomsDone"] });
+let GLASSMAP = {}, FABMAP = {};
+/** Read what moved on both, together. Answers true when either changed. */
+async function readOthers() {
+  const ch = await Promise.all([OGLASS.read(), OFAB.read()]);
+  if (ch[0]) GLASSMAP = OGLASS.items ? ST.jobRecords(OGLASS.items) : {};
+  if (ch[1]) FABMAP = OFAB.items ? GZ.glzFabByJob(OFAB.items) : {};
+  return ch[0] || ch[1];
+}
+/** One card told where its job's glass and fabrication are, now. */
+function withStatus(c) {
+  const s = GZ.glzStatusNow(GLASSMAP[ST.jobKey(c.job)], FABMAP[FABC.fbKey(c.job)],
+    { glass: OGLASS.ready && !!OGLASS.items, fab: OFAB.ready && !!OFAB.items });
+  c.glass = s.glass; c.fab = s.fab; c.ready = GZ.glzReady(s.glass, s.fab);
+  return c;
+}
+
 /** Everything that can go wrong with a read, decided in one place. Only
     SharePoint actually saying "there is no such site" or "there is no such
     list" takes the board away; anything else - the wifi in a workshop, a bad
@@ -550,7 +580,7 @@ function boardNow() {
   const items = itemsNow();
   const tabs = GZ.glzTabs(items);
   RECS_BY_ID = {};
-  tabs.floor.concat(tabs.finished).forEach(c => { RECS_BY_ID[String(c.id)] = c; });
+  tabs.floor.concat(tabs.finished).forEach(c => { RECS_BY_ID[String(c.id)] = withStatus(c); });
   return { board: GZ.glzBoard(items), tabs: tabs };
 }
 const recordById = id => RECS_BY_ID[String(id)] || null;
@@ -593,8 +623,8 @@ function stepHtml(c, part) {
 
 /** Everything inside one card. The card element itself is kept between draws
     (see paintBoard), so only this string is ever rebuilt. */
-/** Where the job's glass and fabrication have got to - read only, fed by the
-    office. Nothing here is tappable. */
+/** Where the job's glass and fabrication have got to - read only, off those
+    stations' own lists. Nothing here is tappable. */
 function chipsHtml(c) {
   const chips = [GZ.glzStatusChip("glass", c.glass), GZ.glzStatusChip("fab", c.fab)].filter(Boolean);
   if (!chips.length) return "";
@@ -768,7 +798,12 @@ function render() {
   const host = $("#board");
   if (!host) return;
   const hdr = $("#whois");
-  if (hdr) hdr.textContent = PERSON ? PERSON.name + (mayGlaze() ? " · glazing" : " · no stages") : "";
+  /* the name alone is the text - it is what every tap is logged under and must
+     not be what an ellipsis eats; the stage rides in data-stages (glass.html) */
+  if (hdr) {
+    hdr.textContent = PERSON ? PERSON.name : "";
+    hdr.dataset.stages = PERSON ? (mayGlaze() ? "glazing" : "no stages") : "";
+  }
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
 
@@ -969,6 +1004,8 @@ async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
   await pollList();
+  /* the glass and fabrication lists, read only, on the same clock */
+  if (await readOthers()) { TICK.burst(); render(); }
   if (await NOTES.poll()) render();
 }
 const TICK = STU.stuTicker(tickOnce);
@@ -1016,6 +1053,9 @@ async function start() {
   };
   render();
   await readPeople();
+  /* NOT awaited: a slow or missing list of another station's must never hold
+     this board back. Until both answer the chips say "checking". */
+  readOthers().then(ch => { if (ch) render(); });
   await readList();
   /* what has already been said about today's jobs, so a second shift does not
      retype the first shift's note */

@@ -70,10 +70,14 @@
   .toprow { display:flex; align-items:center; gap:10px; flex-wrap:nowrap; min-width:0 }
   .brand { font-family:"Barlow Condensed",sans-serif; font-size:24px; font-weight:700;
            text-transform:uppercase; white-space:nowrap; flex:none }
-  #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
-           background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-           padding:7px 14px; min-height:38px; display:flex; align-items:center;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+  /* WHO IS SIGNED IN, with Switch right beside it (2026-10-02, as glass.html).
+     There is no idle lock any more, so the name on screen is the name every
+     tap is logged under: the brightest thing in the row. It is the one thing
+     on row 1 that may shrink, and the ellipsis eats " · welding" first. */
+  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+           background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
+           padding:7px 14px; min-height:38px; display:block; line-height:22px;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:0 1 auto }
   #whois:empty { display:none }
   /* what the person signed in has left over the whole board, read at a glance
      and never tapped - so 38 px rather than a 44 px target, like #whois */
@@ -115,6 +119,16 @@
   @media (max-width:900px){
     #upd { display:none }
     #gtotalf, #gtotals { padding:7px 11px }
+  }
+  /* ... and with Switch on row 1 too (2026-10-02) the brand is "Welding" alone
+     up to 1000 px, and under 800 px the row closes up a little more, so the
+     name keeps its room */
+  @media (max-width:1000px){ .bst { display:none } }
+  @media (max-width:800px){
+    .toprow { gap:7px }
+    #gtotalf, #gtotals { padding:7px 8px; font-size:14.5px }
+    #switchbtn, #daybtn { padding:0 10px }
+    #whois { padding:7px 10px }
   }
 
   /* ---- the end-of-day sheet (2026-09-28) --------------------------------
@@ -378,8 +392,9 @@
      wrap - only the search box grows, so nothing can be pushed onto a third. -->
 <header class="top" hidden id="top">
   <div class="toprow">
-    <span class="brand">Welding station</span>
+    <span class="brand">Welding<span class="bst"> station</span></span>
     <span id="whois"></span>
+    <button id="switchbtn" hidden>Switch</button>
     <span id="gtotalf" hidden></span>
     <span id="gtotals" hidden></span>
     <button id="daybtn" hidden>End of day</button>
@@ -390,7 +405,6 @@
     <span id="wtabs" role="tablist" hidden>
       <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
     </span>
-    <button id="switchbtn" hidden>Switch person</button>
     <button id="themebtn">Light</button>
     <button id="outbtn">Sign out</button>
   </div>

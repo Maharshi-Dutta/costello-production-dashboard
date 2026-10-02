@@ -60,11 +60,18 @@
   .toprow { display:flex; align-items:center; gap:10px; flex-wrap:nowrap; min-width:0 }
   .brand { font-family:"Barlow Condensed",sans-serif; font-size:24px; font-weight:700;
            text-transform:uppercase; white-space:nowrap; flex:none }
-  #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
-           background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-           padding:7px 14px; min-height:38px; display:flex; align-items:center;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+  /* WHO IS SIGNED IN, with Switch right beside it (2026-10-02, as glass.html).
+     There is no idle lock any more, so the name on screen is the name every
+     tap is logged under: the brightest thing in the row. The groups they hold
+     follow the name where there is room (1000 px and up). */
+  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+           background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
+           padding:7px 14px; min-height:38px; display:block; line-height:22px;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:0 1 auto }
   #whois:empty { display:none }
+  #whois::after { content:" · " attr(data-stages); font-weight:500 }
+  @media (max-width:1000px){ #whois::after { content:none } }
+  @media (max-width:800px){ #whois { padding:7px 10px } }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   #search { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
             border-radius:24px; min-height:48px; padding:0 16px; font-size:16px;
@@ -104,6 +111,9 @@
            padding:1px 9px; border:1px solid var(--line); color:var(--ink-3) }
   .gchip.g-done { color:var(--sht); border-color:var(--sht-line); background:var(--sht-bg) }
   .gchip.g-part { color:var(--amb); border-color:var(--amb-line); background:var(--amb-bg) }
+  /* g-wait / g-off (the glass list not read yet / not readable): the plain chip */
+  /* with a Door glazing line: its own grid row under it, never widening the step */
+  .step > .gchip { grid-column:1 / -1; justify-self:start; white-space:normal; max-width:100% }
   .gstart { margin:0 0 10px; padding:8px 11px; border-radius:6px; font-size:15px; font-weight:700;
             color:var(--sht); background:var(--sht-bg); border:1px solid var(--sht-line) }
   #glassfirst { display:inline-flex; align-items:center; min-height:44px; margin:0 0 10px; padding:0 16px;
@@ -266,6 +276,7 @@
   <div class="toprow">
     <span class="brand">Fabrication</span>
     <span id="whois"></span>
+    <button id="switchbtn" hidden>Switch</button>
     <!-- what to draw (2026-10-01): display only, the tap gate is unchanged.
          On row 1 so row 2 keeps its width at 700 px. -->
     <span id="wview" class="seg" role="group" aria-label="Show" hidden>
@@ -278,7 +289,6 @@
     <span id="wtabs" role="tablist" hidden>
       <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
     </span>
-    <button id="switchbtn" hidden>Switch person</button>
     <button id="themebtn">Light</button>
     <button id="outbtn">Sign out</button>
   </div>

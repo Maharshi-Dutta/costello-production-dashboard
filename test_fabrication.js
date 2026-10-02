@@ -978,6 +978,40 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.deepStrictEqual([F.fbGlassChip("none").kind, F.fbGlassChip("").kind, F.fbGlassChip("junk").kind], ["none", "", ""]);
   pass("glass status: blank, none, part, done incl. the Tuff rule and the office's done; the chip words");
 
+  /* 2026-10-02: the word comes from the `Glass station` rows ALONE (fbGlassOf),
+     read by the tablet itself - nothing the office copied */
+  const gsRow = (job, f) => ({ id: job, fields: Object.assign({ Title: job, Job: job, Active: "Yes" }, f) });
+  const gsItems = [gsRow("B2", { Total: 20, Cut: 20, Hotmelt: 20 }),
+    gsRow("A1", { Total: 20, Cut: 14, Hotmelt: 9, TuffTotal: 2 }),
+    gsRow("D4", { Total: 20, Cut: 20, Hotmelt: 20, TuffTotal: 2, Tuff: 1 }),
+    gsRow("E5", { Total: 20, Cut: 1, OfficeDone: "Yes", TuffTotal: 2 }),
+    gsRow("G7", { Total: 20, Cut: 1, OfficeDone: "Yes" }),
+    gsRow("H8", { Total: 0, TuffTotal: 0, OfficeDone: "Yes" }), gsRow("I9", { Total: 20 }),
+    gsRow("J10", { Total: 20, Cut: 20, Hotmelt: 20, TuffTotal: 2, Tuff: 2, Active: "No" })];
+  const gOf = F.fbGlassOf(gsItems, true);
+  assert.deepStrictEqual(["B2", "A1", "D4", "E5", "G7", "H8", "I9", "J10", "Z0"].map(gOf),
+    ["done", "part:14/20:9/20:tuff 0/2", "part:20/20:20/20:tuff 1/2", "part:20/20:20/20:tuff 0/2", "done", "", "none", "done", ""],
+    "done needs Tuff when the job has Tuff; OfficeDone stands in for cut and hotmelt only; no totals or no row: no glass");
+  assert.strictEqual(F.fbGlassChip(gOf("A1")).words, "Glass: cut 14/20 · hotmelt 9/20 · tuff 0/2", "the breakdown on a part-done chip");
+  assert.deepStrictEqual([F.fbGlassOf(gsItems, false)("B2"), F.fbGlassOf(null, false)("B2"), F.fbGlassOf(null, true)("B2")],
+    ["wait", "wait", "off"], "a reader that has not answered is 'wait'; one with no rows (403 / 404) is 'off'");
+  assert.deepStrictEqual([F.fbGlassChip("wait"), F.fbGlassChip("off")],
+    [{ kind: "wait", words: "Glass: checking…" }, { kind: "off", words: "Glass: not available" }]);
+  const gsFab = ["B2", "A1"].map((j, i) => ({ id: String(i + 1), fields: { Title: j + "|X", Job: j, Group: "X", Frames: 1, Seq: i,
+    OnSheet: "Yes", Active: "Yes", Glass: "done" } }));
+  [F.fbGlassOf(gsItems, false), F.fbGlassOf(null, true)].forEach(of => {
+    const cs = F.fbOfficeBoard(gsFab, of);
+    assert.ok(cs.every(c => !F.fbGlassReady(c) && !c.glassStart), "unknown / unavailable is never ready, never 'start this job'");
+    assert.deepStrictEqual(F.fbGlassFirst(cs, true).map(c => c.job), ["B2", "A1"], "... and never sorted first");
+  });
+  assert.deepStrictEqual(F.fbOfficeBoard(gsFab).map(c => [c.glass, F.fbGlassReady(c)]), [["", false], ["", false]],
+    "the list's own `Glass` column is not read: with no glass word given, no chip and nothing ready");
+  assert.deepStrictEqual(F.fbOfficeBoard(gsFab, gOf).map(c => [c.job, c.glass, !!c.glassStart]),
+    [["B2", "done", true], ["A1", "part:14/20:9/20:tuff 0/2", false]]);
+  assert.ok(F.FB_FIELDS.indexOf("Glass") < 0 && F.FB_FEEDER_WRITES.indexOf("Glass") < 0 && F.FB_NEW_FEEDER_FIELDS.indexOf("Glass") < 0,
+    "`Glass` is in no read and no write list of the fabrication list");
+  pass("glass from the Glass station rows alone: Tuff rule, OfficeDone, no row, checking / not available never ready or first");
+
   /* B. door codes -> group; the slice; Stages; the gate */
   assert.deepStrictEqual(["SS", "CD", "SFCD", "BF", "ACSD", "ACSS", "PVC", "DD", "SD", "1 DOOR", "xyz", ""].map(F.fbDoorGlazeGroup),
     ["PVC SMART", "", "", "", "", "", "PVC DOOR", "PVC DOOR", "PVC DOOR", "PVC DOOR", "PVC DOOR", ""],
@@ -985,13 +1019,28 @@ const pass = m => { n++; console.log("  ok  " + m); };
   const gJob = { id: "R9100", cust: "Person A", cat: "prod", blk: 1, seq: 1,
     doors: [{ slot: 1, code: "PVC" }, { slot: 2, code: "CD" }, { slot: 3, code: "SS" }, { slot: 4, code: "DD" }],
     prodsMain: [{ n: "pvc door", f: 2, s: 2, t: 0 }, { n: "casement windows", f: 1, s: 1, t: 0 }] };
+  /* a glass word handed in the old way (the office's third argument) is ignored */
   const gSlice = F.fbSlice([gJob], names, () => "part:1/2:0/2");
   const gPvc = gSlice.find(r => r.group === "PVC DOOR"), gCas = gSlice.find(r => r.group === "CASEMENT WINDOWS");
   assert.deepStrictEqual([gPvc.glazeTotal, gCas.glazeTotal], [2, 0], "PVC + DD on the PVC DOOR row; no PVC SMART row, so SS is fed nowhere");
-  assert.ok(gSlice.every(r => r.glass === "part:1/2:0/2"), "Glass on every row of the job");
-  assert.deepStrictEqual([F.fbFeederFields(gPvc).GlazeTotal, F.fbFeederFields(gPvc).Glass], [2, "part:1/2:0/2"]);
-  assert.notStrictEqual(ST.sliceHash(gSlice, F.FAB), ST.sliceHash(F.fbSlice([gJob], names, () => "done"), F.FAB),
-    "a glass change re-feeds");
+  assert.strictEqual(F.fbFeederFields(gPvc).GlazeTotal, 2);
+  assert.strictEqual(ST.sliceHash(gSlice, F.FAB), ST.sliceHash(F.fbSlice([gJob], names), F.FAB),
+    "the glass is no part of the feed: it cannot re-feed a row");
+  /* exact keys: no feeder write of any kind carries `Glass` (2026-10-02) */
+  {
+    const want = ["Active", "Comment", "Customer", "Doors", "Frames", "GlazeTotal", "Group", "GroupSeq", "Job", "OnSheet", "Sashes",
+                  "Section", "Seq", "Transoms"];
+    assert.deepStrictEqual(Object.keys(F.fbFeederFields(gPvc)).sort(), want, "a feeder row's keys, exactly");
+    assert.deepStrictEqual(F.FB_FEEDER_FIELDS.slice().sort(), want);
+    const old = [{ id: "7", fields: Object.assign({ Title: gPvc.title }, F.fbFeederFields(gPvc), { Customer: "was", Glass: "done" }) },
+                 { id: "8", fields: { Title: "R1|GONE", Job: "R1", Group: "GONE", Active: "Yes", OnSheet: "Yes", Glass: "none" } }];
+    const gp = ST.feedPlan(gSlice, old, { at: "T", by: "the office", def: F.FAB });
+    assert.ok(gp.adds.length === 1 && gp.patches.length === 2, "one add, one changed row, one gone row");
+    gp.adds.concat(gp.patches.map(p => p.fields)).forEach(f =>
+      assert.ok(!("Glass" in f), "no feeder add or patch has the key `Glass`: " + Object.keys(f).sort().join()));
+    assert.deepStrictEqual(Object.keys(gp.patches.find(p => p.id === "7").fields).sort(), ["Customer", "FedAt", "FedBy"],
+      "a row that still holds an old `Glass` word is patched for what changed, and the word is left alone");
+  }
   ["GlazeDone", "GlazeBy", "GlazeAt"].forEach(k => assert.ok(F.FB_FEEDER_WRITES.indexOf(k) < 0 && F.FB_FLOOR_FIELDS.indexOf(k) >= 0,
     k + " is the floor's, never the feeder's"));
   assert.deepStrictEqual(P("PVC DOOR"), { "pvc door": all3 }, "a bare group is still frames+sashes+transoms only");
@@ -1013,6 +1062,11 @@ const pass = m => { n++; console.log("  ok  " + m); };
                     { FramesDone: 2, SashesDone: 2, GlazeDone: 1, GlazeBy: "Person G", GlazeAt: "2026-10-01T09:00:00Z" }) },
                   { id: "2", fields: Object.assign({ Title: gCas.title }, F.fbFeederFields(gCas), { FramesDone: 1, SashesDone: 1 }) }];
   const gCard = F.fbOfficeBoard(gItems)[0], gRec = gCard.groups.find(g => g.group === "PVC DOOR");
+  /* the Door glazing line carries the job's glass word (its chip sits with it); no other line does */
+  const gWith = F.fbOfficeBoard(gItems, () => "part:1/2:0/2")[0].groups;
+  assert.deepStrictEqual([gWith.find(g => g.group === "PVC DOOR").extra.map(l => [l.part, l.glass]),
+                          gWith.every(g => g.lines.every(l => !("glass" in l))), gRec.extra[0].glass],
+    [[["glazing", "part:1/2:0/2"]], true, ""], "the glass word rides on the Door glazing line only");
   assert.deepStrictEqual([gRec.total, gRec.done, gRec.colour, gRec.lines.length, gRec.extra.length], [4, 4, "purple", 2, 1],
     "the group's fabrication total, done and colour do not count glazing");
   assert.deepStrictEqual([gRec.extra[0].part, gRec.extra[0].done, gRec.extra[0].total], ["glazing", 1, 2]);
@@ -1035,10 +1089,11 @@ const pass = m => { n++; console.log("  ok  " + m); };
 
   /* Glass ready first */
   const gfCards = F.fbOfficeBoard([
-    { id: "1", fields: { Title: "A1|X", Job: "A1", Group: "X", Frames: 1, Seq: 1, OnSheet: "Yes", Active: "Yes", Glass: "none" } },
-    { id: "2", fields: { Title: "B2|X", Job: "B2", Group: "X", Frames: 1, Seq: 2, OnSheet: "Yes", Active: "Yes", Glass: "done" } },
+    { id: "1", fields: { Title: "A1|X", Job: "A1", Group: "X", Frames: 1, Seq: 1, OnSheet: "Yes", Active: "Yes" } },
+    { id: "2", fields: { Title: "B2|X", Job: "B2", Group: "X", Frames: 1, Seq: 2, OnSheet: "Yes", Active: "Yes" } },
     { id: "3", fields: { Title: "C3|X", Job: "C3", Group: "X", Frames: 1, Seq: 3, OnSheet: "Yes", Active: "Yes", Urgent: "job" } },
-    { id: "4", fields: { Title: "D4|X", Job: "D4", Group: "X", Frames: 1, FramesDone: 1, Seq: 4, OnSheet: "Yes", Active: "Yes", Glass: "done" } }]);
+    { id: "4", fields: { Title: "D4|X", Job: "D4", Group: "X", Frames: 1, FramesDone: 1, Seq: 4, OnSheet: "Yes", Active: "Yes" } }],
+    job => ({ A1: "none", B2: "done", D4: "done" })[job] || "");
   assert.deepStrictEqual(F.fbGlassFirst(gfCards, true).map(c => c.job), ["C3", "B2", "A1", "D4"],
     "urgent stays first, then glass-ready and unfinished; a finished job is not lifted");
   assert.deepStrictEqual(F.fbGlassFirst(gfCards, false).map(c => c.job), ["C3", "A1", "B2", "D4"], "off: urgent first only");
@@ -1193,7 +1248,9 @@ const pass = m => { n++; console.log("  ok  " + m); };
     "the lavender/purple painter plans F/S/T cells only");
 
   /* the office board: the chip, the glazing line with steppers and no Assign, an office edit */
-  A("FABR_ASSIGN_OK = true; FABR_ASSIGN = []; FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { Glass: 'done', GlazeDone: 1 }) }];");
+  /* the chip is the glass station's own row for the job (2026-10-02); the list's old `Glass` word is not read */
+  A("STATION_OK = true; STATION_ITEMS = [{ id: '1', fields: { Title: 'R9100', Job: 'R9100', Total: 2, Cut: 2, Hotmelt: 2, Active: 'Yes' } }];");
+  A("FABR_ASSIGN_OK = true; FABR_ASSIGN = []; FABR_ITEMS = [{ id: '1', fields: Object.assign({}, __GI[0].fields, { Glass: 'none', GlazeDone: 1 }) }];");
   const gRow = A("FABR_OPEN = { R9100: 1 }; fabrRowHtml(fabrRecordsNow().byJob['R9100'])");
   assert.ok(/gchip g-done/.test(gRow) && /Glass ✓ done/.test(gRow), "the chip on the board");
   assert.ok(/Glass is ready and nothing is fabricated yet — start this job/.test(gRow), "the start line");
@@ -1209,41 +1266,35 @@ const pass = m => { n++; console.log("  ok  " + m); };
   await new Promise(r => setTimeout(r, 30));           // the gold run the edit started
   pass("office: chip, start line, glazing line with steppers and no Assign, the five-field edit, painter unchanged");
 
-  /* A. the office's glass word, and a list without the new columns */
-  global.__GLJ = { id: "R9200", glass: { dg: 10, tg: 10 } };
+  /* A. the office's glass word, and a list without the new column */
   A("STATION_OK = true; STATION_ITEMS = [{ id: '1', fields: { Title: 'R9200', Job: 'R9200', Total: 20, Cut: 12, Hotmelt: 5, Active: 'Yes' } }];");
-  assert.strictEqual(A("fabrGlassOf(__GLJ)"), "part:12/20:5/20", "derived from the glass row this page already holds");
-  assert.strictEqual(A("fabrGlassOf({ id: 'R9201', glass: {} })"), "", "no glass: blank");
+  assert.strictEqual(A("fabrGlassOf('R9200')"), "part:12/20:5/20", "derived from the glass row this page already holds");
+  assert.strictEqual(A("fabrGlassOf('R9201')"), "", "no glass row: blank");
   A("STATION_OK = false;");
-  assert.strictEqual(A("fabrGlassOf(__GLJ)"), "", "the glass list unreadable: blank, never a 'not started' nobody said");
+  assert.strictEqual(A("fabrGlassOf('R9200')"), "", "the glass list unreadable: blank, never a 'not started' nobody said");
   const sent = [];
   global.__SEND = async body => {
-    if ("Glass" in body) throw new Error("PATCH x -> 400 {\"error\":\"Field 'Glass' is not recognized\"}");
+    if ("GlazeTotal" in body) throw new Error("PATCH x -> 400 {\"error\":\"Field 'GlazeTotal' is not recognized\"}");
     sent.push(body); return {};
   };
-  await A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T', FedBy: 'o' }, __SEND)");
+  await A("fabrFeedWrite({ Customer: 'x', GlazeTotal: 2, FedAt: 'T', FedBy: 'o' }, __SEND)");
   assert.deepStrictEqual([Object.keys(sent[0]).sort(), A("fabrColsMissing()").join()],
-    [["Customer", "FedAt", "FedBy", "GlazeTotal"], "Glass"], "a 400 on the new column: sent without it, and that column remembered");
-  await A("fabrFeedWrite({ Glass: 'done', FedAt: 'T', FedBy: 'o' }, __SEND)");
+    [["Customer", "FedAt", "FedBy"], "GlazeTotal"], "a 400 on the new column: sent without it, and that column remembered");
+  await A("fabrFeedWrite({ GlazeTotal: 2, FedAt: 'T', FedBy: 'o' }, __SEND)");
   assert.strictEqual(sent.length, 1, "afterwards a write that only carried it is not sent at all");
-  assert.ok(/has no “Glass” column yet/.test(A("fabrBoardHtml()")), "and the board says which column is missing");
+  assert.ok(/has no “GlazeTotal” column yet/.test(A("fabrBoardHtml()")), "and the board says which column is missing");
+  A("delete FABR_NOCOL.GlazeTotal;");
   global.__SEND2 = async () => { throw new Error("PATCH x -> 503 busy"); };
   await assert.rejects(A("fabrFeedWrite({ GlazeTotal: 2, FedAt: 'T' }, __SEND2)"), /503/, "anything but a 400 is just a failed write");
-  assert.strictEqual(A("fabrColsMissing()").join(), "Glass", "and marks no column missing");
-  A("delete FABR_NOCOL.Glass;");
+  assert.strictEqual(A("fabrColsMissing()").join(), "", "and marks no column missing");
   /* F-1: a 400 that does not NAME the column is an ordinary failed write */
   global.__SEND3 = async () => { throw new Error("POST x -> 400 {\"error\":\"The list item could not be added: duplicate Title\"}"); };
-  await assert.rejects(A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T' }, __SEND3)"), /duplicate Title/,
+  await assert.rejects(A("fabrFeedWrite({ Customer: 'x', GlazeTotal: 2, FedAt: 'T' }, __SEND3)"), /duplicate Title/,
     "F-1: a 400 about something else is not read as a missing column");
   assert.strictEqual(A("fabrColsMissing()").join(), "", "F-1: and strips nothing");
-  let tries = 0;
-  global.__SEND4 = async body => { tries++; if ("GlazeTotal" in body) throw new Error("PATCH x -> 400 Field 'GlazeTotal' is not recognized"); return {}; };
-  await A("fabrFeedWrite({ Customer: 'x', Glass: 'done', GlazeTotal: 2, FedAt: 'T' }, __SEND4)");
-  assert.deepStrictEqual([A("fabrColsMissing()").join(), tries], ["GlazeTotal", 2], "F-1: only the NAMED column is tried without, and remembered");
-  A("delete FABR_NOCOL.GlazeTotal;");
 
-  /* F-2: the fabrication feed waits for the glass list - it never writes a
-     blank Glass that it would have to write again */
+  /* 2026-10-02: the glass is no part of the feed. It does not wait for the
+     glass list, and nothing it adds or patches has the key `Glass`. */
   const fabAdds = () => ADDS.filter(a => a.name === "Fabrication station");
   global.__FJ = { id: "R9300", cust: "Person A", cat: "prod", blk: 1, seq: 1, glass: { dg: 10, tg: 10 }, doors: [], notes: [],
     prods: [{ n: "casement windows", f: 2, s: 2, t: 0 }], prodsMain: [{ n: "casement windows", f: 2, s: 2, t: 0 }],
@@ -1252,20 +1303,21 @@ const pass = m => { n++; console.log("  ok  " + m); };
   A("ALL = [__FJ]; BLOCKNAMES = ['Ready to fit', 'In production']; FABR_FEED = { hash: '', at: 0 }; fabrBusy = false; fabrPolling = false;" +
     "STATION_OK = null; STATION_ITEMS = null;");
   const fa0 = fabAdds().length;
-  for (let i = 0; i < 5; i++) { await A("feedFabrication()"); A("clearTimeout(fabrAgainT); fabrAgainT = null;"); }
-  assert.strictEqual(fabAdds().length, fa0, "F-2: glass list not read yet: nothing is fed, however many turns pass");
-  A("STATION_OK = true; STATION_ITEMS = [{ id: '1', fields: { Title: 'R9300', Job: 'R9300', Total: 20, Cut: 20, Hotmelt: 4, Active: 'Yes' } }];");
   await A("feedFabrication()");
   A("clearTimeout(fabrAgainT); fabrAgainT = null;");
-  assert.deepStrictEqual(fabAdds().slice(fa0).map(a => a.fields.Glass), ["part:20/20:4/20"],
-    "F-2: fed once, with the glass word - never blank first");
-  A("STATION_OK = false; FABR_FEED = { hash: '', at: 0 };");
-  ADDS.length = 0;
+  assert.deepStrictEqual(fabAdds().slice(fa0).map(a => Object.keys(a.fields).sort()),
+    [["Title"].concat(F.FB_FEEDER_FIELDS, ["FedAt", "FedBy"]).sort()],
+    "fed at once with the glass list unread, and the add's keys are the feeder's exactly - no `Glass`");
+  CW.listItems = async () => [{ id: "31", fields: Object.assign({}, fabAdds()[fa0].fields, { Customer: "was", Glass: "done" }) }];
+  A("FABR_FEED = { hash: '', at: 0 }; STATION_OK = true;" +
+    "STATION_ITEMS = [{ id: '1', fields: { Title: 'R9300', Job: 'R9300', Total: 20, Cut: 20, Hotmelt: 4, Active: 'Yes' } }];");
+  PATCHES.length = 0;
   await A("feedFabrication()");
   A("clearTimeout(fabrAgainT); fabrAgainT = null;");
-  assert.deepStrictEqual(fabAdds().map(a => a.fields.Glass), [""], "F-2: a glass list that is not there feeds blank");
-  assert.ok(/fabrSoonT = setTimeout\([\s\S]{0,120}, 60000\)/.test(src("app.js")), "F-2: the glass-follow debounce is a minute");
-  pass("glass word from the glass row; a missing new column is stripped, remembered and said, the feed carries on");
+  assert.deepStrictEqual(PATCHES.map(p => Object.keys(p.fields).sort()), [["Customer", "FedAt", "FedBy"]],
+    "a row holding an old `Glass` word, with the glass list read: patched for the sheet's change only, never `Glass`");
+  assert.ok(!/fabrSoonT|fabrGlassWaits/.test(src("app.js")), "the glass-follow debounce and the wait for the glass list are gone");
+  pass("glass word from the glass row, never fed; a missing new column is stripped, remembered and said, the feed carries on");
 
   /* D. welding and glazing boards are told after a feed that wrote rows */
   global.__RD = { w: 0, g: 0 };
@@ -1280,9 +1332,10 @@ const pass = m => { n++; console.log("  ok  " + m); };
 
   /* the tablet page: the glazing line, the chip, the toggle */
   T("ITEMS = " + JSON.stringify([
-      { id: "1", fields: Object.assign({}, gItems[0].fields, { Glass: "done", FramesDone: 0, SashesDone: 0 }) },
+      /* the list's old `Glass` words say the opposite of the glass station: they are not read */
+      { id: "1", fields: Object.assign({}, gItems[0].fields, { Glass: "none", FramesDone: 0, SashesDone: 0 }) },
       { id: "2", fields: { Title: "R9050|CASEMENT WINDOWS", Job: "R9050", Group: "CASEMENT WINDOWS", Frames: 1, Seq: 0,
-                           Section: "In production", Active: "Yes", OnSheet: "Yes", Glass: "part:1/2:0/2" } }]) +
+                           Section: "In production", Active: "Yes", OnSheet: "Yes", Glass: "done" } }]) +
     "; PEOPLE = FABC.fbPeople([{ id: '1', fields: { Title: 'Person G', Station: 'Fabrication', Active: 'Yes', Stages: 'ALL:glazing' } }," +
     " { id: '2', fields: { Title: 'Person F', Station: 'Fabrication', Active: 'Yes', Stages: 'PVC DOOR' } }]);" +
     " QUERY = ''; TAB = 'floor'; QUEUE = {}; LOST = {}; HINT = {};");
@@ -1297,7 +1350,53 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.strictEqual(T("lineState(recordById('1'), 'glazing').words"), "not your part", "a non-glazing person: locked");
   T("READY = false; tap('1', 'glazing', 1); READY = true;");
   assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("HINT['R9100'].why")], [0, "part"]);
-  const gHtml = T("cardInner(boardNow().tabs.floor.find(c => c.job === 'R9100'))");
+
+  /* Take, then Take again: refused for 15 s (a delta read can run a turn behind the write) */
+  {
+    const reqs = () => TW.filter(w => w.what === "add:" + T("FABC.FB_ASSIGN_LIST")).length;
+    setAssign(true, []);
+    T("ASG.items = []; ASG.missing = false; ASG.offAt = Date.now(); TAKING = {};");   // the read after the write sees nothing new yet
+    TW.length = 0;
+    await T("take('1', 'frames')");
+    assert.deepStrictEqual([reqs(), T("TAKING['R9100|PVC DOOR|frames'] > 1")], [1, true], "Take sends one request and stamps it");
+    await T("take('1', 'frames')");
+    assert.strictEqual(reqs(), 1, "a second Take inside the hold is refused, though the row has not shown yet");
+    T("TAKING['R9100|PVC DOOR|frames'] = Date.now() - TAKE_HOLD_MS - 1;");
+    await T("take('1', 'frames')");
+    assert.deepStrictEqual([reqs(), T("TAKE_HOLD_MS")], [2, 15000], "and allowed again once the 15 s are up");
+    T("TAKING = {}; SOFT = '';");
+    setAssign(null);
+    pass("Take is refused for 15 s after a request, then allowed");
+  }
+
+  /* the glass: the tablet's own read of `Glass station`, never the fabrication list's `Glass` column */
+  const cardOf = j => T("cardInner(boardNow().tabs.floor.find(c => c.job === '" + j + "'))");
+  const order = () => JSON.parse(T("JSON.stringify(boardNow().tabs.floor.map(c => c.job))"));
+  T("setGlassFirst(true);");
+  assert.ok(/gchip g-wait">Glass: checking…/.test(cardOf("R9100")) && !/Glass is ready/.test(cardOf("R9100")),
+    "not read yet: checking, and not ready");
+  assert.deepStrictEqual(order(), ["R9050", "R9100"], "not read yet: nothing is sorted first");
+  tctx.CW.listItems = async () => null;                       // no such list for this account
+  assert.strictEqual(await T("readGlass()"), true, "the first answer redraws");
+  assert.ok(/gchip g-off">Glass: not available/.test(cardOf("R9100")) && !/Glass is ready/.test(cardOf("R9100")),
+    "not readable: not available, and not ready");
+  assert.deepStrictEqual(order(), ["R9050", "R9100"], "not readable: nothing is sorted first");
+  const glassCalls = [];
+  tctx.CW.listItems = async (name, o) => {
+    glassCalls.push([name, o.siteId, o.fields.join()]);
+    return [{ id: "1", fields: { Title: "R9100", Job: "R9100", Total: 2, Cut: 2, Hotmelt: 2, Active: "Yes" } },
+            { id: "2", fields: { Title: "R9050", Job: "R9050", Total: 2, Cut: 1, Active: "Yes" } }];
+  };
+  assert.strictEqual(await T("GLS.offAt = 0; readGlass()"), true);
+  assert.deepStrictEqual(glassCalls[0], ["Glass station", "s", T("ST.GLASS.fields.join()")], "the glass station's own list and fields");
+  assert.strictEqual(T("ST.GLASS.site"), "own", "... in the workbook's own site");
+  assert.ok(src("fabrication.js").indexOf("readGlass().then(") > 0 && !/await readGlass\(\);/.test(src("fabrication.js")),
+    "read once un-awaited before the first paint, never in front of the board");
+  assert.ok(/Door glazing[\s\S]*gchip g-done">Glass ✓ done/.test(T("boardNow(); stepHtml(recordById('1'), recordById('1').extra[0])")) &&
+            !/gchip/.test(T("stepHtml(recordById('1'), recordById('1').lines[0])")),
+    "the Door glazing line carries the glass chip; a fabrication line does not");
+  T("setGlassFirst(false);");
+  const gHtml = cardOf("R9100");
   assert.ok(/gchip g-done">Glass ✓ done/.test(gHtml) && /Glass is ready and nothing is fabricated yet — start this job/.test(gHtml) &&
             /Door glazing/.test(gHtml), "the chip, the start line and the glazing line on the card");
   assert.ok(/gchip g-part">Glass: cut 1\/2 · hotmelt 0\/2/.test(T("cardInner(boardNow().tabs.floor.find(c => c.job === 'R9050'))")));

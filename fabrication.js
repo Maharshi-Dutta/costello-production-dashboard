@@ -420,7 +420,7 @@ function itemsNow() {
 }
 let RECS_BY_ID = {};
 function boardNow() {
-  const tabs = F.fbTabs(itemsNow());
+  const tabs = F.fbTabs(itemsNow(), GLASSOF);
   /* urgent first on every worker's list (Part B) */
   tabs.floor = F.fbUrgentFirst(tabs.floor);
   tabs.finished = F.fbUrgentFirst(tabs.finished);
@@ -447,6 +447,22 @@ try { GLASSFIRST = localStorage.getItem(GLASSFIRST_KEY) === "1"; } catch (e) {}
 function setGlassFirst(on) {
   GLASSFIRST = !!on;
   try { localStorage.setItem(GLASSFIRST_KEY, GLASSFIRST ? "1" : "0"); } catch (e) {}
+}
+/* ---- the job's glass: the glass station's own list, READ ONLY (2026-10-02) ---
+   One owner per fact: the chip and "Glass ready first" come from the job's
+   `Glass station` row, read here by delta through the shared reader - never
+   from a word the office copied. Until the reader has answered every job with
+   glass says "checking", and a list this account cannot read says "not
+   available"; neither is ever ready (fbGlassOf). Never awaited in front of
+   the board. */
+const GLS = STU.stuListReader({ site: ST.GLASS.site, list: ST.GLASS.list, fields: ST.GLASS.fields,
+                                tag: "[fabrication]" });
+let GLASSOF = F.fbGlassOf(null, false);
+/** Answers whether the glass moved. */
+async function readGlass() {
+  if (!(await GLS.read())) return false;
+  GLASSOF = F.fbGlassOf(GLS.items, true);
+  return true;
 }
 function viewStore() {
   try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "{}") || {}; } catch (e) { return {}; }
@@ -594,6 +610,7 @@ function stepHtml(rec, line) {
   /* All / None set the whole line: only for somebody holding all of it (P2) */
   const wholeOk = mayAct(rec, line.part, "all");
   const urgent = (rec.urgentOf || {})[line.part];
+  const glass = F.fbGlassChip(line.glass);
   return '<div class="step' + (mine ? "" : " locked") + ' c-' + (line.colour || "none") + '">' +
     '<span class="stepl">' + (urgent ? URG : "") + esc(line.label) +
       (mine ? '<span class="stepleft tab">' + esc(Math.max(0, line.total - line.done) + " left") + '</span>' : "") +
@@ -604,6 +621,8 @@ function stepHtml(rec, line) {
       line.total + '</span>' + barHtml(line.done, line.total) + '</span>' +
     '<span class="stepc">' + b("&minus;", "-1", "sbtn") + b("+", "1", "sbtn") +
       b(full ? "None" : "All", full ? "none" : "all", "sall", !wholeOk) + '</span>' +
+    /* Door glazing: is this job's glass ready? (line.glass is only ever on that line) */
+    (glass.kind ? '<span class="gchip g-' + glass.kind + '">' + esc(glass.words) + '</span>' : "") +
   '</div>';
 }
 function groupHtml(rec) {
@@ -628,7 +647,7 @@ function cardInner(c) {
       '<span class="cust">' + esc(c.customer || "—") + '</span>' +
       (c.section && !c.active ? '<span class="csec">' + esc(c.section) + '</span>' : "") +
       (c.sheetDone ? '<span class="csheet">finished on sheet</span>' : "") +
-      /* the job's glass, as the office fed it (read only; nothing when blank) */
+      /* the job's glass, off the glass station's own list (read only; nothing when blank) */
       (glass.kind ? '<span class="gchip g-' + glass.kind + '">' + esc(glass.words) + '</span>' : "") +
     '</div>' +
     (c.comment ? '<div class="cfacts"><span class="ccmt">“' + esc(c.comment) + '”</span></div>' : "") +
@@ -762,8 +781,14 @@ function render() {
   const host = $("#board");
   if (!host) return;
   const hdr = $("#whois");
-  if (hdr) hdr.textContent = PERSON ? PERSON.name + ((PERSON.stages || []).length
-    ? " · " + PERSON.stages.length + " group" + (PERSON.stages.length === 1 ? "" : "s") : " · no groups") : "";
+  /* the name alone is the text: it is who every tap is logged under, and it
+     must not be what an ellipsis eats. The groups ride in data-stages, which
+     the stylesheet shows after it where there is room (as glass.html). */
+  if (hdr) {
+    hdr.textContent = PERSON ? PERSON.name : "";
+    hdr.dataset.stages = !PERSON ? "" : (PERSON.stages || []).length
+      ? PERSON.stages.length + " group" + (PERSON.stages.length === 1 ? "" : "s") : "no groups";
+  }
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
   const boarding = !PROBLEM && PEOPLE_READ && !!PERSON && READY;
@@ -969,6 +994,7 @@ async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
   if (await readAssign()) TICK.burst();
+  if (await readGlass()) { TICK.burst(); render(); }
   await pollList();
   if (await NOTES.poll()) render();
 }
@@ -1010,6 +1036,7 @@ async function start() {
     };
   });
   render();
+  readGlass().then(ch => { if (ch) render(); });     // never in front of the board
   await readPeople();
   await readAssign();
   await readList();

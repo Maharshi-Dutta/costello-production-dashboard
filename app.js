@@ -1432,17 +1432,14 @@ const STATION_FEEDS = {
            get: () => STATION_ITEMS, set: v => { STATION_ITEMS = v; }, token: null, off: 0 },
   log: { list: () => ST.LOG_LIST, fields: () => ST.LOG_FIELDS,
          get: () => STATION_LOG, set: v => { STATION_LOG = v; }, token: null, off: 0 },
-  /* the floor's notes ride the floor's own clock - ten seconds while somebody
-     is looking at the floor or has a glass job's drawer open, a minute
-     otherwise. That is what the spec asked for: the drawer's own poll cycle,
-     and no new polling infrastructure. */
+  /* the floor's notes ride the floor's own clock, ten seconds. That is what
+     the spec asked for: the drawer's own poll cycle, and no new polling
+     infrastructure. */
   notes: { list: () => ST.COMMENT_LIST, fields: () => ST.COMMENT_FIELDS,
            get: () => STATION_NOTES, set: v => { STATION_NOTES = v; NOTES_UNREAD = null; }, token: null, off: 0 },
   /* the third feed, and the odd one out: `Dashboard progress` is in the
      WORKBOOK's site, not the floor's, and it is polled on its own clock
-     (cpTick) rather than this one - a colleague's tick has to reach this
-     screen in ten seconds whatever is on it, and the floor's poll drops to a
-     minute when nobody is looking at the floor. Everything else about it -
+     (cpTick) rather than this one. Everything else about it -
      the delta, the token, the 410 resync, the five-minute "delta off" - is
      the same code. */
   progress: { list: () => CP_LIST, fields: () => CP_LIST_FIELDS,
@@ -2045,29 +2042,27 @@ function stationLogReadIfNeeded(then) {
    nothing moved would be six hundred rows a minute of unchanged text. So the
    poll asks Graph what has changed since last time (listDelta) and merges it.
 
-   Ten seconds while somebody is actually looking at the floor - the station
-   board, the log window, or a drawer for a job that has glass - and a minute
-   otherwise, because a poll nobody is reading is only there to keep the drawer
-   honest when it is next opened. A failure never toasts: it leaves the last
-   data exactly where it is and says so in the line the board already has.   */
-const STATION_FAST_MS = 10000, STATION_SLOW_MS = 60000;
+   Ten seconds whatever is on screen (2026-10-02): the poll is also what carries
+   a floor tap into the sheet's colours, and the minute it used to drop to when
+   nobody was looking at the floor delayed exactly that. A failure never toasts:
+   it leaves the last data exactly where it is and says so in the line the
+   board already has.   */
+const STATION_FAST_MS = 10000;
 let stationPollT = null, stationPolling = false;
 let STATION_SITE_GEN = 0;               // which site the tokens in hand belong to
 
 /* What the job list on screen is showing of the floor's work, worked out when
-   the rows are drawn and remembered until they are drawn again. Three things
-   are asked of it afterwards, all of them often enough to matter:
+   the rows are drawn and remembered until they are drawn again. Two things
+   are asked of it afterwards, both of them often enough to matter:
 
-     · is anything on screen worth polling six times a minute for (ROWS_GLASS);
      · has anything the rows are showing actually changed (ROWS_CHIPS - a poll
        that moved a job nobody is looking at, or wrote a log line, must not
        rebuild seven hundred rows to draw exactly what is already there);
      · is a repaint owed, because the list was in use when one came round.
 
-   ROWS_DRAWN is the rows the list last drew, so the second question can be
+   ROWS_DRAWN is the rows the list last drew, so the first question can be
    asked without filtering and sorting the whole sheet again. */
-let ROWS_GLASS = false, ROWS_CHIPS = "", ROWS_DRAWN = [], ROWS_STALE = false, ROWS_QUIET = false;
-let CHIPS_GLASS = false;               // did the last chipsNow() find any glass on screen?
+let ROWS_CHIPS = "", ROWS_DRAWN = [], ROWS_STALE = false, ROWS_QUIET = false;
 
 /** What the chips of the rows on screen say, as one string to compare against.
     A record with no glasses on it is in here too, as nothing: it draws no chip
@@ -2100,9 +2095,6 @@ function chipsNow() {
       if (p != null) phase += j.id + ":p" + p + "|";
     }
   }
-  /* what the rows are worth to the POLL is still the glass alone: an unread
-     note is no reason to ask the floor's lists for a delta six times a minute */
-  CHIPS_GLASS = glass !== "";
   return glass + notes + phase;
 }
 /** A repaint the list was too busy for is owed, not lost: the poll's own clock
@@ -2129,21 +2121,6 @@ function quietRows() {
   try { renderRows(); } finally { ROWS_QUIET = false; }
 }
 
-/** Is anyone actually looking at the floor's data right now? */
-function stationWatching() {
-  /* the John print sheet is a board in the same slot, but it is the office's
-     own second sheet: nothing on it can change because the floor tapped
-     something, so it is no reason to poll the floor six times a minute */
-  if (state.board && state.board !== "john") return true;
-  if ($("#lhost") || $("#dayhost")) return true;
-  const j = state.sel ? byId(state.sel) : null;
-  if (j && typeof ST !== "undefined" && ST.glassTotal(j) > 0) return true;
-  /* the ordinary job list counts too, now that its rows carry the floor's
-     chip: a tap on the tablet changes what is on this screen. Only when the
-     rows being shown are jobs the floor has a record of - a list filtered
-     down to jobs with no glass has nothing to wait for. */
-  return ROWS_GLASS;
-}
 /** The plain read, for a list that will not serve a delta and for a token
     that has gone stale. true = the list was replaced. */
 async function stationFull(key, siteId, gen) {
@@ -2291,9 +2268,10 @@ async function stationPoll() {
          poll must be back for its next turn whatever the workbook is doing, and
          the write reports its own failures. */
       glassColourRun().catch(e => console.warn("[glass] " + ((e && e.message) || e)));
-      /* ... and the fabricators' `Glass` word follows the glass list */
-      fabrFeedSoon();
-      glzFeedSoon();                       // and the glazer's Glass chip
+      /* ... and the glass chips on the other two boards are worked out from
+         this list (2026-10-02), so whichever is on screen follows it */
+      if (state.board === "glazing") redrawGlazing();
+      else if (state.board === "fabrication") redrawFabrication();
     }
     return moved;
   } catch (e) {
@@ -2392,12 +2370,9 @@ async function dayPoll() {
   if (ds.ok !== true && dayDue(ds)) dayReadIfNeeded(() => { if ($("#dayhost")) paintDaySheets(); }, dsId);
   return true;
 }
-/** The poll's own clock. Re-armed after every pass, so changing what is on
-    screen changes the rate at the next tick rather than needing two timers. */
-let STATION_TICK_MS = 0;                 // the rate currently armed, for the tests
+/** The poll's own clock, re-armed after every pass. */
 function stationTick() {
   if (stationPollT) clearTimeout(stationPollT);
-  STATION_TICK_MS = stationWatching() ? STATION_FAST_MS : STATION_SLOW_MS;
   stationPollT = setTimeout(async () => {
     stationPollT = null;
     /* both of them inside the one guard. stationCatchUp() reaches renderRows(),
@@ -2412,15 +2387,18 @@ function stationTick() {
        (no permission yet, list not made, a 404) silently froze the WELDING
        board as well, on a dashboard where the welding lists were perfectly
        healthy. Each station's poll is its own question about its own lists in
-       its own site, and neither may gate, delay or fail the other. */
-    try { await stationPoll(); } catch (e) { /* it has its own catch; belt and braces */ }
-    try { await weldPoll(); } catch (e) { /* ... and so does this one */ }
-    try { await glzPoll(); } catch (e) { /* ... and the third */ }
-    try { await fabrPoll(); } catch (e) { /* ... and the fourth */ }
-    try { await dayPoll(); } catch (e) { /* ... and the day sheets, on their own */ }
+       its own site, and neither may gate, delay or fail the other.
+
+       TOGETHER, NOT IN A LINE (2026-10-02): five lists' worth of requests one
+       after another made every tick as slow as their sum. No poll reads what
+       another one fetched in the same tick - each merges into its own list and
+       redraws synchronously - and each starts its own sheet painter, not
+       awaited, on that painter's own serialised chain, as before. allSettled:
+       every poll has its own catch; belt and braces. */
+    await Promise.allSettled([stationPoll(), weldPoll(), glzPoll(), fabrPoll(), dayPoll()]);
     try { stationCatchUp(); } catch (e) {}
     stationTick();
-  }, STATION_TICK_MS);
+  }, STATION_FAST_MS);
 }
 
 /* ---- the feeder ----
@@ -3590,39 +3568,21 @@ function glzFeedAgain() {
 
 /* ---- is the job ready to glaze (owner, 2026-10-01) ---------------------------
    The glazer's two chips: how far the job's glass and its fabrication have got.
-   Worked out here, from lists this dashboard already holds, and fed as two text
-   columns - the glazing tablet reads neither of those lists itself.
-
-   The glass word is the fabricators' own (FABC.fbGlassStatus), so the two
-   tablets can never disagree about one job's glass. A list that cannot be read
-   right now says NOTHING NEW: the row keeps the word it already has, rather
-   than a ready job being fed back to blank because the wifi dropped. */
-function glzStatusOf(j) {
-  /* null = cannot say right now; feedGlazing fills it from the row as read */
-  let glass = null, fab = null;
-  if (typeof ST !== "undefined" && typeof FABC !== "undefined") {
-    if (!(ST.glassTotal(j) > 0 || ST.tuffTotal(j) > 0)) glass = "";      // no glass on the job
-    else if (STATION_OK === true) glass = FABC.fbGlassStatus(stationForJob(j.id), true);
-  }
-  if (typeof fabrOn === "function" && fabrOn() && FABR_OK === true) {
-    /* the fabrication board's own key (review finding 2) */
-    const c = (fabrRecordsNow().byJob || {})[FABC.fbKey(j && j.id)];
-    /* no card: blank only when the job has nothing to fabricate. A job the
-       fabrication feed has simply not reached yet cannot be said (finding 1) */
-    fab = c ? GLZC.glzFabStatus(c.done, c.total, c.finished)
-            : FABC.fbSlice([j], BLOCKNAMES).length ? null : "";
-  }
-  return { glass: glass, fab: fab };
+   Since 2026-10-02 nothing is fed for them: the tablet reads the glass and
+   fabrication lists itself, and this board works the same words out from the
+   two lists it already holds, with the tablet's own functions - so the two
+   screens cannot disagree. A list not read yet says "checking", never ready. */
+let GFAB = null, GFAB_OF = false;
+/** Fabrication's window groups by job, built once per version of that list
+    (the array is the cache key, as in fabrRecordsNow). */
+function glzFabNow() {
+  if (GFAB_OF !== FABR_ITEMS) { GFAB_OF = FABR_ITEMS; GFAB = GLZC.glzFabByJob(FABR_ITEMS || []); }
+  return GFAB;
 }
-/** The glass or the fabrication list moved: the glazer's chips follow, a minute
-    later at most - debounced, as fabrFeedSoon is and for its reason (every tap
-    changes a `part:` word, and each change is a PATCH). */
-let glzSoonT = null;
-function glzFeedSoon() {
-  if (glzSoonT || !glzOn()) return;
-  glzSoonT = setTimeout(() => { glzSoonT = null; feedGlazing().catch(() => {}); }, 60000);
-  /* never the thing that keeps a Node test run alive */
-  if (glzSoonT && glzSoonT.unref) glzSoonT.unref();
+/** One job's { glass, fab } words, as glzStatusChip and glzReady take them. */
+function glzStatusOf(job) {
+  return GLZC.glzStatusNow(stationForJob(job), glzFabNow()[FABC.fbKey(job)],
+    { glass: STATION_OK === true, fab: FABR_OK === true });
 }
 
 async function feedGlazing() {
@@ -3634,15 +3594,7 @@ async function feedGlazing() {
   glzBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { GLZ_FEED_ERR = ""; return null; }
-    /* the glass or fabrication list is still on its first read of this page:
-       glzKeepStatus then leaves a wordless row alone rather than feed "?" onto
-       every row now and the real words a minute later */
-    const loading = (typeof STATION_OK !== "undefined" && STATION_OK === null) ||
-                    (typeof fabrOn === "function" && fabrOn() && FABR_OK === null);
-    const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES, glzStatusOf);
-    /* something still cannot be said: look again in a minute. Above the
-       hash-skip, or the retry dies after one turn (review finding 3) */
-    if (slice.some(r => r.glass == null || r.fab == null)) glzFeedSoon();
+    const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES);
     const hash = ST.sliceHash(slice, GLZC.GLAZE);
     if (hash === GLZ_FEED.hash && Date.now() - (GLZ_FEED.at || 0) < STATION_FEED_MS) {
       GLZ_FEED_ERR = "";                                 // nothing to do is not a failure
@@ -3656,8 +3608,6 @@ async function feedGlazing() {
     const items = await CW.listItems(GLZC.GLZ_LIST, opts);
     if (items == null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; GLZ_ERR = ""; return null; }
     GLZ_OK = true; GLZ_WHY = ""; GLZ_ERR = ""; GLZ_ITEMS = items; GLZ_TOK.items = null;
-    /* a status the office could not work out keeps the row's own word */
-    GLZC.glzKeepStatus(slice, items, loading);
     const plan = ST.feedPlan(slice, items,
       { at: new Date().toISOString(), by: feedWho(), def: GLZC.GLAZE });
     const all = plan.adds.map(f => () => glzAdd(f, opts))
@@ -4009,7 +3959,8 @@ function glzRowHtml(c) {
      job, the notes and the last touch; a second line is the same eight grid
      cells, so every column stays lined up (B30), with its name where the
      customer would be. */
-  const chips = [GLZC.glzStatusChip("glass", c.glass), GLZC.glzStatusChip("fab", c.fab)].filter(Boolean);
+  const st = glzStatusOf(c.job);
+  const chips = [GLZC.glzStatusChip("glass", st.glass), GLZC.glzStatusChip("fab", st.fab)].filter(Boolean);
   const parts = [];
   if (c.total > 0) parts.push("");
   if (c.astrTotal > 0) parts.push("astragal");
@@ -4038,7 +3989,7 @@ function glzRowHtml(c) {
     parts.map((p, i) => line(p, i === 0)).join("") +
     /* the same two chips the glazer sees (2026-10-01), read-only */
     (chips.length ? '<div class="glzchips">' +
-      (c.ready && !c.finished && !rowDone ? '<span class="glzchip ready">Ready to glaze</span>' : "") +
+      (GLZC.glzReady(st.glass, st.fab) && !c.finished && !rowDone ? '<span class="glzchip ready">Ready to glaze</span>' : "") +
       chips.map(x => '<span class="glzchip ' + x.cls + '">' + esc(x.words) + '</span>').join("") +
       '</div>' : "") +
     (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
@@ -4287,23 +4238,22 @@ async function fabrAdd(fields, opts) {
   }
 }
 let fabrAgainT = null;
-function fabrFeedAgain(ms) {
+function fabrFeedAgain() {
   if (fabrAgainT) return;
-  fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, ms || 30000);
+  fabrAgainT = setTimeout(() => { fabrAgainT = null; feedFabrication().catch(() => {}); }, 30000);
 }
 /* ---- the job's glass, for the fabricators (2026-10-01) ----------------------
-   One word per job (FABC.fbGlassStatus), from what this page already holds:
-   the glass station's row for the job. No new read of anything, and the
-   fabrication tablet never reads the glass list itself. A glass list this page
-   cannot read answers "" - no chip - rather than a "not started" nobody said. */
-let fabrGlassWaits = 0;
-function fabrGlassOf(j) {
-  if (typeof ST === "undefined" || !j) return "";
-  if (!(ST.glassTotal(j) > 0 || ST.tuffTotal(j) > 0)) return "";
+   One word per job (FABC.fbGlassStatus), from the glass station's own row for
+   the job - the list this page already holds, and since 2026-10-02 the one the
+   fabrication tablet reads for itself; nothing is fed. A job with no glass has
+   no row there. A glass list this page cannot read answers "" - no chip -
+   rather than a "not started" nobody said. */
+function fabrGlassOf(job) {
   if (STATION_OK !== true) return "";
-  return FABC.fbGlassStatus(stationForJob(j.id), true);
+  const g = stationForJob(job);
+  return g ? FABC.fbGlassStatus(g, g.total > 0 || g.tuffTotal > 0) : "";      // as FABC.fbGlassOf does
 }
-/* ---- the two feeder columns added 2026-10-01 (`Glass`, `GlazeTotal`) --------
+/* ---- the feeder columns added 2026-10-01 (FABC.FB_NEW_FEEDER_FIELDS) --------
    A list that has not got one of them yet refuses any write that names it. That
    must not stop the feed: the refused write is tried again without the new
    column(s), and the one whose absence let it through is remembered for the
@@ -4320,8 +4270,8 @@ async function fabrFeedWrite(fields, send) {
   try { return await send(body); }
   catch (e) {
     /* ONLY when the refusal NAMES the column (review F-1): a 400 can be many
-       things - a wrong value, a unique-Title clash - and stripping `Glass` for
-       the session on any of them would hide the glass status for no reason.
+       things - a wrong value, a unique-Title clash - and stripping a column for
+       the session on any of them would hide what it carries for no reason.
        The resend without it is still what confirms it. */
     const msg = (e && e.message) || "";
     const news = FABC.FB_NEW_FEEDER_FIELDS.filter(k => k in body && new RegExp("\\b" + k + "\\b").test(msg));
@@ -4342,15 +4292,6 @@ async function fabrFeedWrite(fields, send) {
     throw e;
   }
 }
-let fabrSoonT = null;
-/** The glass list moved: the fabricators' `Glass` word may have. Debounced, and
-    the feed's own hash makes it one read of nothing when it has not. */
-function fabrFeedSoon() {
-  if (fabrSoonT || !fabrOn()) return;
-  /* a minute, not twenty seconds (review F-2): every glass tap changes the
-     `part:` word, and each change is a PATCH on every fabrication row of the job */
-  fabrSoonT = setTimeout(() => { fabrSoonT = null; feedFabrication().catch(() => {}); }, 60000);
-}
 async function feedFabrication() {
   if (isSales()) return null;
   if (!fabrOn() || fabrBusy) return null;
@@ -4359,13 +4300,7 @@ async function feedFabrication() {
   fabrBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { FABR_FEED_ERR = ""; return null; }
-    /* the glass list has not been read yet this session: wait for it, however
-       long (review F-2), rather than write every job's Glass blank and write
-       it all again when the list arrives. Not-known is null; a list that is
-       not there or may not be read becomes false, and then - once - blank is
-       the honest thing to feed. Each wait costs no request. */
-    if (STATION_OK === null) { fabrGlassWaits++; fabrFeedAgain(10000); return null; }
-    const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES, fabrGlassOf);
+    const slice = FABC.fbSlice(feedJobs(), BLOCKNAMES);
     const hash = ST.sliceHash(slice, FABC.FAB);
     if (hash === FABR_FEED.hash && Date.now() - (FABR_FEED.at || 0) < STATION_FEED_MS) { FABR_FEED_ERR = ""; return null; }
     FABR_SITEID = await fabrSiteId();
@@ -4448,7 +4383,6 @@ async function fabrPoll() {
     else if (got.rows && !(got.fresh && sameRows(got.rows, FABR_ITEMS))) {    // a full read of the same rows is no change
       FABR_ITEMS = got.fresh ? got.rows : ST.mergeDelta(FABR_ITEMS || [], got.rows);
       moved = items = true;
-      glzFeedSoon();                       // the glazer's Fabrication chip follows
     }
     if (FABR_LOG_OK === true) {
       const lg = await fabrDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
@@ -4474,6 +4408,8 @@ async function fabrPoll() {
     if (FABR_PEOPLE && Date.now() - fabrPeopleAt > 300000 && (await readFabricationPeople())) moved = true;
     FABR_ERR = "";
     if (moved) redrawFabrication();
+    /* the glazing board's Fabrication chip is worked out from this list */
+    if (items && state.board === "glazing") redrawGlazing();
     /* a counter moved: the sheet's colours follow. Not awaited - the poll must be
        back for its next turn whatever the workbook is doing. */
     if (items) {
@@ -4595,11 +4531,13 @@ async function fabrOfficeEdit(id, part, act) {
 }
 
 /* ---- what the board draws ---- */
-let FRECS = null, FRECS_OF = false;
+let FRECS = null, FRECS_OF = false, FRECS_GLASS = false, FRECS_GOK = null;
+/** Every card, built once per version of the fabrication list AND of the glass
+    list its glass word comes from (2026-10-02) - not once per row drawn. */
 function fabrRecordsNow() {
-  if (FRECS_OF === FABR_ITEMS) return FRECS;
-  FRECS_OF = FABR_ITEMS;
-  const cards = fabrOn() ? FABC.fbOfficeBoard(FABR_ITEMS || []) : [];
+  if (FRECS_OF === FABR_ITEMS && FRECS_GLASS === STATION_ITEMS && FRECS_GOK === STATION_OK) return FRECS;
+  FRECS_OF = FABR_ITEMS; FRECS_GLASS = STATION_ITEMS; FRECS_GOK = STATION_OK;
+  const cards = fabrOn() ? FABC.fbOfficeBoard(FABR_ITEMS || [], fabrGlassOf) : [];
   const byId = {}, byJob = {};
   cards.forEach(c => { byJob[c.job] = c; c.groups.forEach(g => { byId[String(g.id)] = g; }); });
   FRECS = { cards: cards, byId: byId, byJob: byJob };
@@ -4813,8 +4751,8 @@ function fabrRowHtml(c) {
   const notes = fabrNotesFor(c.job);
   const urgent = FABC.fbCardUrgent(c);            // also fills g.urgentOf
   const jobUrgent = c.groups.some(g => g.urgentOf.job);
-  /* the job's glass, as it is fed to the fabricators: in the customer cell, so
-     the row keeps its tracks */
+  /* the job's glass, as the fabricators see it: in the customer cell, so the
+     row keeps its tracks */
   const glass = FABC.fbGlassChip(c.glass);
   return '<div class="worow c-' + (c.colour || "none") + (c.finished ? " done" : "") + '" data-fwjob="' + esc(c.job) + '">' +
     '<div class="wohead" data-fwtog="' + esc(c.job) + '">' +
@@ -4876,8 +4814,7 @@ function fabrBoardHtml() {
      rest of the feed and the board carry on */
   const nocol = fabrColsMissing().length ? '<div class="cphint fanote">The “Fabrication station” list has no ' +
     esc(fabrColsMissing().map(k => "“" + k + "”").join(" or ")) + ' column yet, so ' +
-    esc(fabrColsMissing().map(k => k === "Glass" ? "the glass status" : "door glazing").join(" and ")) +
-    ' cannot be shown. Ask the manager to add it — nothing in the Excel file is involved.</div>' : "";
+    'door glazing cannot be shown. Ask the manager to add it — nothing in the Excel file is involved.</div>' : "";
   if (FABR_VIEW === "who") return trouble + bar + nocol + assign + fabrWhoHtml();
   const body = !cards.length
     ? (boardQueryEmptyHtml(fabrRecordsNow().cards.length) ||
@@ -8100,11 +8037,6 @@ function renderChips() {
   ssel.id = "showsel";
   ssel.onchange = () => {
     state.board = ssel.value || null; state.picked = {}; renderAll();
-    /* the tick was armed at the slow rate while nobody was looking at the
-       floor; picking the board is exactly the moment to speed it up, or the
-       first delta lands up to a minute later - and leaving it is the moment to
-       slow it down again, which is why this runs for the John print sheet too */
-    stationTick();
     /* the feeder normally fills STATION_ITEMS in on every load; if it skipped
        (nothing changed, or the permission was granted since) read it now. Only
        for a floor station: the John print sheet came out of the workbook
@@ -8941,7 +8873,6 @@ function openStationLog(job, station) {
   const st = station != null ? station : (LOG_BOARD_STATION[state.board] || "");
   LOGF = { station: st, who: "", stage: "", job: job || "", day: "", show: LOG_PAGE };
   renderStationLog();
-  stationTick();                 // somebody is looking at the floor now: poll fast
 }
 
 /** The window's frame: the head, the filter bar and the two boxes the repaint
@@ -9122,7 +9053,6 @@ function openDaySheets(stage) {
   DAYF = dayDefaultFilters();
   DAYEDIT = "";
   renderDaySheets();
-  stationTick();                  // somebody is looking at the floor now: poll fast
 }
 
 function renderDaySheets() {
@@ -9458,7 +9388,7 @@ function renderRows() {
   /* John's own sheet takes the list's place: tickable, but with no drawer, no
      drag and nothing that writes anything anywhere */
   if (state.board === "john") {
-    ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // no job rows on screen
+    ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // no job rows on screen
     paintRows(host, '<div class="jboard">' + johnViewHtml() + "</div>");
     wireJohnView(host);
     const shown = johnShown().length, total = (JOHNROWS || []).length;
@@ -9470,7 +9400,7 @@ function renderRows() {
   /* a floor station's board takes the whole list's place: read-only, no
      selection, no drag targets, nothing that writes anything anywhere */
   if (state.board) {
-    ROWS_GLASS = false; ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // the board is its own reason to poll fast
+    ROWS_CHIPS = ""; ROWS_DRAWN = []; ROWS_STALE = false;   // no job rows on screen
     /* the welding board is a second station in the same slot, with its own
        list, its own site and its own renderer. Adding the third is another
        line here and another renderer - see docs/STATIONS.md, "Adding a
@@ -9486,7 +9416,14 @@ function renderRows() {
       return;
     }
     if (state.board === "glazing") {
-      glzReadIfNeeded(() => { if (state.board === "glazing") renderRows(); });
+      const again = () => { if (state.board === "glazing") renderRows(); };
+      glzReadIfNeeded(again);
+      /* its two chips come from the glass and fabrication lists: a feeder that
+         skipped (nothing changed) has read neither, so the board asks. Only an
+         answered glass read redraws - a failed one would ask again from inside
+         the redraw, at network speed */
+      stationReadIfNeeded(() => { if (STATION_OK !== null) again(); });
+      fabrReadIfNeeded("board", again);
       /* the glazing board borrows welding's row, but emits one cell fewer (no
          toggle column), so it carries its own class for its own track list */
       paintRows(host, '<div class="stboard weldboard glzboard">' + glzBoardHtml() + '</div>');
@@ -9498,7 +9435,10 @@ function renderRows() {
       return;
     }
     if (state.board === "fabrication") {
-      fabrReadIfNeeded("board", () => { if (state.board === "fabrication") renderRows(); });
+      const again = () => { if (state.board === "fabrication") renderRows(); };
+      fabrReadIfNeeded("board", again);
+      /* the glass chip comes from the glass list (answered reads only, as above) */
+      stationReadIfNeeded(() => { if (STATION_OK !== null) again(); });
       paintRows(host, '<div class="stboard weldboard fabboard">' + fabrBoardHtml() + '</div>');
       viewOnlyBoard(host);
       wireFabrBoard(host);
@@ -9521,17 +9461,12 @@ function renderRows() {
   }
   const list = filtered();
   const max = Math.max(1, ...list.map(j => tot(comp(j))));
-  /* what the rows about to be drawn are worth to the poll, and what they will
-     be saying once drawn - one pass over the list, one map lookup a row. These
-     rows are current from here on, so nothing is owed. A rate that has just
-     become worth having is armed now rather than up to a minute from now,
-     which is the same thing choosing the board does. */
-  const wasGlass = ROWS_GLASS;
+  /* what the rows about to be drawn will be saying once drawn - one pass over
+     the list, one map lookup a row. These rows are current from here on, so
+     nothing is owed. */
   ROWS_DRAWN = list;
   ROWS_CHIPS = chipsNow();
-  ROWS_GLASS = CHIPS_GLASS;
   ROWS_STALE = false;
-  if (ROWS_GLASS !== wasGlass) stationTick();
 
   /* the Sales page draws its own customer columns, flat or grouped (amendment A) */
   const rowFn = isSales() && typeof salesRowHtml === "function" ? salesRowHtml : rowHtml;
@@ -10248,7 +10183,6 @@ function openDrawer() {
     }
   }
   renderDrawer(); renderFab();
-  stationTick();                 // a job with glass on screen polls at the fast rate
 }
 function closeDrawer() { state.sel = null; state.edit = false; const h = $("#dhost"); if (h) h.remove(); renderRows(); renderFab(); }
 

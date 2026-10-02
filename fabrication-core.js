@@ -58,11 +58,12 @@ const FB_GLAZE_NEVER = ["CD", "SFCD", "BF", "ACSD", "ACSS"];
    in neither write list. No seed: there is no office record of fabrication. */
 const FB_FEEDER_FIELDS = ["Job", "Group", "GroupSeq", "Customer", "Comment", "Seq", "Doors",
                           "Frames", "Sashes", "Transoms", "Section", "Active", "OnSheet",
-                          "Glass", "GlazeTotal"];
-/* the two feeder columns added 2026-10-01. A list that has not got them yet
-   must not have its whole feed refused: the office strips whichever is
-   missing from its writes and says so (app.js, fabrFeedWrite). */
-const FB_NEW_FEEDER_FIELDS = ["Glass", "GlazeTotal"];
+                          "GlazeTotal"];
+/* the feeder column added 2026-10-01. A list that has not got it yet must not
+   have its whole feed refused: the office strips it from its writes and says
+   so (app.js, fabrFeedWrite). The `Glass` column added the same day is no
+   longer read or written by anybody (2026-10-02): it stays on the list. */
+const FB_NEW_FEEDER_FIELDS = ["GlazeTotal"];
 const FB_FLOOR_FIELDS = ["FramesDone", "SashesDone", "TransomsDone",
                          "FramesBy", "FramesAt", "SashesBy", "SashesAt", "TransomsBy", "TransomsAt",
                          "GlazeDone", "GlazeBy", "GlazeAt",
@@ -166,10 +167,12 @@ function fbGlazeTotals(j) {
 }
 
 /* ---- the job's glass, as the fabricators are told it (2026-10-01) -----------
-   One word per job, worked out by the OFFICE from what it already holds (the
-   glass station's row and its own "glass done" answer) and fed as the `Glass`
-   column. The tablet never reads the glass list.
+   One word per job, worked out from the job's own `Glass station` row by
+   whoever is looking: since 2026-10-02 every screen reads that list itself
+   (one owner per fact) and nobody copies the word anywhere (fbGlassOf).
      ""                         the job has no glass
+     "wait" / "off"             the glass list has not answered yet / cannot be
+                                read (fbGlassOf only): never ready
      "none"                     it has glass and nothing is recorded
      "part:c/t:h/t[:tuff n/m]"  started, not complete
      "done"                     cut and hotmelt complete, and tuff when the job
@@ -189,10 +192,26 @@ function fbGlassStatus(g, hasGlass) {
   if (!(c > 0 || h > 0 || tf > 0)) return "none";
   return "part:" + c + "/" + t + ":" + h + "/" + t + (tt > 0 ? ":tuff " + tf + "/" + tt : "");
 }
-/** The chip a `Glass` word draws: { kind: "done" | "part" | "none" | "", words }. */
+/** job -> its glass word, from the `Glass station` rows alone (a read-only
+    reader's `items` and `ready`). No row for the job = no glass on the floor's
+    list = "". A list not answered yet is "wait" and one that cannot be read
+    (items null: 403, 404) is "off" - neither is ever "none" or "done". */
+function fbGlassOf(items, ready) {
+  const S = fbST();
+  if (!ready) return () => "wait";
+  if (!items || !S) return () => "off";
+  const recs = S.jobRecords(items);
+  return job => {
+    const g = recs[S.jobKey(job)];
+    return g ? fbGlassStatus(g, g.total > 0 || g.tuffTotal > 0) : "";
+  };
+}
+/** The chip a glass word draws: { kind: "done" | "part" | "none" | "wait" | "off" | "", words }. */
 function fbGlassChip(text) {
   const s = fbTxt(text).trim();
   if (!s) return { kind: "", words: "" };
+  if (s === "wait") return { kind: "wait", words: "Glass: checking…" };
+  if (s === "off") return { kind: "off", words: "Glass: not available" };
   if (s === "done") return { kind: "done", words: "Glass ✓ done" };
   if (s === "none") return { kind: "none", words: "Glass: not started" };
   const m = /^part:(\d+\/\d+):(\d+\/\d+)(?::tuff (\d+\/\d+))?$/.exec(s);
@@ -213,9 +232,8 @@ function fbGlassFirst(cards, on) {
 
 /** One row per job and allowed product group with F, S or T > 0, off
     `Production` ALONE (j.prodsMain; never j.prods - HISTORY B20). Every section
-    on the sheet: Active says In production, OnSheet says still on the sheet.
-    `glassOf(j)` is the office's word for the job's glass (fbGlassStatus). */
-function fbSlice(jobs, blockNames, glassOf) {
+    on the sheet: Active says In production, OnSheet says still on the sheet. */
+function fbSlice(jobs, blockNames) {
   const names = blockNames || (jobs && jobs.blockNames) || [];
   const out = [], emitted = {};
   (jobs || []).forEach(j => {
@@ -228,8 +246,6 @@ function fbSlice(jobs, blockNames, glassOf) {
                    active: fbSectionLive(section), onSheet: true };
     const doors = fbDoorLabels(j);
     const glaze = fbGlazeTotals(j);
-    let glass = "";
-    if (typeof glassOf === "function") { try { glass = fbTxt(glassOf(j)); } catch (e) { glass = ""; } }
     (j.prodsMain || []).forEach((p, i) => {
       if (!p || !p.n || !fbAllowed(p.n)) return;
       const group = fbKey(p.n);
@@ -245,7 +261,7 @@ function fbSlice(jobs, blockNames, glassOf) {
       out.push(Object.assign({ title: title, group: group, groupSeq: i,
                                doors: fbIsDoorGroup(group) ? doors : "",
                                frames: f, sashes: s, transoms: t,
-                               glass: glass, glazeTotal: glaze[group] || 0 }, base));
+                               glazeTotal: glaze[group] || 0 }, base));
     });
   });
   out.sort(fbRowOrder);
@@ -263,12 +279,12 @@ function fbFeederFields(r) {
            Frames: Math.max(0, fbInt(r.frames, 0)), Sashes: Math.max(0, fbInt(r.sashes, 0)),
            Transoms: Math.max(0, fbInt(r.transoms, 0)),
            Section: fbTxt(r.section), Active: r.active ? "Yes" : "No", OnSheet: r.onSheet ? "Yes" : "No",
-           Glass: fbTxt(r.glass), GlazeTotal: Math.max(0, fbInt(r.glazeTotal, 0)) };
+           GlazeTotal: Math.max(0, fbInt(r.glazeTotal, 0)) };
 }
 const fbSeedFields = () => ({});
 const fbHashRow = r => [r.title, r.job, r.group, r.groupSeq, r.customer, r.comment, r.seq, r.doors,
                         r.frames, r.sashes, r.transoms, r.section, !!r.active, !!r.onSheet,
-                        fbTxt(r.glass), fbInt(r.glazeTotal, 0)];
+                        fbInt(r.glazeTotal, 0)];
 
 /* ---- what the screens draw ------------------------------------------------ */
 const fbYes = v => fbTxt(v).trim().toLowerCase() === "yes";
@@ -308,7 +324,6 @@ function fbRecord(it) {
               active: fbActive(f), onSheet: fbOnSheet(f), fedAt: fbTxt(f.FedAt),
               doneAt: fbTxt(f.DoneAt), doneBy: fbTxt(f.DoneBy), urgent: fbTxt(f.Urgent),
               modified: fbTxt(f.Modified),
-              glass: fbTxt(f.Glass).trim(),
               by: {}, at: {}, lines: [], extra: [], raw: {} };
   g.sheetDone = fbSheetDone(g.section);
   /* door glazing: its own line, drawn under the group's others, in NONE of the
@@ -343,8 +358,9 @@ function fbRecord(it) {
   return g;
 }
 /** One card per job, groups in the sheet's order. De-duplicated by Title, the
-    oldest id winning, as every list here does. */
-function fbCards(items, keep) {
+    oldest id winning, as every list here does. `glassOf(job)` (fbGlassOf) is
+    the job's glass word; left out, no card has one. */
+function fbCards(items, keep, glassOf) {
   const best = {};
   (items || []).forEach(it => {
     if (!it) return;
@@ -361,7 +377,7 @@ function fbCards(items, keep) {
     if (!r.job) return;
     const c = byJob[r.job] || (byJob[r.job] = { job: r.job, customer: "", comment: "", doors: "",
       seq: r.seq, section: "", active: false, doneAt: "", doneBy: "", glass: "", groups: [], done: 0, total: 0 });
-    ["customer", "comment", "section", "doors", "glass"].forEach(k => { if (!c[k] && r[k]) c[k] = r[k]; });
+    ["customer", "comment", "section", "doors"].forEach(k => { if (!c[k] && r[k]) c[k] = r[k]; });
     if (r.seq < c.seq) c.seq = r.seq;
     if (r.active) c.active = true;
     if (r.doneAt && (!c.doneAt || Date.parse(r.doneAt) > Date.parse(c.doneAt))) {
@@ -377,6 +393,9 @@ function fbCards(items, keep) {
     c.sheetDone = c.groups.some(g => g.sheetDone);
     c.finished = c.sheetDone || (c.total > 0 && c.done >= c.total);
     c.left = Math.max(0, c.total - c.done);
+    if (typeof glassOf === "function") { try { c.glass = fbTxt(glassOf(c.job)); } catch (e) { c.glass = ""; } }
+    /* a Door glazing line carries the job's glass word: its chip sits beside it */
+    c.groups.forEach(g => g.extra.forEach(l => { l.glass = c.glass; }));
     /* decided on the WHOLE job, before any view narrows the card: glass ready
        and nothing fabricated at all */
     c.glassStart = fbGlassStart(c);
@@ -386,19 +405,19 @@ function fbCards(items, keep) {
   return out;
 }
 /** The office's board: every job still on the sheet, every section. */
-const fbOfficeBoard = items => fbCards(items, fbOnSheet);
+const fbOfficeBoard = (items, glassOf) => fbCards(items, fbOnSheet, glassOf);
 /** One job's card for the drawer, or null. */
-function fbJobCard(items, job) {
+function fbJobCard(items, job, glassOf) {
   const want = fbKey(job);
   if (!want) return null;
   return fbCards(items, f => fbOnSheet(f) &&
-    (fbKey(f.Job) || fbKey(fbTxt(f.Title).split("|")[0])) === want)[0] || null;
+    (fbKey(f.Job) || fbKey(fbTxt(f.Title).split("|")[0])) === want, glassOf)[0] || null;
 }
 /** The tablet's two tabs, in one pass: On floor = In production and not
     finished; Finished = every other on-sheet card. */
-function fbTabs(items) {
+function fbTabs(items, glassOf) {
   const out = { floor: [], finished: [] };
-  fbOfficeBoard(items).forEach(c => out[c.active && !c.finished ? "floor" : "finished"].push(c));
+  fbOfficeBoard(items, glassOf).forEach(c => out[c.active && !c.finished ? "floor" : "finished"].push(c));
   return out;
 }
 /** A job number, a customer or a group, matched anywhere. */
@@ -912,7 +931,7 @@ const FABC = {
   fbTabs, fbFilter, fbSearchTab, fbPeople, fbEligible, fbParseStages, fbSheetDone,
   FB_VIEWS, fbViewOf, fbViewFilter, fbViewTabs, fbViewFor,
   FB_GLAZE, FB_TAP_PARTS, FB_GLAZE_GROUPS, FB_GLAZE_NEVER, FB_NEW_FEEDER_FIELDS,
-  fbDoorGlazeGroup, fbGlazeTotals, fbGlassStatus, fbGlassChip, fbGlassReady, fbGlassStart, fbGlassFirst,
+  fbDoorGlazeGroup, fbGlazeTotals, fbGlassStatus, fbGlassOf, fbGlassChip, fbGlassReady, fbGlassStart, fbGlassFirst,
   fbGoldPlan,
   fbApplyTap, fbTapFields, fbOfficeFields, fbFloorOnly, fbLogEntry, fbLogWords, fbRebase, fbCardSig,
   fbCellWord, fbCellWant, fbReportJobs,

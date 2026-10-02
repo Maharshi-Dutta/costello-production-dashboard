@@ -54,12 +54,11 @@ const GLZ_STAGE = "glaze";
    job already glazed. An untouched row starts at nought. `seedFields` is empty
    and `seedOf` answers {}, which is what feedPlan needs to plan nothing.     */
 const GLZ_FEEDER_FIELDS = ["Job", "Customer", "Section", "Seq", "Active",
-                           "Windows", "Doors", "Total", "Comment", "AstragalTotal",
-                           /* how far the job's glass and fabrication have got
-                              (2026-10-01), as text the office works out - so the
-                              glazer can see which job is ready to glaze next.
-                              Facts, like the rest: the tablet only reads them. */
-                           "Glass", "Fabrication"];
+                           "Windows", "Doors", "Total", "Comment", "AstragalTotal"];
+/* The `Glass` and `Fabrication` columns (2026-10-01) are still on the live
+   list and are NOT here: since 2026-10-02 nobody feeds them and nobody reads
+   them. The tablet and the office read the glass and fabrication lists
+   themselves - see glzStatusNow. */
 /* `Astragal` (2026-09-24) is the second counter: the job's ASTRAGAL units done,
    out of `AstragalTotal`. The owner asked for the count and nothing else - no
    By/At of its own; a tap on it moves the last-touch pair like any tap. */
@@ -139,12 +138,8 @@ function glzSectionOf(j, blockNames) {
   return gTxt((blockNames || [])[j && j.blk] || "").trim();
 }
 
-function glzSlice(jobs, blockNames, statusOf) {
+function glzSlice(jobs, blockNames) {
   const names = blockNames || (jobs && jobs.blockNames) || [];
-  /* `statusOf(j)` is the office's answer for one job: { glass, fab }, each a
-     status text (see glzStatusChip). Not given - a test, or a page with no
-     glass/fabrication lists - both are blank. */
-  const st = typeof statusOf === "function" ? statusOf : null;
   const out = [], emitted = {};
   (jobs || []).forEach(j => {
     if (!j || !j.id) return;
@@ -171,11 +166,7 @@ function glzSlice(jobs, blockNames, statusOf) {
       return;
     }
     emitted[job] = 1;
-    /* null = "the office cannot say right now" (a list not read yet): the row
-       keeps the word it has - see glzKeepStatus. No statusOf at all is blank. */
-    const ready = (st && st(j)) || {};
-    const word = v => (v == null ? (st ? null : "") : gTxt(v));
-    out.push({ title: job, job: job, glass: word(ready.glass), fab: word(ready.fab),
+    out.push({ title: job, job: job,
                customer: glzStrip(j.cust, GLZ_CUSTOMER_MAX),
                comment: glzCommentOf(j),
                wnd: wnd, drs: drs, total: total, astr: astr,
@@ -197,15 +188,14 @@ function glzFeederFields(row) {
            Seq: gNum(row.seq, 99999), Active: row.active ? "Yes" : "No",
            Windows: Math.max(0, gInt(row.wnd, 0)), Doors: Math.max(0, gInt(row.drs, 0)),
            Total: Math.max(0, gInt(row.total, 0)), Comment: gTxt(row.comment),
-           AstragalTotal: Math.max(0, gInt(row.astr, 0)),
-           Glass: gTxt(row.glass), Fabrication: gTxt(row.fab) };
+           AstragalTotal: Math.max(0, gInt(row.astr, 0)) };
 }
 /** No seed, ever: there is no office record of glazing to seed from. */
 function glzSeedFields() { return {}; }
 /** Everything about a slice row that could make the feeder want to write it. */
 function glzHashRow(r) {
   return [r.title, r.job, r.customer, r.comment, r.wnd, r.drs, r.total,
-          r.seq, r.section, !!r.active, r.astr, r.glass, r.fab];
+          r.seq, r.section, !!r.active, r.astr];
 }
 
 /* ---- what the screens draw -------------------------------------------------
@@ -248,39 +238,58 @@ function glzCardColour(c) {
 }
 
 /* ---- is the job ready to glaze (owner, 2026-10-01) ---------------------------
-   Two status texts per job, worked out by the office and fed as facts:
+   Two status texts per job:
 
-     Glass        ""  the job has no glass
-                  "none"  nothing recorded
-                  "part:<cut>/<total>:<hotmelt>/<total>[:tuff <n>/<m>]"
-                  "done"  cut and hotmelted, and Tuff too when the job has Tuff
-     Fabrication  ""  nothing to fabricate
-                  "none" · "part:<done>/<total>" · "done"
+     glass  ""  the job has no glass
+            "none"  nothing recorded
+            "part:<cut>/<total>:<hotmelt>/<total>[:tuff <n>/<m>]"
+            "done"  cut and hotmelted, and Tuff too when the job has Tuff
+     fab    ""  nothing to fabricate
+            "none" · "part:<done>/<total>" · "done"
+     either "?"  not known: that list has not been read, or cannot be
 
-   The glass text is fabrication-core's own (FABC.fbGlassStatus), so the two
-   tablets can never disagree about one job's glass. This page only reads it. */
-/** A slice row whose status the office could not work out (null) takes the
-    word already on its list row, so an unread list never feeds a ready job
-    back to blank. Mutates and returns the slice; true rows are left alone. */
+   ONE OWNER PER FACT (2026-10-02, docs/specs/2026-10-02-stations-see-each-other.md):
+   the words are worked out from the `Glass station` and `Fabrication station`
+   rows themselves, by the tablet and by the office with the same two functions
+   below, and are stored nowhere. The glass text is fabrication-core's own
+   (FABC.fbGlassStatus), so no two screens can disagree about one job's glass. */
 const GLZ_UNKNOWN = "?";
-function glzKeepStatus(slice, items, loading) {
-  /* `loading`: the office is still reading its lists for the first time, so a
-     wordless row is left wordless (no write) and the next feed says it */
-  const none = loading ? "" : GLZ_UNKNOWN;
-  const have = {};
-  (items || []).forEach(it => {
-    const f = (it && it.fields) || {};
-    const t = gKey(f.Title);
-    if (t && !have[t]) have[t] = f;
+/** fabrication-core.js, reached at call time, as stCore() reaches station-core. */
+function fabCore() {
+  return (typeof FABC !== "undefined" && FABC) ||
+         (typeof window !== "undefined" && window.FABC) || null;
+}
+/** Every job's fabrication as the glazer needs it: FABC.fbKey(job) ->
+    { done, total, finished }, over the job's WINDOW groups only (owner,
+    2026-10-02: glazing counts windows, so a door still being fabricated does
+    not hold a job's windows back). The split is fabrication-core's own
+    FB_DOOR_GROUPS (fbIsDoorGroup). `fabItems` is the raw `Fabrication station`
+    rows; Active rows only, as the fabrication boards read them. A job with
+    door groups and nothing else has no entry. */
+function glzFabByJob(fabItems) {
+  const F = fabCore(), out = {};
+  if (!F) return out;
+  F.fbCards(fabItems, f => F.fbActive(f) &&
+      !F.fbIsDoorGroup(f.Group || gTxt(f.Title).split("|")[1])).forEach(c => {
+    out[F.fbKey(c.job)] = { done: c.done, total: c.total, finished: !!c.sheetDone };
   });
-  (slice || []).forEach(r => {
-    const f = have[gKey(r.title)] || {};
-    /* no word on the row either: "?" - NOT blank, which means "none of that
-       work on this job" and would let the job read ready (review finding 1) */
-    if (r.glass == null) r.glass = gTxt(f.Glass).trim() || none;
-    if (r.fab == null) r.fab = gTxt(f.Fabrication).trim() || none;
-  });
-  return slice;
+  return out;
+}
+/** The two words for one job, now. `glassRec` is the job's ST.jobRecords entry
+    (or nothing: no row on the glass list = no glass), `fabEntry` its
+    glzFabByJob entry (or nothing: no windows to fabricate). `known` says which
+    of the two lists has actually been read: a list not read yet, or one that
+    cannot be read, is "?" - never "none", never blank, never ready. */
+function glzStatusNow(glassRec, fabEntry, known) {
+  const k = known || {}, F = fabCore();
+  return {
+    glass: !k.glass || !F ? GLZ_UNKNOWN
+      : !glassRec ? ""
+      : F.fbGlassStatus(glassRec, gInt(glassRec.total, 0) > 0 || gInt(glassRec.tuffTotal, 0) > 0),
+    fab: !k.fab ? GLZ_UNKNOWN
+      : !fabEntry ? ""
+      : glzFabStatus(fabEntry.done, fabEntry.total, fabEntry.finished)
+  };
 }
 /** The fabrication text from a job's summed counts. */
 function glzFabStatus(done, total, finished) {
@@ -340,8 +349,9 @@ function glzRecord(it) {
               edit, so they are the honest answer to "has this row moved" */
            doneBy: gTxt(f.DoneBy), doneAt: gTxt(f.DoneAt),
            astrTotal: astrTotal, astr: astr, astrLeft: Math.max(0, astrTotal - astr),
-           glass: gTxt(f.Glass).trim(), fab: gTxt(f.Fabrication).trim() };
-  rec.ready = glzReady(rec.glass, rec.fab);
+           /* not on the row: whoever holds the glass and fabrication lists
+              sets these three (glzStatusNow, glzReady). Until then: not ready */
+           glass: "", fab: "", ready: false };
   rec.colour = glzCardColour(rec);
   /* finished = every line full: windows AND astragal (owner, 2026-09-24) */
   rec.finished = rec.colour === "green";
@@ -635,7 +645,7 @@ const GLZC = {
   glzLeft, glzLeftWords, glzUnitWords, glzQtyWords,
   glzApplyTap, glzTapFields, glzOfficeFields, glzFloorOnly,
   glzLogEntry, glzLogWords, glzRebase, glzCardSig, glzReportJobs,
-  glzFabStatus, glzStatusChip, glzReady, glzReadyFirst, glzKeepStatus,
+  glzFabStatus, glzStatusChip, glzReady, glzReadyFirst, glzFabByJob, glzStatusNow,
   glzKey: gKey
 };
 if (typeof window !== "undefined") window.GLZC = GLZC;

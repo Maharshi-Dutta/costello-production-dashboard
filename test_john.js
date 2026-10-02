@@ -584,14 +584,8 @@ function useJobs(list, names, john) {
   renderRows();
   pass("the header search box narrows the John print sheet view, count and select-all together");
 
-  /* the view sits in the same slot as the floor's board but has nothing to do
-     with the floor: it must not pin the ten-second poll on */
-  assert.strictEqual(stationWatching(), false,
-    "John's own sheet is no reason to poll the floor six times a minute");
-  set("state.board = 'glass';");
-  assert.strictEqual(stationWatching(), true, "the floor's own board still is");
-  set("state.board = 'john';");
-  pass("the John print sheet view never speeds up the floor poll: nothing on it comes from the floor");
+  /* (the floor poll has one rate since 2026-10-02, so the view no longer has a
+     say in it - test_station.js holds the rate) */
 
   /* ---- 5. the Export window, from the view and from the master ---- */
   set("XSTATE = null; state.picked = { R3001: 1, R4002: 1 };");
