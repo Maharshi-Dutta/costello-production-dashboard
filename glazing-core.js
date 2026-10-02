@@ -171,8 +171,11 @@ function glzSlice(jobs, blockNames, statusOf) {
       return;
     }
     emitted[job] = 1;
+    /* null = "the office cannot say right now" (a list not read yet): the row
+       keeps the word it has - see glzKeepStatus. No statusOf at all is blank. */
     const ready = (st && st(j)) || {};
-    out.push({ title: job, job: job, glass: gTxt(ready.glass), fab: gTxt(ready.fab),
+    const word = v => (v == null ? (st ? null : "") : gTxt(v));
+    out.push({ title: job, job: job, glass: word(ready.glass), fab: word(ready.fab),
                customer: glzStrip(j.cust, GLZ_CUSTOMER_MAX),
                comment: glzCommentOf(j),
                wnd: wnd, drs: drs, total: total, astr: astr,
@@ -256,6 +259,23 @@ function glzCardColour(c) {
 
    The glass text is fabrication-core's own (FABC.fbGlassStatus), so the two
    tablets can never disagree about one job's glass. This page only reads it. */
+/** A slice row whose status the office could not work out (null) takes the
+    word already on its list row, so an unread list never feeds a ready job
+    back to blank. Mutates and returns the slice; true rows are left alone. */
+function glzKeepStatus(slice, items) {
+  const have = {};
+  (items || []).forEach(it => {
+    const f = (it && it.fields) || {};
+    const t = gKey(f.Title);
+    if (t && !have[t]) have[t] = f;
+  });
+  (slice || []).forEach(r => {
+    const f = have[gKey(r.title)] || {};
+    if (r.glass == null) r.glass = gTxt(f.Glass);
+    if (r.fab == null) r.fab = gTxt(f.Fabrication);
+  });
+  return slice;
+}
 /** The fabrication text from a job's summed counts. */
 function glzFabStatus(done, total, finished) {
   const t = Math.max(0, gInt(total, 0));
@@ -608,7 +628,7 @@ const GLZC = {
   glzLeft, glzLeftWords, glzUnitWords, glzQtyWords,
   glzApplyTap, glzTapFields, glzOfficeFields, glzFloorOnly,
   glzLogEntry, glzLogWords, glzRebase, glzCardSig, glzReportJobs,
-  glzFabStatus, glzStatusChip, glzReady, glzReadyFirst,
+  glzFabStatus, glzStatusChip, glzReady, glzReadyFirst, glzKeepStatus,
   glzKey: gKey
 };
 if (typeof window !== "undefined") window.GLZC = GLZC;

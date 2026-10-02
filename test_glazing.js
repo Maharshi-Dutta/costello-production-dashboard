@@ -1189,7 +1189,13 @@ JOBS.blockNames = NAMES;
     const rj = [mkJob({ id: "R8201", cust: "Customer R", wnd: 4, blk: 4, seq: 20 }),
                 mkJob({ id: "R8202", cust: "Customer S", wnd: 2, blk: 4, seq: 21 })];
     const sl = Z.glzSlice(rj, NAMES, j => j.id === "R8201" ? { glass: "done", fab: "part:8/14" } : null);
-    assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], ["", ""]]);
+    assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], [null, null]]);
+    /* unknown keeps the row's own word; a known word is left alone */
+    Z.glzKeepStatus(sl, [item({ Title: "R8202", Glass: "done", Fabrication: "part:1/2" }, "961"),
+                         item({ Title: "R8201", Glass: "none", Fabrication: "none" }, "962")]);
+    assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], ["done", "part:1/2"]]);
+    assert.deepStrictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [])[0].glass, "",
+      "unknown with no row yet is blank");
     assert.strictEqual(Z.glzFeederFields(sl[0]).Glass, "done");
     assert.strictEqual(Z.glzFeederFields(sl[0]).Fabrication, "part:8/14");
     assert.ok(Z.GLZ_FLOOR_FIELDS.indexOf("Glass") < 0 && Z.GLZ_FLOOR_FIELDS.indexOf("Fabrication") < 0,

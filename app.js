@@ -2293,6 +2293,7 @@ async function stationPoll() {
       glassColourRun().catch(e => console.warn("[glass] " + ((e && e.message) || e)));
       /* ... and the fabricators' `Glass` word follows the glass list */
       fabrFeedSoon();
+      glzFeedSoon();                       // and the glazer's Glass chip
     }
     return moved;
   } catch (e) {
@@ -3587,6 +3588,40 @@ function glzFeedAgain() {
   glzAgainT = setTimeout(() => { glzAgainT = null; feedGlazing().catch(() => {}); }, GLZ_AGAIN_MS);
 }
 
+/* ---- is the job ready to glaze (owner, 2026-10-01) ---------------------------
+   The glazer's two chips: how far the job's glass and its fabrication have got.
+   Worked out here, from lists this dashboard already holds, and fed as two text
+   columns - the glazing tablet reads neither of those lists itself.
+
+   The glass word is the fabricators' own (FABC.fbGlassStatus), so the two
+   tablets can never disagree about one job's glass. A list that cannot be read
+   right now says NOTHING NEW: the row keeps the word it already has, rather
+   than a ready job being fed back to blank because the wifi dropped. */
+function glzStatusOf(j) {
+  const id = String((j && j.id) || "").trim().toUpperCase();
+  /* null = cannot say right now; feedGlazing fills it from the row as read */
+  let glass = null, fab = null;
+  if (typeof ST !== "undefined" && typeof FABC !== "undefined") {
+    if (!(ST.glassTotal(j) > 0 || ST.tuffTotal(j) > 0)) glass = "";      // no glass on the job
+    else if (STATION_OK === true) glass = FABC.fbGlassStatus(stationForJob(j.id), true);
+  }
+  if (typeof fabrOn === "function" && fabrOn() && FABR_OK === true) {
+    const c = (fabrRecordsNow().byJob || {})[id];
+    fab = !c ? "" : GLZC.glzFabStatus(c.done, c.total, c.finished);
+  }
+  return { glass: glass, fab: fab };
+}
+/** The glass or the fabrication list moved: the glazer's chips follow, a minute
+    later at most - debounced, as fabrFeedSoon is and for its reason (every tap
+    changes a `part:` word, and each change is a PATCH). */
+let glzSoonT = null;
+function glzFeedSoon() {
+  if (glzSoonT || !glzOn()) return;
+  glzSoonT = setTimeout(() => { glzSoonT = null; feedGlazing().catch(() => {}); }, 60000);
+  /* never the thing that keeps a Node test run alive */
+  if (glzSoonT && glzSoonT.unref) glzSoonT.unref();
+}
+
 async function feedGlazing() {
   if (isSales()) return null;
   if (!glzOn()) return null;
@@ -3596,7 +3631,7 @@ async function feedGlazing() {
   glzBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { GLZ_FEED_ERR = ""; return null; }
-    const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES);
+    const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES, glzStatusOf);
     const hash = ST.sliceHash(slice, GLZC.GLAZE);
     if (hash === GLZ_FEED.hash && Date.now() - (GLZ_FEED.at || 0) < STATION_FEED_MS) {
       GLZ_FEED_ERR = "";                                 // nothing to do is not a failure
@@ -3610,6 +3645,10 @@ async function feedGlazing() {
     const items = await CW.listItems(GLZC.GLZ_LIST, opts);
     if (items == null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; GLZ_ERR = ""; return null; }
     GLZ_OK = true; GLZ_WHY = ""; GLZ_ERR = ""; GLZ_ITEMS = items; GLZ_TOK.items = null;
+    /* a status the office could not work out keeps the row's own word, and the
+       feed comes back in a minute to see whether it can say by then */
+    if (slice.some(r => r.glass == null || r.fab == null)) glzFeedSoon();
+    GLZC.glzKeepStatus(slice, items);
     const plan = ST.feedPlan(slice, items,
       { at: new Date().toISOString(), by: feedWho(), def: GLZC.GLAZE });
     const all = plan.adds.map(f => () => glzAdd(f, opts))
@@ -3961,6 +4000,7 @@ function glzRowHtml(c) {
      job, the notes and the last touch; a second line is the same eight grid
      cells, so every column stays lined up (B30), with its name where the
      customer would be. */
+  const chips = [GLZC.glzStatusChip("glass", c.glass), GLZC.glzStatusChip("fab", c.fab)].filter(Boolean);
   const parts = [];
   if (c.total > 0) parts.push("");
   if (c.astrTotal > 0) parts.push("astragal");
@@ -3987,6 +4027,11 @@ function glzRowHtml(c) {
   return '<div class="worow c-' + (col || "none") + ((c.finished || rowDone) ? " done" : "") +
       '" data-zjob="' + esc(c.job) + '">' +
     parts.map((p, i) => line(p, i === 0)).join("") +
+    /* the same two chips the glazer sees (2026-10-01), read-only */
+    (chips.length ? '<div class="glzchips">' +
+      (c.ready && !c.finished && !rowDone ? '<span class="glzchip ready">Ready to glaze</span>' : "") +
+      chips.map(x => '<span class="glzchip ' + x.cls + '">' + esc(x.words) + '</span>').join("") +
+      '</div>' : "") +
     (c.comment ? '<div class="wocmt">“' + esc(c.comment) + '”</div>' : "") +
     (notes.length ? '<div class="wonotelist">' + notes.map(n =>
       '<div class="wonote"><span class="cmwho">' + esc(n.who || "—") + '</span>' +
@@ -4394,6 +4439,7 @@ async function fabrPoll() {
     else if (got.rows && !(got.fresh && sameRows(got.rows, FABR_ITEMS))) {    // a full read of the same rows is no change
       FABR_ITEMS = got.fresh ? got.rows : ST.mergeDelta(FABR_ITEMS || [], got.rows);
       moved = items = true;
+      glzFeedSoon();                       // the glazer's Fabrication chip follows
     }
     if (FABR_LOG_OK === true) {
       const lg = await fabrDeltaOne("log", ST.LOG_LIST, ST.LOG_FIELDS);
