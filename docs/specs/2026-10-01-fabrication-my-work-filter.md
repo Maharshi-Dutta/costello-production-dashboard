@@ -1,6 +1,6 @@
 # Fabrication tablet: "My work" filter — brief (2026-10-01)
 
-Status: approved by the owner 2026-10-01, in build.
+Status: shipped 2026-10-02, build 20261002-0817.
 
 Read first: `docs/specs/2026-09-25-fabrication-station.md` (incl. its
 Amendments), `docs/fabrication-station.md`, `docs/STATIONS.md` (Fabrication

@@ -1,8 +1,6 @@
 # Fabrication: glass status and door glazing — brief (2026-10-01)
 
-Status: approved by the owner 2026-10-01, in build. Ships together with
-`2026-10-01-fabrication-my-work-filter.md` on branch `fabrication-my-work`,
-plus one small fix (section D).
+Status: shipped 2026-10-02, build 20261002-0817.
 
 Read first: `docs/specs/2026-09-25-fabrication-station.md` (and Amendments),
 `docs/fabrication-station.md`, `docs/STATIONS.md` (Fabrication, Glass and

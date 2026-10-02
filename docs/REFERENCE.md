@@ -66,7 +66,8 @@ tooling; lessons** — [[overview-and-process]]
     [[glazing-station-phase-bar]] (the phase bar hears the floor, tests, review)
 
 25. **The fabrication station** — [[fabrication-station]] (eligibility per
-    group and part, the fourth sanctioned fill, assignments, notifications)
+    group and part, the fourth sanctioned fill, assignments, notifications);
+    the filter, glass chip and door glazing: [[fabrication-glass-and-door-glazing]]
 
 26. **Day sheets for welding and hotmelting; one Floor log for every station**
     — [[day-sheets-welding-hotmelt-floor-log]] (the sheet moved to

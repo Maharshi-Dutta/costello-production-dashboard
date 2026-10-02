@@ -97,9 +97,12 @@ said so, and the colour painter skips it outright.
 - `cw_fabtab` — which tab is showing, `"floor"` or `"finished"` (On floor /
   Finished, the same shape as `cw_weldtab`/`cw_glztab`/`cw_glasstab`).
 - `cw_fabseen` — per-person seen state for the Part B notification badges.
+- `cw_fabview`, `cw_fabglassfirst` — added 2026-10-02, see [[fabrication-glass-and-door-glazing]].
 
 ## See also
 
+- [[fabrication-glass-and-door-glazing]] — the My work filter, glass chip, door
+  glazing and its gold on the door cells (2026-10-02)
 - [[welding-station]] — the pattern this station's shape and eligibility gate
   were built from
 - [[glazing-station]] — the third station, and the "Adding a station"

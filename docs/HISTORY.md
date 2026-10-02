@@ -69,6 +69,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A40 | 2026-10-01 | **The office's top search bar drives every station board.** One search, not one per board. | Owner, 2026-09-30. Spec `docs/specs/2026-09-30-office-one-search.md`. |
 | A41 | 2026-10-01 | **"Only data on the `Production` sheet is visible on the main page; `Production (2)` is the John sheet."** The office page and Sales read Production-only fields: identity cells, counts, product groups, glass, dates, status words, the ready flag, sheets. Floor tablets keep comments from every sheet (owner's call). 25 window-type checkpoint lines on 9 jobs are now hidden because they exist only on other sheets; their records in `Dashboard progress` are untouched. | Owner, in the Sales demo, after cross-sheet data showed up on the main page; extends the 2026-09-18 standing rule (stations read `Production` only) to the office and Sales. |
 | A42 | 2026-10-01 | **Sales send reports and customer complaints through the dashboard only, with photos.** No email, no alert. A report is free text plus photos. Photos upload from a PC file picker (a phone's picker may offer the camera). The office and Sales can both resolve and reopen a complaint. Photos live in a new document library `Sales photos` in the workbook's site; five new columns on `Sales requests` were created by script after a rehearsal on a throwaway library. | Owner, 2026-10-01. Spec `docs/specs/2026-10-01-sales-reports-complaints-photos.md`. |
+| A43 | 2026-10-02 | **Fabrication tablet: an Everything / My work / Assigned to me filter, a glass status chip with Glass ready first, and door glazing as a role-only fourth part.** (1) The filter is display only and never grants a tap; cards are placed by the lines a person actually sees, so a job with nothing left for them is not drawn. (2) Door glazing exists only on PVC DOOR and PVC SMART and is granted only by `GROUP:glazing` / `ALL:glazing` in `Stages`; a bare group name never grants it. No assignment, no Take, no split. Door code table: `SS` goes to PVC SMART; `CD`, `SFCD`, `BF`, `ACSD`, `ACSS` never count; any other non-empty code goes to PVC DOOR. (3) When a group's door glazing is full, the office turns that job's counted DOORS DONE cells gold **through the checkpoint record** (`Dashboard progress`), full count only, raise only, never lowered by fabrication. (4) Glass is `done` only when cutting and hotmelting are complete **and Tuff too when the job has Tuff**; the chip is one combined DG+TG count, not per type. | Owner, 2026-10-01. Specs `docs/specs/2026-10-01-fabrication-my-work-filter.md` and `docs/specs/2026-10-01-fabrication-glass-status-door-glazing.md`. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -651,6 +652,38 @@ merge back with it (the owner caught it in the demo, A41). When a new page
 reuses a model, check what the model reads, not just what it returns. And a
 "find the row" helper used in two places must be one helper.
 
+### B35. A capped feed's continuation replaced the cache without a redraw, and the flicker fix then skipped the identical read
+
+The office fabrication board showed 32 of 75 rows. A feed is capped per pass;
+the continuation pass wrote the rest of the rows and replaced the cached list,
+but nothing redrew the board. The next poll read the same rows, and the
+flicker fix's `sameRows()` (B34, "skip when identical") correctly decided
+nothing had changed and skipped the draw too, so the board stayed on its
+first 32 rows. The fix that stopped the flicker had removed the accidental
+redraw that used to hide this. The same bug was in `feedWelding` and
+`feedGlazing`; all three now redraw once after any feed that wrote rows, each
+with a test.
+
+**Lesson:** an identical-read skip is only safe if every path that changes the
+cache also redraws. When adding a skip, grep every writer of the cache.
+
+### B36. Two review findings on the door-glazing gold: whose clock decides, and what a stale second screen does
+
+**C-1: never compare a tablet's clock with the office's clock to decide who
+acted last.** The first gold rule compared the glazer's `GlazeAt` with the
+record's `When`; two devices' clocks disagree by minutes. Use the list's own
+server `Modified` on the row instead (confirmed selectable on the live lists
+by a read-only probe).
+
+**C-2: stamp a record row with the writer's own clock, and a stale second
+office screen must not add a duplicate.** A second office screen holding an
+old copy of the record could add a second row for the same item. It must
+refresh the record inside the serialised chain and PATCH the existing row,
+never add.
+
+**Lesson:** time that crosses devices comes from the server; a write that
+"adds if missing" must re-read inside the chain before deciding it is missing.
+
 ---
 
 ## C. Build log
@@ -851,6 +884,18 @@ Brief `2026-10-01-sales-reports-complaints-photos.md`, decisions A42. Built with
 | `298c1a5` brief → `e759d7a` WIP build → `e9a0754` tap targets, form layout, docs → `8da216c`, `c9e3358` fix pass → `9890a74` build stamp | Reports and complaints with photos; `Sales photos` library and five `Sales requests` columns created by script after a throwaway-library rehearsal |
 
 Independent review: 0 blockers, 10 minor, all fixed. Key ones: a complaint could be sent without its Status before the column check had finished; `ReplySeen` was re-sent on every redraw; the photo count now comes from the folder listing; resolve uses If-Match and handles 412; files over 40 MB are refused and the canvas gets a white fill. Suites: sales 25, browser rig 82/82.
+
+### 2026-10-02 — fabrication My work filter, glass status, door glazing
+
+Briefs `2026-10-01-fabrication-my-work-filter.md` and `2026-10-01-fabrication-glass-status-door-glazing.md`, decisions A43. Build 20261002-0817, live.
+
+| Commit | What it added |
+|---|---|
+| `1c10fb4` brief → `e716f16` build → `7d09a95` fix pass; `0591569` brief → `4721d52` build → `88cb399` fix pass → `f6512bd` build stamp | **Filter:** Everything / My work / Assigned to me on the fabrication tablet (`cw_fabview`, per person), display only, cards placed by the lines shown, empty state per tab. **Glass:** `Glass` column fed from the glass record and checkpoint record, chip on tablet and office board, "Glass is ready and nothing is fabricated yet" line, Glass ready first toggle (`cw_fabglassfirst`). **Door glazing:** role-only fourth part on PVC DOOR / PVC SMART, office edit with − + All None, gold on the DOORS DONE cells through the record (B36). **Redraw after a capped feed** on the fabrication, welding and glazing boards (B35). |
+
+Five columns (`Glass`, `GlazeTotal`, `GlazeDone`, `GlazeBy`, `GlazeAt`) added to `Fabrication station` by script 2026-10-01, rehearsed on a throwaway list first. One person was given `ALL:glazing`. Local workbook copy: 93 rows fed a `GlazeTotal` (112 doors); 6 jobs have a glazeable door code and no matching group row, so they get no glazing line.
+
+Independent reviews: two on the filter (0 blockers, 2 minor, fixed); one on glass and door glazing (0 blockers, 7 minor, 5 fixed, 2 documented in the spec). `Modified` confirmed selectable on the live lists by a read-only probe. Suites: fabrication 34, pages 6/6, rest unchanged. Rigs: `fab_check` 19/19, `fab_view_check` 20/20, `fab_glass_check` 12/12, `fab_check_b` 16/16.
 
 ---
 
