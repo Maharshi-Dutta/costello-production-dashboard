@@ -53,3 +53,31 @@ Status: built on branch `glazing-ready-chips`, awaiting the owner's go.
 - Every other suite is unchanged.
 - Browser rig `ready_check.js` (session scratchpad): 16/16 at 700, 800 and
   1100 px.
+
+## Amendments after review
+
+An independent reviewer found no blockers, one major problem and five minor
+ones. All were fixed in one pass.
+
+1. **(major) A job could read READY when its status was unknown.** "Cannot
+   say" and "none of that work" were both blank.
+   - A status the office cannot work out, on a row with no word yet, is now
+     fed as `?`. The chip is grey and reads "checking", and the job never
+     counts as ready.
+   - While the office is still on its first read of its lists, a wordless row
+     is left alone, with no write. The next feed, a minute later, fills it in.
+   - A job that should have fabrication rows but has none yet is treated as
+     unknown, not as "nothing to fabricate".
+2. **The fabrication lookup used the wrong key.** It now uses the fabrication
+   board's own key (`FABC.fbKey`), so a job number with punctuation still
+   finds its card.
+3. **The one-minute retry stopped after one turn.** The retry is now armed
+   before the hash-skip, so it keeps going while something is unknown.
+4. **The Ready first switch stayed on screen** over the person picker or an
+   error message. It is now hidden there.
+5. **The READY badge was hard to read** in the dark theme. Its text now uses
+   a theme token.
+6. **A debounced feed could be dropped** if it landed while another feed was
+   running. It now comes back.
+
+Checks after the fixes: glazing 66, every other suite unchanged, browser rig 16/16.

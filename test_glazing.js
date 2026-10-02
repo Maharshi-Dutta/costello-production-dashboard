@@ -1194,8 +1194,13 @@ JOBS.blockNames = NAMES;
     Z.glzKeepStatus(sl, [item({ Title: "R8202", Glass: "done", Fabrication: "part:1/2" }, "961"),
                          item({ Title: "R8201", Glass: "none", Fabrication: "none" }, "962")]);
     assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], ["done", "part:1/2"]]);
-    assert.deepStrictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [])[0].glass, "",
-      "unknown with no row yet is blank");
+    assert.strictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [])[0].glass, "?",
+      "unknown with no word on the row is ?, never blank (blank = no glass on the job)");
+    assert.strictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [], true)[0].glass, "",
+      "while the office is still loading its lists a wordless row is left alone");
+    assert.strictEqual(Z.glzReady("?", "done"), false, "an unknown glass never reads ready");
+    assert.strictEqual(Z.glzReady("done", "?"), false);
+    assert.deepStrictEqual(Z.glzStatusChip("glass", "?"), { cls: "none", words: "Glass: checking" });
     assert.strictEqual(Z.glzFeederFields(sl[0]).Glass, "done");
     assert.strictEqual(Z.glzFeederFields(sl[0]).Fabrication, "part:8/14");
     assert.ok(Z.GLZ_FLOOR_FIELDS.indexOf("Glass") < 0 && Z.GLZ_FLOOR_FIELDS.indexOf("Fabrication") < 0,

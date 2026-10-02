@@ -826,6 +826,9 @@ function render() {
   const soft = $("#soft");
   if (soft) { soft.textContent = SOFT; soft.hidden = !SOFT; soft.style.display = SOFT ? "" : "none"; }
 
+  /* never left over the picker or an error (review finding 4) */
+  const rb = $("#readybtn");
+  if (rb && !boarding) { rb.hidden = true; rb.style.display = "none"; }
   /* Who are you? comes before the board and after any real problem with it */
   if (!boarding) {
     LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
@@ -836,7 +839,6 @@ function render() {
   }
 
   /* the switch belongs to the On floor tab: a finished job is not waiting */
-  const rb = $("#readybtn");
   if (rb) {
     const nready = now.tabs.floor.filter(c => c.ready).length;
     const show = TAB === "floor" && nready > 0;

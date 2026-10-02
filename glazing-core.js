@@ -262,7 +262,11 @@ function glzCardColour(c) {
 /** A slice row whose status the office could not work out (null) takes the
     word already on its list row, so an unread list never feeds a ready job
     back to blank. Mutates and returns the slice; true rows are left alone. */
-function glzKeepStatus(slice, items) {
+const GLZ_UNKNOWN = "?";
+function glzKeepStatus(slice, items, loading) {
+  /* `loading`: the office is still reading its lists for the first time, so a
+     wordless row is left wordless (no write) and the next feed says it */
+  const none = loading ? "" : GLZ_UNKNOWN;
   const have = {};
   (items || []).forEach(it => {
     const f = (it && it.fields) || {};
@@ -271,8 +275,10 @@ function glzKeepStatus(slice, items) {
   });
   (slice || []).forEach(r => {
     const f = have[gKey(r.title)] || {};
-    if (r.glass == null) r.glass = gTxt(f.Glass);
-    if (r.fab == null) r.fab = gTxt(f.Fabrication);
+    /* no word on the row either: "?" - NOT blank, which means "none of that
+       work on this job" and would let the job read ready (review finding 1) */
+    if (r.glass == null) r.glass = gTxt(f.Glass).trim() || none;
+    if (r.fab == null) r.fab = gTxt(f.Fabrication).trim() || none;
   });
   return slice;
 }
@@ -291,6 +297,7 @@ function glzStatusChip(kind, text) {
   const t = gTxt(text).trim();
   if (!t) return null;
   const name = kind === "fab" ? "Fabrication" : "Glass";
+  if (t === GLZ_UNKNOWN) return { cls: "none", words: name + ": checking" };
   if (t === "done") return { cls: "done", words: name + " ✓ done" };
   if (t === "none") return { cls: "none", words: name + ": not started" };
   if (t.indexOf("part:") !== 0) return { cls: "none", words: name + ": " + t };

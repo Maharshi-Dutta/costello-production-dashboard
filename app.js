@@ -3598,7 +3598,6 @@ function glzFeedAgain() {
    right now says NOTHING NEW: the row keeps the word it already has, rather
    than a ready job being fed back to blank because the wifi dropped. */
 function glzStatusOf(j) {
-  const id = String((j && j.id) || "").trim().toUpperCase();
   /* null = cannot say right now; feedGlazing fills it from the row as read */
   let glass = null, fab = null;
   if (typeof ST !== "undefined" && typeof FABC !== "undefined") {
@@ -3606,8 +3605,12 @@ function glzStatusOf(j) {
     else if (STATION_OK === true) glass = FABC.fbGlassStatus(stationForJob(j.id), true);
   }
   if (typeof fabrOn === "function" && fabrOn() && FABR_OK === true) {
-    const c = (fabrRecordsNow().byJob || {})[id];
-    fab = !c ? "" : GLZC.glzFabStatus(c.done, c.total, c.finished);
+    /* the fabrication board's own key (review finding 2) */
+    const c = (fabrRecordsNow().byJob || {})[FABC.fbKey(j && j.id)];
+    /* no card: blank only when the job has nothing to fabricate. A job the
+       fabrication feed has simply not reached yet cannot be said (finding 1) */
+    fab = c ? GLZC.glzFabStatus(c.done, c.total, c.finished)
+            : FABC.fbSlice([j], BLOCKNAMES).length ? null : "";
   }
   return { glass: glass, fab: fab };
 }
@@ -3625,13 +3628,21 @@ function glzFeedSoon() {
 async function feedGlazing() {
   if (isSales()) return null;
   if (!glzOn()) return null;
-  if (glzBusy) return null;                              // only one feed at a time
+  if (glzBusy) { glzFeedAgain(); return null; }          // only one feed at a time; come back
   if (glzPolling) { glzFeedAgain(); return null; }       // a poll is merging a delta right now
   if (typeof CW === "undefined" || !CW || !CW.listAdd) return null;
   glzBusy = true;
   try {
     if (!CW.hasListConsent || !(await CW.hasListConsent())) { GLZ_FEED_ERR = ""; return null; }
+    /* the glass or fabrication list is still on its first read of this page:
+       glzKeepStatus then leaves a wordless row alone rather than feed "?" onto
+       every row now and the real words a minute later */
+    const loading = (typeof STATION_OK !== "undefined" && STATION_OK === null) ||
+                    (typeof fabrOn === "function" && fabrOn() && FABR_OK === null);
     const slice = GLZC.glzSlice(feedJobs(), BLOCKNAMES, glzStatusOf);
+    /* something still cannot be said: look again in a minute. Above the
+       hash-skip, or the retry dies after one turn (review finding 3) */
+    if (slice.some(r => r.glass == null || r.fab == null)) glzFeedSoon();
     const hash = ST.sliceHash(slice, GLZC.GLAZE);
     if (hash === GLZ_FEED.hash && Date.now() - (GLZ_FEED.at || 0) < STATION_FEED_MS) {
       GLZ_FEED_ERR = "";                                 // nothing to do is not a failure
@@ -3645,10 +3656,8 @@ async function feedGlazing() {
     const items = await CW.listItems(GLZC.GLZ_LIST, opts);
     if (items == null) { GLZ_OK = false; GLZ_WHY = GLZ_LIST_MISSING; GLZ_ERR = ""; return null; }
     GLZ_OK = true; GLZ_WHY = ""; GLZ_ERR = ""; GLZ_ITEMS = items; GLZ_TOK.items = null;
-    /* a status the office could not work out keeps the row's own word, and the
-       feed comes back in a minute to see whether it can say by then */
-    if (slice.some(r => r.glass == null || r.fab == null)) glzFeedSoon();
-    GLZC.glzKeepStatus(slice, items);
+    /* a status the office could not work out keeps the row's own word */
+    GLZC.glzKeepStatus(slice, items, loading);
     const plan = ST.feedPlan(slice, items,
       { at: new Date().toISOString(), by: feedWho(), def: GLZC.GLAZE });
     const all = plan.adds.map(f => () => glzAdd(f, opts))
