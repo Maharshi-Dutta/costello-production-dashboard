@@ -854,7 +854,9 @@ It asks the `"floor"` channel for that one list and keeps the answer in its own
 glass lists still resolve through `"own"` and share nothing with it. The
 station account must be a member of `Floor stations` for the line to appear;
 without that the cards say "Fabrication: not available" and nothing else
-changes.
+changes. The read is a delta and has no plain-read fallback: a `Fabrication
+station` list that refuses delta outright also reads "not available" on the
+glass tablets, retried once a minute.
 
 ### 8. Tests and docs
 

@@ -116,19 +116,23 @@
             display:flex; align-items:center; justify-content:center }
   /* "N waiting on glass": the jobs fabrication has finished and the person
      signed in has not (2026-10-01). Only there when N > 0; a tap shows only
-     those cards, a second tap clears it. Under 900 px it reads "N waiting" -
-     the words "on glass" are the ::after, and its aria-label always says all
-     of it - so the header stays two rows at 700 px. When even that is too
-     wide (the hotmelting page, three-digit numbers) it breaks onto two lines
-     inside its own pill, never narrower than its longest word, and the name
-     gives up a little more. The red is the gate's own: the header is dark in
-     both themes. */
+     those cards, a second tap clears it. The page writes only the number; the
+     words are the ::after, as many as the width has room for, and the
+     aria-label always says all of it: "N waiting on glass" above 900 px,
+     "N waiting" to 800 px, and from there down the number over a small "waiting",
+     two lines in a fixed-width pill. It never shrinks; #gtotal beside it is
+     the one that gives way, and #whois keeps its 80 px. The red is the gate's
+     own: the header is dark in both themes. */
   #gwait { background:var(--brand-2); color:#f07a72; border:1px solid #f07a72; border-radius:24px;
            min-height:44px; padding:0 11px; font-size:14px; font-weight:700; line-height:1.15;
-           flex:0 .05 auto; min-width:min-content }
-  #gwait::after { content:" on glass" }
-  @media (max-width:900px){ #gwait::after { content:"" } }
-  @media (max-width:760px){ #whois { min-width:60px } }
+           white-space:nowrap; flex:none }
+  #gwait::after { content:" waiting on glass" }
+  @media (max-width:900px){ #gwait::after { content:" waiting" } }
+  @media (max-width:800px){
+    #gwait { padding:0 8px }
+    #gwait::after { content:"\A waiting"; white-space:pre; font-size:10.5px; font-weight:600 }
+    #gtotal { padding:7px 10px }
+  }
   #gwait.on { background:#f07a72; color:#17171a }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);

@@ -57,7 +57,19 @@ const TAB_KEY = "cw_glasstab";
 let TAB = "floor";
 let PRETAB = null;
 try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
-const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
+/* the waiting filter (2026-10-01) shows only the jobs fabrication has finished
+   and this person has not. They are all On floor, so turning it on from
+   Finished goes there; WAITTAB is the tab to go back to when it is turned off,
+   and it is what gets saved meanwhile - the jump itself is never remembered.
+   A tab the person taps while the filter is on is their own choice and stays. */
+let WAITTAB = null;
+const saveTab = () => { try { localStorage.setItem(TAB_KEY, WAITTAB || TAB); } catch (e) {} };
+function setWait(on) {
+  if (!!on === WAITONLY) return;
+  WAITONLY = !!on;
+  if (WAITONLY) { if (TAB !== "floor") { WAITTAB = TAB; TAB = "floor"; } }
+  else { if (WAITTAB) TAB = WAITTAB; WAITTAB = null; }
+}
 let PERSON = null;              // the person who picked their name
 let LAST_TAP = 0;               // when they last touched anything, for the lock
 let PINFOR = null;              // the person whose PIN is being asked for
@@ -164,9 +176,10 @@ function touch() { LAST_TAP = Date.now(); savePerson(); }
     not be handed a board narrowed - or a tab moved - by somebody else's search.
     Called on a switch (and so on the idle lock, which switches) and on a pick. */
 function clearSearch() {
-  QUERY = ""; WAITONLY = false;
+  QUERY = "";
   if (PRETAB) { TAB = PRETAB; saveTab(); }
   PRETAB = null;
+  setWait(false);
   const sb = $("#search");
   if (sb) sb.value = "";
 }
@@ -640,24 +653,30 @@ const DAY = STU.stuDaySheet({
 const GFAB_RETRY_MS = 60000;
 const GFAB_FIELDS = ["Title", "Job", "Group", "GroupSeq", "Seq", "Section", "Active", "OnSheet",
                      "Frames", "Sashes", "Transoms", "FramesDone", "SashesDone", "TransomsDone"];
-const GFAB = { site: null, token: null, items: null, map: {}, offAt: 0 };
+const GFAB = { site: null, token: null, items: null, map: {}, offAt: 0, busy: false, read: false };
 /** Read what moved. Answers true when what the cards draw has changed. Never
     throws, and never touches anything the glass lists use. */
 async function readFab() {
-  if (typeof FABC === "undefined") return false;
+  /* ONE READ AT A TIME (review, 2026-10-02). The tick does not wait for the
+     last one, and two replies landing out of order could put a delta page of
+     three changed rows where the whole list was. */
+  if (typeof FABC === "undefined" || GFAB.busy) return false;
   if (GFAB.offAt && Date.now() - GFAB.offAt < GFAB_RETRY_MS) return false;
-  const was = JSON.stringify([!!GFAB.items, GFAB.map]);
+  GFAB.busy = true;
+  const was = JSON.stringify([GFAB.read, !!GFAB.items, GFAB.map]);
   try {
     const site = await CW.stationSite(FABC.FB_SITE);
     if (site !== GFAB.site) { GFAB.site = site; GFAB.token = null; }   // a token only means anything in its own site
+    /* merge or replace is decided by the token the request WENT OUT with */
+    const tok = GFAB.token;
     const d = site ? await CW.listDelta(FABC.FB_LIST,
-      { siteId: site, fields: GFAB_FIELDS, token: GFAB.token || undefined }) : null;
+      { siteId: site, fields: GFAB_FIELDS, token: tok || undefined }) : null;
     if (d == null) {                     // no such site for this account, or no such list in it
       GFAB.items = null; GFAB.token = null; GFAB.offAt = Date.now();
     } else {
-      GFAB.items = GFAB.token ? ST.mergeDelta(GFAB.items || [], d.items)
+      GFAB.items = tok ? ST.mergeDelta(GFAB.items || [], d.items)
         : d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
-      GFAB.token = d.next || null;
+      if (d.next) GFAB.token = d.next;
       GFAB.offAt = 0;
     }
   } catch (e) {
@@ -665,26 +684,30 @@ async function readFab() {
     const stale = !!(CW.isDeltaResync && CW.isDeltaResync(e));
     GFAB.token = null;
     /* a token gone stale is not a failure: enumerate again on the next turn.
-       Anything else waits a minute. "Not there" and "not for you" take the
-       line away; a passing failure keeps the last read, as the board does. */
+       Anything else waits a minute. ONLY "not there" (404) and "not for you"
+       (403) take the line away; every other failure - offline, throttled, a
+       bad gateway - keeps the last read, as the board does. */
     if (!stale) {
       GFAB.offAt = Date.now();
       const gone = !!(CW.isMissing && CW.isMissing(e));
-      /* ponytail: a list that refuses delta outright reads "not available" for good; add a plain listItems fallback if that ever happens */
-      if (gone || (CW.isRefused && CW.isRefused(e)) || (CW.isDeltaRestart && CW.isDeltaRestart(e))) GFAB.items = null;
+      if (gone || (CW.isRefused && CW.isRefused(e))) GFAB.items = null;
       /* the FLOOR channel's cached id, never the glass one's */
       if (gone && CW.forgetStationSite) CW.forgetStationSite(false, FABC.FB_SITE);
     }
+  } finally {
+    GFAB.busy = false;
   }
+  GFAB.read = true;
   const map = {};
   if (GFAB.items) FABC.fbOfficeBoard(GFAB.items).forEach(c => { map[c.job] = ST.fabOfJob(c.groups); });
   GFAB.map = map;
-  return JSON.stringify([!!GFAB.items, GFAB.map]) !== was;
+  return JSON.stringify([GFAB.read, !!GFAB.items, GFAB.map]) !== was;
 }
-/** One job's fabrication: null (no such feature on this page), { state: "off" }
-    (the list cannot be read), or ST.fabOfJob's answer. */
+/** One job's fabrication: null (no such feature on this page, or the first
+    read has not answered yet - no line at all), { state: "off" } (the list
+    cannot be read), or ST.fabOfJob's answer. */
 function fabOf(job) {
-  if (typeof FABC === "undefined") return null;
+  if (typeof FABC === "undefined" || !GFAB.read) return null;
   if (!GFAB.items) return { state: "off" };
   return GFAB.map[FABC.fbKey(job)] || { state: "none" };
 }
@@ -1287,6 +1310,11 @@ function render() {
      below off the chosen tab, filtered */
   const now = boarding ? { tabs: tabsNow() } : null;
   const live = now ? activeOf(now.tabs) : null;
+  /* how many jobs are waiting on this person's glass (the capsule, below) -
+     counted here, before the tabs are drawn, because the filter letting go
+     can put the board back on the tab it came from */
+  const waitN = now ? now.tabs.floor.concat(now.tabs.finished).filter(waitingOn).length : 0;
+  if (now && !waitN && GFAB.items) setWait(false);
   const tabsEl = $("#gtabs");
   if (tabsEl) { tabsEl.hidden = !boarding; tabsEl.style.display = boarding ? "" : "none"; }
   [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
@@ -1301,16 +1329,17 @@ function render() {
   /* the jobs fabrication has finished and this person has not: one capsule,
      only when there are any, and a tap on it shows only those. Counted over
      the whole board, like the number beside it. With none left the filter
-     lets go, or the board would be empty with nothing on screen to tap. */
-  const waitN = now ? now.tabs.floor.concat(now.tabs.finished).filter(waitingOn).length : 0;
-  if (!waitN) WAITONLY = false;
+     lets go - but only on a GOOD fabrication read that really says none: a
+     read that cannot be made just now must not drop it, so the capsule stays
+     up while the filter is on and there is always something to tap. */
   const gw = $("#gwait");
   if (gw) {
-    gw.hidden = !waitN; gw.style.display = waitN ? "" : "none";
+    const on = !!now && (waitN > 0 || WAITONLY);
+    gw.hidden = !on; gw.style.display = on ? "" : "none";
     gw.className = WAITONLY ? "on" : "";
     gw.setAttribute("aria-pressed", WAITONLY ? "true" : "false");
-    /* "on glass" is drawn by the stylesheet where there is room for it */
-    gw.textContent = waitN ? waitN + " waiting" : "";
+    /* the number; the words after it are the stylesheet's, as many as fit */
+    gw.textContent = on ? String(waitN) : "";
     gw.setAttribute("aria-label", waitN + " waiting on glass");
   }
   const pick = now ? ST.tabSearch(now.tabs, TAB, QUERY, shownCards) : null;
@@ -1584,7 +1613,7 @@ async function start() {
   [["#tabfloor", "floor"], ["#tabfin", "finished"]].forEach(([s, t]) => {
     const b = $(s);
     if (b) b.onclick = () => {
-      if (TAB !== t) { TAB = t; if (PRETAB == null) saveTab(); try { window.scrollTo(0, 0); } catch (e) {} }
+      if (TAB !== t) { TAB = t; WAITTAB = null; if (PRETAB == null) saveTab(); try { window.scrollTo(0, 0); } catch (e) {} }
       touch(); render();
     };
   });
@@ -1594,20 +1623,17 @@ async function start() {
     try { window.scrollTo(0, 0); } catch (e) {}
     touch(); render();
   };
-  /* the waiting filter: on shows only the jobs fabrication has finished and
-     this person has not, and they are all On floor, so it goes there (not
-     saved, like a search's tab); a second tap clears it */
   const gwb = $("#gwait");
   if (gwb) gwb.onclick = () => {
-    WAITONLY = !WAITONLY;
-    if (WAITONLY) TAB = "floor";
+    setWait(!WAITONLY);
     try { window.scrollTo(0, 0); } catch (e) {}
     touch(); render();
   };
   render();
   await readPeople();
-  /* before the board, so its first paint already knows what fabrication says */
-  await readFab();
+  /* NOT awaited: a slow floor site must never hold the glass board back. Until
+     it answers the cards carry no fabrication line at all. */
+  readFab().then(ch => { if (ch) render(); });
   await readList();
   /* what has already been said about today's jobs, so a second shift does not
      retype the first shift's note. One read, quiet, and unable to fail loudly:
