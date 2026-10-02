@@ -32,8 +32,6 @@ branch. This brief makes it the one route for all three.
 - The columns `Glass` (on `Fabrication station`) and `Glass` / `Fabrication`
   (on `Glazing station`) exist on the live lists.
 
-Not known yet: which account the glazing tablet signs in with.
-
 ## 3. The design rule
 
 **One owner per fact. Everyone who needs the fact reads the owner's list.
@@ -245,20 +243,21 @@ Brief approved → implementers on the new branch → independent review of the
 commits → one fix pass → suites, gate greps, rig → live clickable demo for the
 owner → push only on the owner's go.
 
-## 12. Questions for the owner
+## 12. Decisions taken (owner, 2026-10-02)
 
-- **Q1.** Which account does the glazing tablet use? It needs read access to
-  `Glass station` in the workbook's site, as the welding account now has.
-- **Q2.** How are the 13 tablets split (glass 3; welding, glazing,
-  fabrication how many each)?
-- **Q3.** Glazing's fabrication chip: window groups only (proposed), or doors
-  too?
-- **Q4.** The welding account is a full member of the workbook's site, so
-  anyone at those tablets can open and edit the workbook in a browser. It only
-  needs to read there. Change it to Visitor (read only), or leave it?
-- **Q5.** Removing the idle lock means taps log under the last picked name
-  (section 7). Accepted?
-- **Q6.** Do the tablets show "sign-in has expired" most mornings? If yes the
-  automatic renewal in section 7 is worth building now; if no it can wait.
-- **Q7.** Hotmelt "cut first": a switch that is off by default (proposed), or
-  always on?
+- **Accounts.** The glass account runs three tablets: cutting (with Tuff),
+  hotmelting, and glazing. The welding account runs welding and the
+  fabrication tablets. Either account may be used on any tablet; both are
+  members of both sites. The glass account's budget is about 84 requests a
+  minute at the 5 s tick.
+- **Glazing's fabrication chip counts window groups only.** Door groups are
+  left out.
+- **The welding account stays a full member of the workbook's site** (the
+  owner may want it to write there later). Accepted: the workbook can be
+  opened from those tablets.
+- **The idle lock goes.** Accepted: taps log under the last picked name.
+- **The tablets do show "sign-in has expired" most mornings**, so the
+  automatic renewal in section 7 is built in this brief.
+- **Hotmelt sees what has been cut, what has been Tuffed, or both**, read
+  only. The "cut first" switch is built off by default (the owner did not
+  ask for it to be always on).
