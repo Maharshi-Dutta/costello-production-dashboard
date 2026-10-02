@@ -618,6 +618,8 @@ function stuDaySheet(cfg) {
      R.changed   did the last read change anything (it is what read() answers)
      R.missing   items are null because the list is positively not there (as
                  against refused, or not answered yet)
+     R.asOf      when the last read that was ANSWERED went out (0: none yet) -
+                 what is held is at least that fresh
 
    It holds the list by CW.listDelta on a token of its own, one read in the air
    at a time, and whether a reply is merged or replaces the list is decided by
@@ -637,18 +639,19 @@ const STU_DELTA_OFF_MS = 300000;
 function stuListReader(cfg) {
   const tag = cfg.tag || "[station]";
   const retry = cfg.retryMs == null ? STU_READ_RETRY_MS : cfg.retryMs;
-  const R = { items: null, ready: false, changed: false, missing: false,
+  const R = { items: null, ready: false, changed: false, missing: false, asOf: 0,
               busy: false, site: null, token: null, offAt: 0, deltaOffAt: 0 };
   const is = (k, e) => !!(CW[k] && CW[k](e));
   /* the list will not serve a delta at all - not a stale token (410), not a
-     refusal or a missing list, and not a throttle, which graph.js also hands
-     back as a 4xx from the delta endpoint */
+     refusal or a missing list, and not a throttle (graph.js no longer hands a
+     429 back as a restart; the test here stays as a second line of defence) */
   const noDelta = e => is("isDeltaRestart", e) && !is("isDeltaResync", e) && !is("isMissing", e) &&
     !is("isRefused", e) && !/->\s*429\b/.test((e && e.message) || "");
   R.read = async function () {
     if (R.busy) return false;
     if (R.offAt && Date.now() - R.offAt < retry) return false;
     R.busy = true;
+    const began = Date.now();
     const had = R.items != null;
     let moved = false;
     try {
@@ -683,7 +686,7 @@ function stuListReader(cfg) {
           moved = JSON.stringify(R.items) !== was;
         }
         if (plain) R.token = null; else if (d.next) R.token = d.next;
-        R.missing = false; R.offAt = 0;
+        R.missing = false; R.offAt = 0; R.asOf = began;
       }
     } catch (e) {
       console.warn(tag + " “" + cfg.list + "” could not be read:", (e && e.message) || e);
@@ -711,14 +714,17 @@ function stuListReader(cfg) {
 /* ---- the clock every station page polls on ----------------------------------
    2026-10-02. One timer, beating once a second, and ST.tickDue says whether a
    turn is due: every ST.REFRESH_MS, or every ST.TICK_FAST_MS for a while after
-   burst() - which a page calls on its own tap and on a poll that brought a
-   change. A TURN NEVER STARTS WHILE THE LAST ONE IS STILL RUNNING: a slow
-   reply costs skipped turns, not a pile of them. No pause and no visibility
-   check - a tablet polls all the time.
+   burst() - which a page calls on ITS OWN TAP AND NOTHING ELSE. A change seen
+   in a poll, or in a read of another station's list, is redrawn and does not
+   touch the rate: when a change seen started a burst, every tablet on an
+   account burst whenever any one of them was tapped, and ten tablets measured
+   1020 requests a minute. A TURN NEVER STARTS WHILE THE LAST ONE IS STILL
+   RUNNING: a slow reply costs skipped turns, not a pile of them. No pause and
+   no visibility check - a tablet polls all the time.
 
      const TICK = STU.stuTicker(tickOnce);     // tickOnce: the page's own turn
      TICK.start();                             // in start(), in setInterval's place
-     TICK.burst();                             // on a tap, on a change seen      */
+     TICK.burst();                             // on this tablet's own tap, only   */
 function stuTicker(fn) {
   const T = { busy: false, lastAt: 0, until: 0, timer: null };
   T.burst = () => { T.until = Date.now() + ST.TICK_BURST_MS; };

@@ -2042,12 +2042,13 @@ function stationLogReadIfNeeded(then) {
    nothing moved would be six hundred rows a minute of unchanged text. So the
    poll asks Graph what has changed since last time (listDelta) and merges it.
 
-   Ten seconds whatever is on screen (2026-10-02): the poll is also what carries
+   Five seconds whatever is on screen (2026-10-02; ten until the review of that
+   day - the tablets' own pace): the poll is also what carries
    a floor tap into the sheet's colours, and the minute it used to drop to when
    nobody was looking at the floor delayed exactly that. A failure never toasts:
    it leaves the last data exactly where it is and says so in the line the
    board already has.   */
-const STATION_FAST_MS = 10000;
+const STATION_FAST_MS = 5000;
 let stationPollT = null, stationPolling = false;
 let STATION_SITE_GEN = 0;               // which site the tokens in hand belong to
 
@@ -3579,10 +3580,18 @@ function glzFabNow() {
   if (GFAB_OF !== FABR_ITEMS) { GFAB_OF = FABR_ITEMS; GFAB = GLZC.glzFabByJob(FABR_ITEMS || []); }
   return GFAB;
 }
-/** One job's { glass, fab } words, as glzStatusChip and glzReady take them. */
+/** One job's { glass, fab } words, as glzStatusChip and glzReady take them.
+    What the job NEEDS comes from this page's own parsed sheet (GLZC.glzNeeds):
+    a job with glass or windows on the sheet and no row on that list yet is
+    "checking", never ready. No workbook job at hand = null = never ready.
+    A list this page cannot read is "not available" (GLZ_OFF), one not read yet
+    "checking" - the tablet's words, from the tablet's function. */
 function glzStatusOf(job) {
+  const j = byId(job);
+  const known = ok => ok === true ? true : ok === false ? GLZC.GLZ_OFF : false;
   return GLZC.glzStatusNow(stationForJob(job), glzFabNow()[FABC.fbKey(job)],
-    { glass: STATION_OK === true, fab: FABR_OK === true });
+    { glass: known(STATION_OK), fab: known(FABR_OK) },
+    j ? GLZC.glzNeeds(j, BLOCKNAMES) : null);
 }
 
 async function feedGlazing() {
@@ -4246,13 +4255,13 @@ function fabrFeedAgain() {
    One word per job (FABC.fbGlassStatus), from the glass station's own row for
    the job - the list this page already holds, and since 2026-10-02 the one the
    fabrication tablet reads for itself; nothing is fed. A job with no glass has
-   no row there. A glass list this page cannot read answers "" - no chip -
-   rather than a "not started" nobody said. */
-function fabrGlassOf(job) {
-  if (STATION_OK !== true) return "";
-  const g = stationForJob(job);
-  return g ? FABC.fbGlassStatus(g, g.total > 0 || g.tuffTotal > 0) : "";      // as FABC.fbGlassOf does
+   no row there. The words are the tablet's own function's (FABC.fbGlassOf), so
+   the two screens cannot differ: a glass list not read yet is "checking…", one
+   this page cannot read "not available" - never a "not started" nobody said. */
+function fabrGlassNow() {
+  return FABC.fbGlassOf(STATION_OK === true ? STATION_ITEMS : null, STATION_OK !== null);
 }
+function fabrGlassOf(job) { return fabrGlassNow()(job); }
 /* ---- the feeder columns added 2026-10-01 (FABC.FB_NEW_FEEDER_FIELDS) --------
    A list that has not got one of them yet refuses any write that names it. That
    must not stop the feed: the refused write is tried again without the new
@@ -4329,7 +4338,11 @@ async function feedFabrication() {
          equals this one, and sameRows() calls that "no change", so a feed
          continuing past the 60-write cap otherwise left the board drawing the
          rows of its first run until something else redrew it */
-      if (after) { FABR_ITEMS = after; FABR_TOK.items = null; redrawFabrication(); }
+      if (after) {
+        FABR_ITEMS = after; FABR_TOK.items = null; redrawFabrication();
+        /* the glazing board's Fabrication chip is worked out from this list */
+        if (state.board === "glazing") redrawGlazing();
+      }
     }
     return r;
   } catch (e) {
@@ -4537,7 +4550,7 @@ let FRECS = null, FRECS_OF = false, FRECS_GLASS = false, FRECS_GOK = null;
 function fabrRecordsNow() {
   if (FRECS_OF === FABR_ITEMS && FRECS_GLASS === STATION_ITEMS && FRECS_GOK === STATION_OK) return FRECS;
   FRECS_OF = FABR_ITEMS; FRECS_GLASS = STATION_ITEMS; FRECS_GOK = STATION_OK;
-  const cards = fabrOn() ? FABC.fbOfficeBoard(FABR_ITEMS || [], fabrGlassOf) : [];
+  const cards = fabrOn() ? FABC.fbOfficeBoard(FABR_ITEMS || [], fabrGlassNow()) : [];
   const byId = {}, byJob = {};
   cards.forEach(c => { byJob[c.job] = c; c.groups.forEach(g => { byId[String(g.id)] = g; }); });
   FRECS = { cards: cards, byId: byId, byJob: byJob };

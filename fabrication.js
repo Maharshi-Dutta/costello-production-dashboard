@@ -362,7 +362,14 @@ function siteMoved() {
   SITE_GEN = m;
   return true;
 }
+/* one poll in the air at a time: two deltas must never run on one token */
+let polling = false;
 async function pollList() {
+  if (polling) return false;
+  polling = true;
+  try { return await pollListNow(); } finally { polling = false; }
+}
+async function pollListNow() {
   try { SITEID = (await CW.stationSite(F.FAB.site)) || SITEID; } catch (e) {}
   if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
   if (!TOKEN) return readList();
@@ -372,7 +379,6 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
-    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue(); render(); flushQueue();
     return true;
   } catch (e) {
@@ -492,6 +498,8 @@ const ASG = STU.stuListReader({ site: F.FAB.site, list: F.FB_ASSIGN_LIST, fields
 /** Answers whether the assignments moved. */
 async function readAssign() {
   const moved = await ASG.read();
+  /* a Take is let go by a read that WENT OUT after its request had landed */
+  Object.keys(TAKING).forEach(k => { if (TAKING[k] > 1 && ASG.asOf > TAKING[k]) delete TAKING[k]; });
   if (ASG.items) {
     if (moved || ASSIGN_OK !== true) { ASSIGN_ROWS = F.fbAssignRows(ASG.items); IDX = F.fbAssignIndex(ASSIGN_ROWS); }
     ASSIGN_OK = true;
@@ -504,11 +512,14 @@ const listOn = () => ASSIGN_OK === true;
 const mayTap = (rec, part) => !rec.sheetDone && F.fbCanTap(PERSON, rec.group, part, IDX, ASSIGN_OK, rec.job);
 const mayAct = (rec, part, act) =>
   F.fbActAllowed(PERSON, IDX, ASSIGN_OK, rec.job, rec.group, part, rec[part + "Total"], act);
-/* TAKING[k]: 1 while the request is being sent; then the time it was sent, and
-   for TAKE_HOLD_MS a second Take on that line is refused - a delta read can
-   run a turn behind the write, and the row just added must not be asked for
-   twice in the gap before it shows as "requested". */
-const TAKE_HOLD_MS = 15000;
+/* TAKING[k]: 1 while the request is being sent; then the time it landed, and a
+   second Take on that line is refused until an assignments read that STARTED
+   after that has been answered (readAssign lets it go) - a read already in the
+   air when the request landed cannot have the row in it, and the row must not
+   be asked for twice in the gap before it shows as "requested". No fixed
+   wait: a slow or failing list holds it as long as it takes, up to the
+   TAKE_HOLD_MS ceiling. */
+const TAKE_HOLD_MS = 60000;
 let TAKING = {};
 async function take(id, part) {
   const rec = recordById(id);
@@ -989,12 +1000,12 @@ async function checkBuild() {
   } catch (e) {}
 }
 /** One turn of the clock (STU.stuTicker: every five seconds, every two for a
-    while after a tap or a change, never two turns at once). */
+    while after this tablet's own tap, never two turns at once). */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
-  if (await readAssign()) TICK.burst();
-  if (await readGlass()) { TICK.burst(); render(); }
+  await readAssign();
+  if (await readGlass()) render();
   await pollList();
   if (await NOTES.poll()) render();
 }

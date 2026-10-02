@@ -195,7 +195,10 @@ function fbGlassStatus(g, hasGlass) {
 /** job -> its glass word, from the `Glass station` rows alone (a read-only
     reader's `items` and `ready`). No row for the job = no glass on the floor's
     list = "". A list not answered yet is "wait" and one that cannot be read
-    (items null: 403, 404) is "off" - neither is ever "none" or "done". */
+    (items null: 403, 404) is "off" - neither is ever "none" or "done". A row
+    the glass feeder has marked off the sheet (OnSheet = No: the glass was
+    taken off the job, or the job has gone) is "" too - no chip - and not
+    "none": there is no glass to wait for. */
 function fbGlassOf(items, ready) {
   const S = fbST();
   if (!ready) return () => "wait";
@@ -203,7 +206,7 @@ function fbGlassOf(items, ready) {
   const recs = S.jobRecords(items);
   return job => {
     const g = recs[S.jobKey(job)];
-    return g ? fbGlassStatus(g, g.total > 0 || g.tuffTotal > 0) : "";
+    return g && (g.onSheet || g.active) ? fbGlassStatus(g, g.total > 0 || g.tuffTotal > 0) : "";
   };
 }
 /** The chip a glass word draws: { kind: "done" | "part" | "none" | "wait" | "off" | "", words }. */

@@ -94,15 +94,20 @@ function signOut() {
    IT CANNOT LOOP: the time of the redirect is written to sessionStorage
    before the page leaves (no sessionStorage, no redirect), and there is no
    second one inside RENEW_HOLD_MS whatever comes back - nothing takes the mark
-   off early. A page whose attempt failed does not try again until somebody
-   has signed in by hand. And it never leaves while a tap is queued unsent:
+   off early. A page whose attempt failed FOR GOOD does not try again until
+   somebody has signed in by hand - and only one answer is for good: Microsoft
+   saying "interaction required" to the hidden attempt once the one redirect
+   has been made. An attempt that did not get that far - a tap was queued, the
+   hidden frame timed out, the network dropped - is made again after
+   RENEW_RETRY_MS. And it never leaves while a tap is queued unsent:
    `idle()` is the page's own "nothing is owed", the same condition its reload
    on a new build waits for. When any of it fails, the page shows the "Sign in
    again" button it always has. */
 const RENEW_KEY = "cw_renewtried";
 const RENEW_HOLD_MS = 3600000;
+const RENEW_RETRY_MS = 60000;
 let renewIdle = null;                 // set by a station page; null on the office page
-let renewing = null, renewFailed = false;
+let renewing = null, renewFailed = false, renewRetryAt = 0;
 function stationRenew(idle) { renewIdle = typeof idle === "function" ? idle : null; }
 /** Has this tab made its renewal redirect within the hour? */
 function renewTried() {
@@ -123,6 +128,8 @@ async function renewSignIn(scopes) {
   } catch (e) {
     let idle = false;
     try { idle = !!renewIdle(); } catch (x) {}
+    /* the one final answer: interaction required, and the redirect is spent */
+    if (needsInteraction(e) && renewTried()) renewFailed = true;
     if (!needsInteraction(e) || renewTried() || !idle) throw e;
     sessionStorage.setItem(RENEW_KEY, String(Date.now()));   // throws where there is none: then no redirect
     await app().acquireTokenRedirect(Object.assign({ prompt: "none" }, req));
@@ -143,9 +150,9 @@ async function token(scopes, quiet) {
     /* a floor tablet tries to renew by itself, once, before anybody is asked
        to tap anything (stationRenew, below). Every concurrent request shares
        the one attempt. The office page never registers and never gets here. */
-    if (renewIdle && !renewFailed && needsInteraction(e)) {
+    if (renewIdle && !renewFailed && (renewing || Date.now() >= renewRetryAt) && needsInteraction(e)) {
       renewing = renewing || renewSignIn(scopes).then(() => true, () => false)
-        .then(ok => { renewing = null; renewFailed = !ok; return ok; });
+        .then(ok => { renewing = null; if (!ok) renewRetryAt = Date.now() + RENEW_RETRY_MS; return ok; });
       if (await renewing) {
         try { return await silentToken(scopes); } catch (x) { /* as a failure has always been answered */ }
       }
@@ -221,9 +228,17 @@ let openingSession = false;
    not on this file's own schedule; and while that wait is in force every other
    LIST call waits for it too rather than firing into the same limit - one
    shared back-off for the account's list traffic. A little jitter, so thirteen
-   tablets told "ten seconds" do not all come back in the same millisecond.
-   Workbook calls keep their own waits and never queue behind it. */
+   tablets told "ten seconds" do not all come back in the same millisecond -
+   and the calls parked on the back-off wake up to a second apart, and look at
+   it again before they go (it may have been pushed on while they waited).
+   Workbook calls keep their own waits and never queue behind it.
+
+   A LIST call that has had no answer in LIST_TIMEOUT_MS is given up on - the
+   same as a network failure, thrown to the caller, whose own schedule tries
+   again (a tap stays queued). The workbook, a file download and a workbook
+   batch have no such limit: a big workbook is slow and is not a hung call. */
 const RETRY_AFTER_MAX_S = 60;
+let LIST_TIMEOUT_MS = 30000;
 let listBackoffUntil = 0;
 const waitMs = ms => new Promise(s => setTimeout(s, ms));
 
@@ -231,12 +246,16 @@ async function call(method, path, body, asBuffer, more) {
   let lastStatus = 0, lastText = "", sessionRetried = false;
   const isList = needsListScope(path);
   for (let a = 0; a < 5; a++) {
-    if (isList && listBackoffUntil > Date.now()) await waitMs(listBackoffUntil - Date.now());
+    while (isList && listBackoffUntil > Date.now())
+      await waitMs(listBackoffUntil - Date.now() + Math.random() * 1000);
     /* a Blob (a photo for the Sales photos library) is sent as it is */
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
     const ct = body ? { "Content-Type": raw ? (body.type || "application/octet-stream") : "application/json" } : null;
     const init = { method, headers: await headers(more ? Object.assign({}, ct, more) : ct, path) };   // more: e.g. If-Match
     if (body) init.body = raw ? body : JSON.stringify(body);
+    /* covers the reply's body too; a browser without it simply has no limit */
+    if (isList && typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+      init.signal = AbortSignal.timeout(LIST_TIMEOUT_MS);
     const r = await fetch(G + path, init);
     if (r.ok) {
       if (asBuffer) return await r.arrayBuffer();
@@ -1246,7 +1265,7 @@ async function listItems(displayName, opts) {
        resyncChangesUploadDifferences - which means "start again", not "this
        failed".
 
-   So every 4xx from the delta endpoint - 410 included - is re-thrown as one
+   So every 4xx from the delta endpoint - 410 included, 429 apart - is re-thrown as one
    recognisable error, and the caller answers it the one way that is always
    right: read the whole list with listItems() once, then start a fresh delta
    enumeration with no token. Anything else (offline, a 5xx that outlived
@@ -1301,8 +1320,13 @@ async function listDelta(displayName, opts) {
     } catch (e) {
       const m = (e && e.message) || String(e || "");
       /* 4xx, and the 410 Gone that carries a resync code, both mean the same
-         thing to a caller: this token is no use, read the list instead */
-      if (/->\s*4\d\d\b/.test(m) || m.indexOf("resyncChanges") >= 0)
+         thing to a caller: this token is no use, read the list instead.
+         NOT A 429: a throttle that outlived call()'s retries says nothing
+         about the token or the list - it is thrown untouched like a 503, the
+         caller keeps its last read and its token, and asks again next turn.
+         Read as "restart", it sent every page to full reads for five minutes,
+         which is the last thing a throttled account needs. */
+      if (!/->\s*429\b/.test(m) && (/->\s*4\d\d\b/.test(m) || m.indexOf("resyncChanges") >= 0))
         throw new Error(DELTA_FAIL + ": " + m);
       throw e;
     }
@@ -1787,7 +1811,9 @@ window.CW = {
      branch of the ensure*Sheet functions can be exercised again */
   _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
   /* tests only: let go of a Retry-After wait, and of a failed renewal */
-  _clearBackoff() { listBackoffUntil = 0; renewFailed = false; renewing = null; },
+  _clearBackoff() { listBackoffUntil = 0; renewFailed = false; renewing = null; renewRetryAt = 0; },
+  /* tests only: how long a list call may go unanswered */
+  _setListTimeout(ms) { LIST_TIMEOUT_MS = ms; },
   /* tests only: forget the list ids found so far */
   _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); salesDriveMemo = null; },
   /* tests only: which scopes a path is asked for - the same call headers()

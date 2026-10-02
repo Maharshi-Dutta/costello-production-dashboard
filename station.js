@@ -807,7 +807,17 @@ function siteMoved() {
   SITE_GEN = m;
   return true;
 }
+/* ONE POLL IN THE AIR AT A TIME: the clock's turn and the look a landed write
+   takes can ask at the same moment, and two deltas on one token would each
+   merge and each hand back a token. The second asker is told false and the
+   poll already running answers for both. */
+let polling = false;
 async function pollList() {
+  if (polling) return false;
+  polling = true;
+  try { return await pollListNow(); } finally { polling = false; }
+}
+async function pollListNow() {
   /* resolved every pass, which is also what drives the ten-minute look for the
      site the lists are meant to end up in; it is a cached value in between */
   try { SITEID = (await CW.stationSite(ST.GLASS.site)) || SITEID; } catch (e) { /* keep the last one */ }
@@ -819,7 +829,6 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
-    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     dropBlocked();
     render();
@@ -1540,8 +1549,8 @@ async function checkBuild() {
 }
 
 /** One turn of the clock (STU.stuTicker: every five seconds, every two for a
-    while after a tap or a change, never two turns at once). A named function,
-    so a test can take exactly one turn of it. */
+    while after this tablet's own tap, never two turns at once). A named
+    function, so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   /* a people list that has not answered yet is retried on the same clock: one
@@ -1550,7 +1559,7 @@ async function tickOnce() {
   if (!PEOPLE_READ) await readPeople();
   await pollList();
   /* fabrication's list, read only, on the same clock; it cannot fail loudly */
-  if (await readFab()) { TICK.burst(); render(); }
+  if (await readFab()) render();
   /* the note channel keeps its own counsel: it only asks the list anything
      while somebody has a composer open, and never more often than
      ST.COMMENT_POLL_MS. A tablet nobody is writing on sends no request for it

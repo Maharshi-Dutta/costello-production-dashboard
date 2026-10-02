@@ -1,6 +1,6 @@
 # Stations see each other directly, faster ticks, no idle lock
 
-Status: **draft for the owner, not approved, nothing built.** 2026-10-02.
+Status: **built on branch `cross-station-direct-read`, reviewed, fix pass done; awaiting the owner's demo and go.** 2026-10-02. The decisions are in section 12; where the build differs from the draft above, the Amendments after review at the end win.
 
 ## 1. Why this brief exists
 
@@ -261,3 +261,48 @@ owner → push only on the owner's go.
 - **Hotmelt sees what has been cut, what has been Tuffed, or both**, read
   only. The "cut first" switch is built off by default (the owner did not
   ask for it to be always on).
+
+## Amendments after review (2026-10-02)
+
+What changed from the draft above. Two independent reviews, 0 blockers, 4
+major (the burst budget, a throttle read as "the list refuses delta", and two
+"ready too early" cases), about 15 minor. One fix pass closed them.
+
+1. **The 2 s burst starts only from the tablet's own tap.** The draft said "or
+   a change seen". Measured in the rig, that put the welding account at about
+   1020 requests a minute with the floor tapping, against a limit of about
+   600, because every tablet on the account burst whenever any one was tapped.
+   Idle, measured: glass account 84 a minute, welding account 336 a minute.
+2. **"Not fed yet" is not "nothing to do".** With the office copy gone, a job
+   with no row on the glass or fabrication list could mean "no glass" or "not
+   fed yet". The office feeder now writes two FACTS from the sheet into the
+   two otherwise unused columns of `Glazing station`: `Glass` = yes/no (the
+   job has glass on the sheet) and `Fabrication` = yes/no (the job has window
+   groups the fabrication feeder feeds). A missing glass row or fabrication
+   entry reads "checking" unless the fact says no. These are facts written
+   with the row, not a status copy. The first office load after the ship
+   PATCHes every `Glazing station` row once.
+3. **Words.** "Checking" before a list has answered; "not available" when it
+   cannot be read (403, 404). Neither is ever ready.
+4. **A glass row off the sheet** (not `OnSheet` and not `Active`) reads as no
+   glass.
+5. **The office station poll is 5 s.** The draft said "always the fast 10 s
+   poll".
+6. **A throttle (429) from a delta endpoint** is no longer treated as "the
+   list refuses delta" (`graph.js` throws it untouched; the reader keeps its
+   last read and token).
+7. **Time limits.** List calls time out after 30 s. Sign-in renewal retries
+   after a minute, unless a real "interaction required" answer came back after
+   its one redirect. Take (fabrication) is held until an assignments read that
+   started after the request (60 s ceiling).
+8. **Measured in the stubbed rig before the fix pass** (150 ms per fake call):
+   tablet to tablet about 0.4 to 3 s typical, about 5 s worst; office board
+   4.5 s typical, 8 s worst (before its poll went to 5 s); with the office
+   closed the chips still updated in 2 to 3 s.
+9. **Owner step still open.** The four tablet page URLs must be registered as
+   SPA redirect URIs in Entra before the automatic sign-in renewal does
+   anything. Until then the "Sign in again" button shows as before.
+10. **Not built, next briefs.** One `Jobs` list; the feeder and the painter out
+    of the office browser; or tablets reading the workbook themselves (the
+    owner's idea; it would change rule 2 from "never touch" to "never write",
+    which is the owner's decision).

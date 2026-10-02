@@ -389,8 +389,10 @@ const NOTES = ST.stationComments({
    and `Fabrication station` (`Floor stations`) themselves, through the shared
    reader (STU.stuListReader) - each with its own site, token and retry clock,
    neither with a write path, and neither able to take this board away or set
-   PROBLEM or SOFT. A list not read yet, or one this account cannot read, is
-   "checking" on the chip and never ready. */
+   PROBLEM or SOFT. A list not read yet is "checking" on the chip, one this
+   account cannot read is "not available", and neither is ever ready. Nor is a
+   job with no row on one of them, unless this page's own row says the sheet
+   has none for it (c.needs, fed by the office: GLZC.glzNeeds). */
 const OGLASS = STU.stuListReader({ site: ST.GLASS.site, list: ST.GLASS.list,
                                    fields: ST.GLASS.fields, tag: "[glazing]" });
 const OFAB = STU.stuListReader({ site: FABC.FB_SITE, list: FABC.FB_LIST, tag: "[glazing]",
@@ -405,9 +407,10 @@ async function readOthers() {
   return ch[0] || ch[1];
 }
 /** One card told where its job's glass and fabrication are, now. */
+const knownOf = R => !R.ready ? false : R.items ? true : GZ.GLZ_OFF;
 function withStatus(c) {
   const s = GZ.glzStatusNow(GLASSMAP[ST.jobKey(c.job)], FABMAP[FABC.fbKey(c.job)],
-    { glass: OGLASS.ready && !!OGLASS.items, fab: OFAB.ready && !!OFAB.items });
+    { glass: knownOf(OGLASS), fab: knownOf(OFAB) }, c.needs);
   c.glass = s.glass; c.fab = s.fab; c.ready = GZ.glzReady(s.glass, s.fab);
   return c;
 }
@@ -513,7 +516,14 @@ function siteMoved() {
   SITE_GEN = m;
   return true;
 }
+/* one poll in the air at a time: two deltas must never run on one token */
+let polling = false;
 async function pollList() {
+  if (polling) return false;
+  polling = true;
+  try { return await pollListNow(); } finally { polling = false; }
+}
+async function pollListNow() {
   try { SITEID = (await CW.stationSite(GZ.GLAZE.site)) || SITEID; } catch (e) { /* keep the last one */ }
   if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
   if (!TOKEN) return readList();
@@ -523,7 +533,6 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
-    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     render();
     flushQueue();
@@ -998,14 +1007,14 @@ async function checkBuild() {
 }
 
 /** One turn of the clock (STU.stuTicker: every five seconds, every two for a
-    while after a tap or a change, never two turns at once). A named function,
-    so a test can take exactly one turn of it. */
+    while after this tablet's own tap, never two turns at once). A named
+    function, so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
   await pollList();
   /* the glass and fabrication lists, read only, on the same clock */
-  if (await readOthers()) { TICK.burst(); render(); }
+  if (await readOthers()) render();
   if (await NOTES.poll()) render();
 }
 const TICK = STU.stuTicker(tickOnce);

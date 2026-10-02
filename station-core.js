@@ -345,8 +345,8 @@ const CUSTOMER_MAX = 70;
    2026-10-02 (it was ten): the stations read each other's lists directly, and
    a tap on one tablet should be on the next before anybody walks over. */
 const REFRESH_MS = 5000;
-/* ... and for TICK_BURST_MS after this tablet's own tap, or after a poll that
-   brought a change, it looks every TICK_FAST_MS instead: work comes in runs.
+/* ... and for TICK_BURST_MS after this tablet's OWN tap - never after a change
+   it merely saw - it looks every TICK_FAST_MS instead: work comes in runs.
    The timer itself beats once a second and asks tickDue() each time. A turn
    still running is never joined by a second one; one that has not come back
    after TICK_STUCK_MS is given up on, so a reply that never arrives cannot

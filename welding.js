@@ -520,7 +520,14 @@ function siteMoved() {
   SITE_GEN = m;
   return true;
 }
+/* one poll in the air at a time: two deltas must never run on one token */
+let polling = false;
 async function pollList() {
+  if (polling) return false;
+  polling = true;
+  try { return await pollListNow(); } finally { polling = false; }
+}
+async function pollListNow() {
   try { SITEID = (await CW.stationSite(W.WELD.site)) || SITEID; } catch (e) { /* keep the last one */ }
   if (siteMoved()) { TOKEN = null; DELTA_OFF = 0; }
   if (!TOKEN) return readList();
@@ -530,7 +537,6 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
-    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     render();
     flushQueue();
@@ -814,7 +820,12 @@ function render() {
   const host = $("#board");
   if (!host) return;
   const hdr = $("#whois");
-  if (hdr) hdr.textContent = PERSON ? PERSON.name + (mayWeld() ? " · welding" : " · no stages") : "";
+  /* the name alone is the text - it is what every tap is logged under and must
+     not be what an ellipsis eats; the stage rides in data-stages (glass.html) */
+  if (hdr) {
+    hdr.textContent = PERSON ? PERSON.name : "";
+    hdr.dataset.stages = PERSON ? (mayWeld() ? "welding" : "no stages") : "";
+  }
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
 
@@ -1016,8 +1027,8 @@ async function checkBuild() {
 }
 
 /** One turn of the clock (STU.stuTicker: every five seconds, every two for a
-    while after a tap or a change, never two turns at once). A named function,
-    so a test can take exactly one turn of it. */
+    while after this tablet's own tap, never two turns at once). A named
+    function, so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();

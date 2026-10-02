@@ -2842,12 +2842,12 @@ const person = (name, stages, pin, active, station) =>
     ["null", "'glass'", "'john'"].forEach(b => { A("state.sel = null; state.board = " + b + ";"); stationTick(); });
     global.setTimeout = realTimeout;
     A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; } state.board = null;");
-    assert.deepStrictEqual(armed, [10000, 10000, 10000], "nothing on screen, a floor board, John's sheet: ten seconds each");
+    assert.deepStrictEqual(armed, [5000, 5000, 5000], "nothing on screen, a floor board, John's sheet: five seconds each");
     assert.ok(A("typeof STATION_SLOW_MS") === "undefined" && A("typeof stationWatching") === "undefined");
   }
   useJobs([mkJob({ id: "R5303", cust: "Customer One", glass: { tg: 6 }, blk: 4, seq: 0 }),
            mkJob({ id: "R9000", cust: "No glass", glass: {}, blk: 4, seq: 1 })]);
-  pass("the poll runs every ten seconds whatever is on screen");
+  pass("the poll runs every five seconds whatever is on screen");
 
   const realItems = CW.listItems, realDelta = CW.listDelta;
   A("STATION_OK = true; STATION_ERR = ''; stationWarned = true;");
@@ -5332,7 +5332,9 @@ const person = (name, stages, pin, active, station) =>
   fakeCW.listDelta = fabDelta; fakeCW.listItems = fabItems;
   pass("the shared reader: plain-read fallback, two instances apart, not available is null, no write path");
 
-  /* THE CLOCK: one turn at a time, a burst after a tap or a change, and every
+  /* THE CLOCK: one turn at a time, a burst after this tablet's OWN tap and
+     after nothing else (fix pass 2026-10-02: a change SEEN used to start one,
+     so every tablet on an account burst when any one was tapped), and every
      page on it */
   SF("var __n = 0, __go = null; var __T = STU.stuTicker(() => { __n++; return new Promise(r => { __go = r; }); });");
   const turn1 = SF("__T.turn()");
@@ -5351,43 +5353,112 @@ const person = (name, stages, pin, active, station) =>
     assert.ok(/const TICK = STU\.stuTicker\(tickOnce\);/.test(src(f)) && /\n  TICK\.start\(\);/.test(src(f)) &&
               !/setInterval\(tickOnce/.test(src(f)), f + " polls on the shared clock, not on a setInterval of its own");
     assert.ok(/queueTap\([^;]*\);\r?\n  TICK\.burst\(\);/.test(src(f)), f + ": the tablet's own tap starts a burst");
-    assert.ok(/if \(d\.items\.length\) TICK\.burst\(\);/.test(src(f)), f + ": and so does a poll that brought a change");
+    /* fabrication's second is Take - that tablet's own tap too */
+    assert.strictEqual((src(f).match(/TICK\.burst\(\)/g) || []).length, f === "fabrication.js" ? 2 : 1,
+      f + ": and nothing else does - not a poll that brought a change, not a read of another station's list");
+    assert.ok(/let polling = false;\r?\nasync function pollList\(\) \{\r?\n  if \(polling\) return false;/.test(src(f)),
+      f + ": its board poll is one in the air at a time");
   });
   SF("ITEMS = " + JSON.stringify([item({ Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6,
     TuffTotal: 4, Seq: 1, Active: "Yes", OfficeDone: "No", Cut: 6, Hotmelt: 2, Tuff: 0 }, "800")]) +
     "; TOKEN = 'tk'; siteMoved(); TICK.until = 0;");
   await SF("pollList()");
   assert.strictEqual(SF("TICK.until"), 0, "a poll that brought nothing starts no burst");
+  {
+    /* a change SEEN - on this page's own board, and on the other station's
+       list - is drawn and starts no burst; a throttled delta is not a list
+       that refuses delta; and two polls never run on one token */
+    const clockDelta = fakeCW.listDelta;
+    let boardMode = "change", boardGate = null;
+    fakeCW.listDelta = async (name, o) => {
+      FCALLS.push("delta:" + name + ":" + (o.token || ""));
+      if (name === "Fabrication station")
+        return { items: [{ id: "f9", fields: { Title: "R7001|CASEMENT WINDOWS", Job: "R7001", Group: "CASEMENT WINDOWS",
+                 Active: "Yes", OnSheet: "Yes", Frames: 2, FramesDone: FCALLS.length }, removed: false }], next: "ft" + FCALLS.length };
+      if (boardGate) await boardGate;
+      /* what graph.js hands on, untouched, when a 429 outlives its retries */
+      if (boardMode === "throttled")
+        throw new Error("GET /sites/x/lists/y/items/delta?token=t -> 429 {\"error\":{\"code\":\"activityLimitReached\"}}");
+      return { items: [{ id: "800", fields: { Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6, TuffTotal: 4,
+               Seq: 1, Active: "Yes", OfficeDone: "No", Cut: 6, Hotmelt: 5, Tuff: 0 }, removed: false }], next: "tk2" };
+    };
+    SF("GFAB.offAt = 0;");
+    await SF("tickOnce()");
+    assert.deepStrictEqual([SF("ITEMS[0].fields.Hotmelt"), SF("TOKEN"), SF("GFAB.changed"), SF("TICK.until")], [5, "tk2", true, 0],
+      "a change seen on the board and on the fabrication list is taken in and drawn, and starts NO burst");
+    boardMode = "throttled"; FCALLS.length = 0;
+    assert.strictEqual(await SF("pollList()"), false);
+    assert.deepStrictEqual([SF("TOKEN"), SF("DELTA_OFF"), SF("READY"), SF("ITEMS[0].fields.Hotmelt"), SF("PROBLEM")],
+      ["tk2", 0, true, 5, ""], "a throttled delta keeps the token and the last read, and delta is NOT switched off");
+    assert.ok(SF("SOFT").length > 0 && !FCALLS.some(c => c.indexOf("OTHER:listItems") === 0),
+      "it says so quietly, and makes no full read of the list");
+    boardMode = "change"; FCALLS.length = 0;
+    assert.strictEqual(await SF("pollList()"), true);
+    assert.deepStrictEqual([FCALLS.filter(c => c.indexOf("delta:") === 0), SF("SOFT")], [["delta:" + ST.STATION_LIST + ":tk2"], ""],
+      "the next turn asks the delta again, on the same token");
+    let open = null; boardGate = new Promise(r => { open = r; });
+    FCALLS.length = 0;
+    const first = SF("pollList()");
+    await settle(5);
+    assert.strictEqual(await SF("pollList()"), false, "a second poll while one is in the air is turned away");
+    open(); boardGate = null;
+    assert.strictEqual(await first, true);
+    assert.strictEqual(FCALLS.filter(c => c.indexOf("delta:" + ST.STATION_LIST) === 0).length, 1, "so one delta went out on that token, not two");
+    assert.strictEqual(await SF("pollList()"), true, "and the guard is let go when the poll ends");
+    fakeCW.listDelta = clockDelta;
+    SF("TOKEN = 'tk'; TICK.until = 0;");
+  }
   SF("tap('800', 'tuff', 1)");
   assert.ok(SF("TICK.until") > Date.now() + 19000, "a tap does");
   await settle(60);
   SF("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
-  pass("the clock: no overlapping turns, a stuck turn is given up on, a burst after a tap or a change, all four pages on it");
+  pass("the clock: no overlapping turns or polls, a stuck turn is given up on, a burst after this tablet's own tap ONLY, a 429 keeps the token, all four pages on it");
 
   /* THROTTLING: Retry-After is obeyed (capped at a minute), and while it is in
      force the other LIST calls wait for it too. Workbook calls do not join it. */
   {
-    const realFetch = global.fetch, realTimeout = global.setTimeout;
+    const realFetch = global.fetch, realTimeout = global.setTimeout, realNow = Date.now;
     const waits = [];
     let answers = [];
-    global.setTimeout = (fn, ms) => { waits.push(Math.round(ms)); return realTimeout(fn, 0); };
-    global.fetch = async url => {
-      const a = answers.shift() || { status: 200 };
-      return { ok: a.status < 400, status: a.status, headers: { get: h => (h === "Retry-After" ? a.after || null : null) },
-               text: async () => "{\"value\":[]}" };
-    };
+    /* a wait returns at once and moves the clock on by what was asked (by half
+       of it while `half` is set: a sleeper woken early) */
+    let skew = 0, half = false;
+    Date.now = () => realNow() + skew;
+    global.setTimeout = (fn, ms) => { waits.push(Math.round(ms)); skew += half ? ms / 2 : ms; return realTimeout(fn, 0); };
+    const answer = a => ({ ok: a.status < 400, status: a.status, headers: { get: h => (h === "Retry-After" ? a.after || null : null) },
+                           text: async () => a.text || "{\"value\":[]}" });
+    global.fetch = async url => answer(answers.shift() || { status: 200 });
     const lpath = { siteId: FSITE, fields: ["Title"] };
     try {
       CW._clearBackoff();
       answers = [{ status: 429, after: "7" }];
       await CW.listItems("Glass station", lpath);
-      assert.ok(waits[0] >= 7000 && waits[0] <= 7500, "a 429 naming seven seconds is waited out for seven, plus a little jitter: " + waits);
-      /* the fake timer returns at once, so the seven seconds are still running:
-         another list call, with no 429 of its own, waits for them first */
-      waits.length = 0;
+      assert.ok(waits.length === 1 && waits[0] >= 7000 && waits[0] <= 7500,
+        "a 429 naming seven seconds is waited out for seven, plus a little jitter: " + waits);
+      /* five of the seven seconds are still to run: another list call, with no
+         429 of its own, waits for them first - and wakes up to a second after
+         the back-off ends, not in the same millisecond as every other sleeper */
+      waits.length = 0; skew -= 5000;
       await CW.listItems("Station people", lpath);
-      assert.ok(waits.length > 0 && waits.every(w => w > 6000 && w <= 7500),
-        "and another list call waits for the same back-off instead of firing into it: " + waits);
+      assert.ok(waits.length === 1 && waits[0] > 4900 && waits[0] <= 6001,
+        "and another list call waits for the same back-off instead of firing into it, with up to a second of jitter: " + waits);
+      /* woken with the back-off still in force (it can be pushed on while a
+         call sleeps), a parked call looks again and waits again */
+      waits.length = 0; skew -= 5000; half = true;
+      await CW.listItems("Station people", lpath);
+      half = false;
+      assert.ok(waits.length >= 2, "a parked call re-checks the back-off when it wakes, in a loop: " + waits);
+      /* a 429 that outlives every retry on the DELTA endpoint is a passing
+         failure - not "this list refuses delta", which costs full reads */
+      CW._clearBackoff(); waits.length = 0;
+      const tokenUrl = "https://graph.microsoft.com/v1.0/sites/" + FSITE + "/lists/x/items/delta?token=abc";
+      answers = [1, 2, 3, 4, 5].map(() => ({ status: 429, text: "{\"error\":{\"code\":\"activityLimitReached\"}}" }));
+      const e429 = await CW.listDelta("Glass station", Object.assign({ token: tokenUrl }, lpath)).then(() => null, e => e);
+      assert.ok(e429 && /-> 429/.test(e429.message) && !CW.isDeltaRestart(e429) && !CW.isDeltaResync(e429),
+        "a throttled delta is thrown as it is, not as 'delta must be restarted': " + (e429 && e429.message));
+      answers = [{ status: 400, text: "{\"error\":{\"code\":\"invalidRequest\"}}" }];
+      const e400 = await CW.listDelta("Glass station", Object.assign({ token: tokenUrl }, lpath)).then(() => null, e => e);
+      assert.ok(e400 && CW.isDeltaRestart(e400) && !CW.isDeltaResync(e400), "any other 4xx still is");
       CW._clearBackoff(); waits.length = 0;
       answers = [{ status: 503, after: "600" }];
       await CW.listItems("Glass station", lpath);
@@ -5402,11 +5473,31 @@ const person = (name, stages, pin, active, station) =>
       waits.length = 0;
       await CW.listItems("Glass station", lpath);
       assert.deepStrictEqual(waits, [], "a throttled workbook call does not hold the list calls back");
+      /* A LIST CALL NOBODY ANSWERS is given up on (30 s; 20 ms here) and thrown
+         like a network failure. A workbook call carries no such limit. */
+      global.setTimeout = realTimeout; Date.now = realNow;
+      const seen = [];
+      global.fetch = (url, init) => {
+        seen.push([url.indexOf("/lists") >= 0, !!init.signal]);
+        if (!init.signal) return Promise.resolve(answer({ status: 200 }));
+        return new Promise((res, rej) => init.signal.addEventListener("abort", () => rej(init.signal.reason)));
+      };
+      CW._setListTimeout(20);
+      const t0 = realNow();
+      const keep = realTimeout(() => {}, 5000);     // Node does not stay up for an AbortSignal's own timer
+      const hung = await CW.listPatch("Glass station", "1", { Cut: 1 }, lpath).then(() => null, e => e);
+      clearTimeout(keep);
+      assert.ok(hung && /Timeout|abort/i.test(hung.name + " " + hung.message) && realNow() - t0 < 5000,
+        "a list call that gets no answer is given up on, and the caller is told: " + (hung && hung.name));
+      await CW.setFill("Production", "A1", "#FFFFFF").catch(() => {});
+      assert.ok(seen.some(s => s[0]) && seen.filter(s => s[0]).every(s => s[1]), "every list call carries the limit");
+      assert.ok(seen.some(s => !s[0]) && seen.filter(s => !s[0]).every(s => !s[1]), "and no workbook call does");
     } finally {
-      global.fetch = realFetch; global.setTimeout = realTimeout; CW._clearBackoff();
+      global.fetch = realFetch; global.setTimeout = realTimeout; Date.now = realNow;
+      CW._setListTimeout(30000); CW._clearBackoff();
     }
   }
-  pass("throttling: Retry-After obeyed and capped, one shared back-off for list calls, the workbook path apart");
+  pass("throttling: Retry-After obeyed and capped, one shared back-off with a jittered re-checking wake, a 429 is not a delta restart, a 30 s limit on list calls only");
 
   /* SIGN-IN RENEWAL: a station page tries ssoSilent, then ONE full-page
      redirect with prompt=none - never twice, never with a tap owed, never on
@@ -5439,6 +5530,7 @@ const person = (name, stages, pin, active, station) =>
     window.location.pathname = "/glass.html";
     const PAGE = "http://localhost/glass.html";
     let idle = true;
+    const realNow = Date.now;
     const quiet = () => CW.token(CW.LIST_SCOPES, true).then(t => t, e => "ERR " + e.message);
     try {
       CW._setToken(null);
@@ -5477,13 +5569,37 @@ const person = (name, stages, pin, active, station) =>
       await quiet();
       assert.ok(!calls.some(c => c.indexOf("redirect") === 0) && sess.cw_renewtried === undefined,
         "never a redirect while a tap is queued unsent");
+      /* ... and that was not a final answer (fix pass 2026-10-02): nothing more
+         inside the minute, and once the minute is up and the tap has gone the
+         attempt is made again - redirect and all */
+      const later = async ms => { Date.now = () => realNow() + ms; try { return await quiet(); } finally { Date.now = realNow; } };
+      calls.length = 0; idle = true;
+      await quiet();
+      assert.deepStrictEqual(calls, ["silent"], "inside the minute it is not tried again");
+      calls.length = 0;
+      await later(61000);
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE, "redirect:none:station@example.test:" + PAGE],
+        "a renewal skipped because a tap was queued is tried again after a minute, not given up on for good");
+      delete sess.cw_renewtried;
       /* the hidden attempt timed out - this page's address is not registered */
       CW._clearBackoff(); calls.length = 0; idle = true; sso = "timeout";
       await quiet();
       assert.ok(!calls.some(c => c.indexOf("redirect") === 0),
         "and none when Microsoft did not answer through this page's own address");
+      /* a timeout is the network's answer, not Microsoft's: tried again too */
+      calls.length = 0; sso = "ok";
+      assert.strictEqual(await later(61000), "S", "a hidden attempt that timed out is made again after a minute, and this one renews");
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE, "silent"]);
+      /* THE ONE FINAL ANSWER: interaction required once the redirect is spent */
+      CW._clearBackoff(); silent = "fail"; sso = "fail"; sess.cw_renewtried = String(realNow()); calls.length = 0;
+      await quiet();
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE], "asked, refused, no second redirect");
+      calls.length = 0;
+      await later(61000); await later(2 * 3600000);
+      assert.deepStrictEqual(calls, ["silent", "silent"], "and that is for good: not a minute on, not two hours on - until somebody signs in by hand");
       assert.ok(!calls.some(c => c === "popup"), "a quiet call never opens a popup, through any of it");
     } finally {
+      Date.now = realNow;
       CW.stationRenew(null); CW._clearBackoff(); CW._setToken(() => "t");
       delete window.location.pathname; delete global.msal;
     }
@@ -5492,7 +5608,81 @@ const person = (name, stages, pin, active, station) =>
     assert.ok(src("app.js").indexOf("stationRenew") < 0 && src("sales.js").indexOf("stationRenew") < 0,
       "and the office and Sales pages do not");
   }
-  pass("sign-in renewal: ssoSilent, then one prompt=none redirect; no loop, no redirect with a tap owed, office untouched");
+  pass("sign-in renewal: ssoSilent, then one prompt=none redirect; no loop, no redirect with a tap owed, a skipped or timed-out attempt tried again after a minute, only interaction-required after the redirect is final, office untouched");
+
+  /* ================= 15f. the office's Glazing board: ready needs both lists (review, 2026-10-02) =================
+     The two cores join the office's context here, as index.html loads them. No
+     request is made in this section: the lists are put in hand directly. */
+  {
+    run("glazing-core.js"); run("fabrication-core.js");
+    const gl = (job, f) => ({ id: "g" + job, fields: Object.assign({ Title: job, Job: job, Active: "Yes", OnSheet: "Yes" }, f) });
+    const fb = (job, f) => ({ id: "f" + job, fields: Object.assign({ Title: job + "|CASEMENT WINDOWS", Job: job,
+      Group: "CASEMENT WINDOWS", Active: "Yes", OnSheet: "Yes", Section: "In production", Frames: 2, Sashes: 0, Transoms: 0 }, f) });
+    const gz = job => ({ id: "z" + job, fields: { Title: job, Job: job, Total: 4, Active: "Yes", Section: "In production" } });
+    const win = [{ n: "casement windows", f: 2, s: 0, t: 0 }];
+    useJobs([mkJob({ id: "R7001", glass: { dg: 4 }, prodsMain: win, blk: 4, seq: 0 }),     // (a) glass done, no fab rows
+             mkJob({ id: "R7002", glass: { dg: 4 }, prodsMain: win, blk: 4, seq: 1 }),     // (b) fab done, no glass row
+             mkJob({ id: "R7003", glass: { dg: 4 }, prodsMain: win, blk: 4, seq: 2 }),     // (c) both done
+             mkJob({ id: "R7004", glass: {}, prodsMain: win, blk: 4, seq: 3 })]);          // (d) no glass on the sheet
+    global.__lists = {
+      glass: [gl("R7001", { Total: 4, Cut: 4, Hotmelt: 4 }), gl("R7003", { Total: 4, Cut: 4, Hotmelt: 4 })],
+      fab: [fb("R7002", { FramesDone: 2 }), fb("R7003", { FramesDone: 2 }), fb("R7004", { FramesDone: 2 })],
+      glz: ["R7001", "R7002", "R7003", "R7004", "R7005"].map(gz)
+    };
+    A("STATION_ITEMS = __lists.glass; STATION_OK = true; FABR_ITEMS = __lists.fab; FABR_OK = true; GLZ_ITEMS = __lists.glz;");
+    const rowOf = job => A("glzRowHtml(glzRecordsNow().byJob['" + job + "'])");
+    const a = rowOf("R7001");
+    assert.ok(/Fabrication: checking/.test(a) && /Glass ✓ done/.test(a) && !/Ready to glaze/.test(a),
+      "(a) glass done, windows on the sheet, no fabrication row yet: checking, never Ready");
+    const b = rowOf("R7002");
+    assert.ok(/Glass: checking/.test(b) && /Fabrication ✓ done/.test(b) && !/Ready to glaze/.test(b),
+      "(b) windows fabricated, glass on the sheet, no glass row yet: not ready");
+    assert.ok(/Ready to glaze/.test(rowOf("R7003")), "(c) both present and done: Ready");
+    const d = rowOf("R7004");
+    assert.ok(/Ready to glaze/.test(d) && !/Glass/.test(d), "(d) no glass on the sheet and windows done: Ready, no glass chip");
+    assert.ok(!/Ready to glaze/.test(rowOf("R7005")) && /checking/.test(rowOf("R7005")),
+      "a board row with no workbook job at hand is never ready");
+    A("FABR_OK = false;");
+    assert.ok(/Fabrication: not available/.test(rowOf("R7003")) && !/Ready to glaze/.test(rowOf("R7003")),
+      "a list this page cannot read says not available, in the tablet's words");
+    A("FABR_OK = true;");
+    pass("the office Glazing board: Ready only when the sheet's needs are met by rows really on both lists");
+
+    /* (f) the memo is keyed on the array: a replaced FABR_ITEMS rebuilds it */
+    const was = A("glzFabNow()");
+    assert.strictEqual(A("glzFabNow()"), was, "the same list: the same map, not rebuilt");
+    global.__lists.fab2 = global.__lists.fab.concat([fb("R7001", { FramesDone: 2 })]);
+    A("FABR_ITEMS = __lists.fab2;");
+    assert.notStrictEqual(A("glzFabNow()"), was, "a replaced list: rebuilt");
+    assert.ok(/Ready to glaze/.test(rowOf("R7001")), "and the row follows it: R7001 is ready now");
+    assert.strictEqual(A("fabrGlassOf('R7001')"), "done", "the fabrication board's glass word is the tablet's function's");
+    A("STATION_OK = null;");
+    assert.strictEqual(A("fabrGlassOf('R7001')"), "wait", "not read yet: checking");
+    A("STATION_OK = false;");
+    assert.strictEqual(A("fabrGlassOf('R7001')"), "off", "cannot be read: not available");
+    pass("the fabrication map is rebuilt when the list is replaced; the office's glass word is FABC.fbGlassOf's");
+
+    /* (e) one poll of the five rejecting: the other four land, the clock re-arms */
+    const names = ["stationPoll", "weldPoll", "glzPoll", "fabrPoll", "dayPoll"];
+    const real = names.map(k => global[k]), realCatch = global.stationCatchUp, realTO = global.setTimeout;
+    const landed = [];
+    names.forEach(k => { global[k] = async () => { if (k === "glzPoll") throw new Error("glazing blew up"); landed.push(k); return false; }; });
+    global.stationCatchUp = () => {};
+    let body = null, wait = null;
+    A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }");
+    global.setTimeout = (fn, ms) => { body = fn; wait = ms; return realTO(() => {}, 0); };
+    stationTick();
+    await body();
+    global.setTimeout = realTO;
+    names.forEach((k, i) => { global[k] = real[i]; });
+    global.stationCatchUp = realCatch;
+    assert.deepStrictEqual(landed, ["stationPoll", "weldPoll", "fabrPoll", "dayPoll"], "the other four still ran");
+    assert.ok(A("stationPollT") !== null, "and the clock was armed again, after they settled");
+    assert.strictEqual(wait, 5000, "five seconds, the tablets' pace");
+    A("if (stationPollT) { clearTimeout(stationPollT); stationPollT = null; }" +
+      "STATION_ITEMS = null; STATION_OK = null; FABR_ITEMS = null; FABR_OK = null; GLZ_ITEMS = null;");
+    pass("a rejecting poll never stops the tick: four land, the clock re-arms at five seconds");
+  }
 
   /* ================= 16. what the station page cannot do ================= */
   const stationSrc = src("station.js"), glassSrc = src("glass.html"), coreSrc = src("station-core.js");

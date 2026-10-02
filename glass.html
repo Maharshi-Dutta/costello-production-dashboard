@@ -72,30 +72,23 @@
      idle lock any more, so the name on screen is the name every tap is logged
      under: it is the brightest thing in the row, the name comes first in the
      pill, and it is the LAST thing to give way - #gtotal shrinks (and wraps
-     inside its own pill) long before the ellipsis reaches the name. */
-  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+     inside its own pill) long before the ellipsis reaches the name.
+     17 px, and the row's spare room is the name's (flex-grow): it is the one
+     thing on row one that grows, and it shrinks only when nothing else can. */
+  #whois { font-size:17px; font-weight:700; color:var(--onbrand);
            background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
            padding:7px 14px; min-height:38px; display:flex; align-items:center;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto }
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto }
   /* the ellipsis needs a block to live in: the pill is a flex box */
   #whois { display:block; line-height:22px; min-width:80px }
   #whois:empty { display:none }
   /* the stages they hold on this tablet follow the name where there is room.
      Under 1000 px the brand already says which tablet this is, so the pill is
-     the name alone and does not shrink at all - any shrink, however small,
-     puts an ellipsis on it - up to a width the rest of the row can always
-     spare (measured at 700 and 801 px with the capsule showing and a
-     four-digit count beside it). The row's "tablet" break moved from 900 to
-     1000 px with Switch: at full size it no longer fitted under that. */
+     the name alone. The row's "tablet" break moved from 900 to 1000 px with
+     Switch: at full size it no longer fitted under that. */
   #whois::after { content:" · " attr(data-stages); font-weight:500 }
   @media (max-width:1000px){
-    #whois { flex:none; max-width:180px }
     #whois::after { content:none }
-  }
-  @media (max-width:800px){
-    #whois { max-width:118px }
-    /* no capsule in the row: its room is the name's */
-    .toprow:has(#gwait[hidden]) #whois { max-width:172px }
   }
   #switchbtn, #stagebtn, #daybtn, #cutfirst { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:44px; padding:0 13px; font-size:14px; font-weight:600;
@@ -144,7 +137,7 @@
   #gtabs button.on { background:var(--onbrand); color:var(--brand) }
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-            padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:100; line-height:1.35; min-width:min-content;
+            padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:10000; line-height:1.35; min-width:min-content;
             display:flex; align-items:center; justify-content:center }
   /* "N waiting on glass": the jobs fabrication has finished and the person
      signed in has not (2026-10-01). Only there when N > 0; a tap shows only

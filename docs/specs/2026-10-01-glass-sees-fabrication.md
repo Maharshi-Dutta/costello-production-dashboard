@@ -1,6 +1,6 @@
 # Glass tablets see the fabrication stage — brief (2026-10-01)
 
-Status: design approved by the owner 2026-10-01, not built.
+Status: built on branch `glass-sees-fabrication`, then folded into `2026-10-02-stations-see-each-other.md` (branch `cross-station-direct-read`), which makes its read the shared reader and adds the hotmelt cutting line. Awaiting the owner's demo and go.
 
 Read first: `docs/fabrication-station.md`, `docs/glass-two-stage.md`,
 `docs/station-feeder.md`, `docs/STATIONS.md` ("Adding a station", step 7 — the

@@ -361,6 +361,7 @@ JOBS.blockNames = NAMES;
   const oldRule = [
     item({ Title: "R8001", Job: "R8001", Customer: "Customer One …", Section: "In production",
            Seq: 0, Active: "Yes", Windows: 6, Doors: 2, Total: 8, AstragalTotal: 0,
+           Glass: "no", Fabrication: "no",
            Comment: "rang on …, eircode …, will collect Friday",
            Glazed: 8, GlazedBy: "the glazer", GlazedAt: "2026-09-22T08:00:00.000Z",
            DoneBy: "the glazer", DoneAt: "2026-09-22T08:00:00.000Z" }, "901"),
@@ -1192,25 +1193,51 @@ JOBS.blockNames = NAMES;
   {
     const rj = [mkJob({ id: "R8201", cust: "Customer R", wnd: 4, blk: 4, seq: 20 }),
                 mkJob({ id: "R8202", cust: "Customer S", wnd: 2, blk: 4, seq: 21 })];
-    /* 2026-10-02: the two status columns are nobody's any more. The slice does
-       not carry them, and NO feeder write - an add, or a patch of a row that
-       still holds the old words - has either key (exact keys). */
-    const sl = Z.glzSlice(rj, NAMES);
-    assert.ok(sl.every(r => !("glass" in r) && !("fab" in r)), "the slice carries no status word");
+    /* 2026-10-02, fix pass: the two columns carry a FACT off the sheet - does
+       the job have glass, does it have windows to fabricate - and never a
+       status. Every feeder write that names either says "yes" or "no" and
+       nothing else, and a row still holding an old status word is put right. */
+    const rjn = [
+      mkJob({ id: "R8201", cust: "Customer R", wnd: 4, blk: 4, seq: 20, glass: { DG: 3 },
+              prodsMain: [{ n: "CASEMENT WINDOWS", f: 4, s: 4, t: 0 }, { n: "PVC DOOR", f: 1, s: 1, t: 0 }] }),
+      mkJob({ id: "R8202", cust: "Customer S", wnd: 2, blk: 4, seq: 21, glass: { TUFF: 2 },
+              prodsMain: [{ n: "PVC DOOR", f: 1, s: 1, t: 0 }] }),
+      mkJob({ id: "R8207", cust: "Customer T", wnd: 1, blk: 4, seq: 22, glass: { ARCH: 2 },
+              prodsMain: [{ n: "CASEMENT WINDOWS", f: 0, s: 0, t: 0 }, { n: "BIFOLD", f: 2, s: 0, t: 0 }] })];
+    assert.deepStrictEqual(rjn.map(j => Z.glzNeeds(j, NAMES)),
+      [{ glass: true, fab: true }, { glass: true, fab: false }, { glass: false, fab: false }],
+      "glass: DG / TG or TUFF on the sheet; fab: a WINDOW group the fabrication feeder would feed - " +
+      "a door group and a window group of noughts are not one; ARCH is not glass the floor works on");
+    assert.deepStrictEqual(rjn.map(j => Z.glzNeeds(j, NAMES).fab),
+      rjn.map(j => FABC.fbSlice([j], NAMES).some(r => !FABC.fbIsDoorGroup(r.group))),
+      "and it is the fabrication feeder's own slice that is asked");
+    const sl = Z.glzSlice(rjn, NAMES);
+    assert.deepStrictEqual(sl.map(r => [r.job, r.glass, r.fab]),
+      [["R8201", true, true], ["R8202", true, false], ["R8207", false, false]], "the slice carries the two facts");
     const FEEDER_KEYS = ["Title", "Job", "Customer", "Section", "Seq", "Active", "Windows", "Doors",
-                         "Total", "Comment", "AstragalTotal", "FedAt", "FedBy"];
+                         "Total", "Comment", "AstragalTotal", "Glass", "Fabrication", "FedAt", "FedBy"];
     assert.deepStrictEqual(Z.GLZ_FEEDER_WRITES.slice().sort(), FEEDER_KEYS.slice().sort());
-    const stale = [item({ Title: "R8201", Job: "R8201", Customer: "Old name", Section: "Ready to fit",
-      Seq: 1, Active: "Yes", Windows: 1, Doors: 0, Total: 1, AstragalTotal: 0, Comment: "",
-      Glass: "done", Fabrication: "part:1/2" }, "960")];
+    const R1 = Z.glzFeederFields(sl[0]);
+    const stale = [item(Object.assign({}, R1, { Title: "R8201", Glass: "done", Fabrication: "part:1/2" }), "960"),
+                   item(Object.assign({}, Z.glzFeederFields(sl[1]), { Title: "R8202" }), "961")];
     const plan = ST.feedPlan(sl, stale, { at: "2026-10-02T09:00:00.000Z", by: "the office", def: Z.GLAZE });
-    assert.ok(plan.patches.length === 1 && plan.adds.length === 1, "one row patched, one added");
-    plan.patches.map(p => p.fields).concat(plan.adds).forEach(f => Object.keys(f).forEach(k =>
-      assert.ok(FEEDER_KEYS.indexOf(k) >= 0, "a feeder write carries `" + k + "`")));
-    assert.deepStrictEqual(Object.keys(plan.adds[0]).sort(), FEEDER_KEYS.slice().sort());
-    assert.deepStrictEqual(Z.glzFloorOnly({ Glass: "done", Fabrication: "done", Glazed: 1 }), { Glazed: 1 });
+    assert.deepStrictEqual([plan.patches.map(p => p.id), plan.adds.length], [["960"], 1],
+      "the row holding old words is patched, the row already right is left, the new job is added");
+    assert.deepStrictEqual([plan.patches[0].fields.Glass, plan.patches[0].fields.Fabrication], ["yes", "yes"]);
+    plan.patches.map(p => p.fields).concat(plan.adds).forEach(f => {
+      Object.keys(f).forEach(k => assert.ok(FEEDER_KEYS.indexOf(k) >= 0, "a feeder write carries `" + k + "`"));
+      ["Glass", "Fabrication"].forEach(k => assert.ok(!(k in f) || f[k] === "yes" || f[k] === "no",
+        "a feeder write's " + k + " is only ever yes or no: " + f[k]));
+    });
+    assert.deepStrictEqual([plan.adds[0].Glass, plan.adds[0].Fabrication], ["no", "no"]);
+    assert.deepStrictEqual(Z.glzFloorOnly({ Glass: "yes", Fabrication: "no", Glazed: 1 }), { Glazed: 1 },
+      "and no tap can carry either");
+    assert.deepStrictEqual([{ Glass: "yes", Fabrication: "no" }, { Glass: "No ", Fabrication: "YES" }, {},
+                            { Glass: "done", Fabrication: "part:1/2" }].map(f => Z.glzRecord(item(f)).needs),
+      [{ glass: true, fab: false }, { glass: false, fab: true }, { glass: null, fab: null }, { glass: null, fab: null }],
+      "the card reads them back: yes true, no false, blank or any other word null - not re-fed yet");
     assert.strictEqual(typeof Z.glzKeepStatus, "undefined");
-    pass("ready: no feeder write and no tap carries Glass or Fabrication (exact keys)");
+    pass("ready: Glass and Fabrication are fed as yes / no facts off the sheet, never a status; no tap carries them");
 
     /* the words, from the two stations' own list rows and nothing else */
     const fab = (job, group, o) => item(Object.assign({ Title: job + "|" + group, Job: job, Group: group,
@@ -1222,52 +1249,94 @@ JOBS.blockNames = NAMES;
       fab("R8202", "CASEMENT WINDOWS", { Frames: 4, FramesDone: 1, Sashes: 0, SashesDone: 0 }),
       fab("R8203", "PVC SMART", { Frames: 1, FramesDone: 0 }),
       fab("R8204", "CASEMENT WINDOWS", { Frames: 3, FramesDone: 0, Section: "Ready to fit" }),
-      fab("R8205", "CASEMENT WINDOWS", { Frames: 3, FramesDone: 3, Active: "No" })]);
+      fab("R8205", "CASEMENT WINDOWS", { Frames: 3, FramesDone: 3, Active: "No", OnSheet: "No" }),
+      /* as the feeder really writes a job in a finished section: not Active, still on the sheet */
+      fab("R8208", "CASEMENT WINDOWS", { Frames: 3, FramesDone: 1, Section: "Ready to fit", Active: "No", OnSheet: "Yes" }),
+      fab("R8208", "PVC DOOR", { Frames: 1, FramesDone: 0, Section: "Ready to fit", Active: "No", OnSheet: "Yes" }),
+      /* a later section that is NOT one of the finished three: its own counts */
+      fab("R8209", "CASEMENT WINDOWS", { Frames: 3, FramesDone: 1, Section: "Can sell as second hand", Active: "No", OnSheet: "Yes" })]);
     assert.deepStrictEqual(byJob.R8201, { done: 12, total: 12, finished: false },
       "window groups only: the unfinished door group is not counted");
     assert.deepStrictEqual(byJob.R8202, { done: 1, total: 4, finished: false });
     assert.strictEqual(byJob.R8203, undefined, "a job of doors alone has no entry");
     assert.strictEqual(byJob.R8204.finished, true, "finished on the sheet");
-    assert.strictEqual(byJob.R8205, undefined, "a row that is not Active is not read");
+    assert.strictEqual(byJob.R8205, undefined, "a row that has left the sheet is not read");
+    assert.ok(byJob.R8208 && byJob.R8208.finished === true,
+      "a job in a finished section is not Active and is still read: its windows are finished");
+    assert.deepStrictEqual(byJob.R8209, { done: 1, total: 3, finished: false });
     const glass = ST.jobRecords([
       item({ Title: "R8201", Job: "R8201", Total: 20, TuffTotal: 4, Cut: 20, Hotmelt: 20, Tuff: 4, Active: "Yes" }),
       item({ Title: "R8202", Job: "R8202", Total: 20, TuffTotal: 4, Cut: 12, Hotmelt: 5, Tuff: 1, Active: "Yes" }),
       item({ Title: "R8204", Job: "R8204", Total: 6, TuffTotal: 0, Cut: 0, Hotmelt: 0, Active: "Yes" }),
-      item({ Title: "R8206", Job: "R8206", Total: 6, TuffTotal: 0, OfficeDone: "Yes", Active: "No" })]);
-    const both = { glass: true, fab: true };
-    const now = j => Z.glzStatusNow(glass[j], byJob[j], both);
+      item({ Title: "R8206", Job: "R8206", Total: 6, TuffTotal: 0, OfficeDone: "Yes", Active: "No", OnSheet: "Yes" }),
+      /* the glass was taken off the job: the feeder's GLASS_GONE */
+      item({ Title: "R8208", Job: "R8208", Total: 6, TuffTotal: 0, Cut: 2, Active: "No", OnSheet: "No" })]);
+    const both = { glass: true, fab: true }, none = { glass: false, fab: false };
+    const now = (j, needs) => Z.glzStatusNow(glass[j], byJob[j], both, needs === undefined ? none : needs);
     assert.deepStrictEqual(now("R8201"), { glass: "done", fab: "done" },
       "windows fabricated, door group not: done");
     assert.deepStrictEqual(now("R8202"), { glass: "part:12/20:5/20:tuff 1/4", fab: "part:1/4" });
-    assert.deepStrictEqual(now("R8203"), { glass: "", fab: "" }, "no glass row, no windows to fabricate");
+    assert.deepStrictEqual(now("R8203"), { glass: "", fab: "" },
+      "no glass row, no fabrication entry, and the sheet says the job has neither: nothing to do");
     assert.deepStrictEqual(now("R8204"), { glass: "none", fab: "done" });
     assert.deepStrictEqual(now("R8206"), { glass: "done", fab: "" }, "the office's glass-complete mark");
+    assert.deepStrictEqual(now("R8208", { glass: true, fab: true }), { glass: "", fab: "done" },
+      "a glass row marked off the sheet is no glass, whatever is on it; fabrication in a finished section is done");
     assert.strictEqual(Z.glzReady(now("R8201").glass, now("R8201").fab), true);
     assert.deepStrictEqual(Z.glzStatusChip("glass", now("R8202").glass),
       { cls: "part", words: "Glass: cut 12/20 · hotmelt 5/20 · tuff 1/4" });
-    pass("ready: status words from the glass and fabrication rows alone, window groups only");
+    pass("ready: status words from the glass and fabrication rows alone, window groups only, finished sections done");
+
+    /* NOT FED YET IS NOT NOTHING TO DO (fix pass 2026-10-02). Glass done and no
+       fabrication entry: ready only when the sheet says there are no windows
+       to fabricate. And the same the other way round. */
+    const rdy = (j, needs) => { const s = Z.glzStatusNow(glass[j], byJob[j], both, needs); return [s.glass, s.fab, Z.glzReady(s.glass, s.fab)]; };
+    assert.deepStrictEqual(rdy("R8206", { glass: true, fab: true }), ["done", "?", false],
+      "glass done, no fabrication entry, the sheet says it has windows: not fed yet - NOT ready");
+    assert.deepStrictEqual(rdy("R8206", { glass: true, fab: false }), ["done", "", true],
+      "the sheet says it has none: ready");
+    [null, undefined, {}, { glass: null, fab: null }].forEach(needs =>
+      assert.deepStrictEqual(rdy("R8206", needs), ["done", "?", false], "needs not known (a row not re-fed yet): not ready"));
+    const fabOnly = (needs) => { const s = Z.glzStatusNow(undefined, byJob.R8201, both, needs); return [s.glass, s.fab, Z.glzReady(s.glass, s.fab)]; };
+    assert.deepStrictEqual(fabOnly({ glass: true, fab: true }), ["?", "done", false], "fabricated, no glass row, the sheet has glass: not ready");
+    assert.deepStrictEqual(fabOnly({ glass: false, fab: true }), ["", "done", true], "the sheet has no glass: ready");
+    assert.deepStrictEqual(fabOnly(null), ["?", "done", false]);
+    pass("ready: a missing row is 'nothing to do' only when the sheet says so; not fed yet is never ready");
 
     /* unknown is never ready, and never "none" or blank */
     [undefined, {}, { glass: false, fab: false }].forEach(k =>
       assert.deepStrictEqual(Z.glzStatusNow(glass.R8201, byJob.R8201, k), { glass: "?", fab: "?" }));
     assert.deepStrictEqual(Z.glzStatusNow(null, byJob.R8201, { glass: false, fab: true }), { glass: "?", fab: "done" });
-    assert.deepStrictEqual(Z.glzStatusNow(glass.R8201, undefined, { glass: true, fab: false }), { glass: "done", fab: "?" });
+    assert.deepStrictEqual(Z.glzStatusNow(glass.R8201, undefined, { glass: true, fab: false }, none), { glass: "done", fab: "?" });
+    assert.deepStrictEqual(Z.glzStatusNow(glass.R8201, byJob.R8201, { glass: "off", fab: "off" }, none), { glass: "off", fab: "off" },
+      "a list that cannot be read is 'off', whatever rows or needs are to hand");
     assert.strictEqual(Z.glzReady("?", "done"), false, "an unknown glass never reads ready");
     assert.strictEqual(Z.glzReady("done", "?"), false);
     assert.strictEqual(Z.glzReady("?", "?"), false);
+    assert.deepStrictEqual([Z.glzReady("off", "done"), Z.glzReady("done", "off"), Z.glzReady("off", "")], [false, false, false],
+      "and neither does one that is not available");
     assert.deepStrictEqual(Z.glzStatusChip("glass", "?"), { cls: "none", words: "Glass: checking" });
+    assert.deepStrictEqual([Z.glzStatusChip("glass", "off"), Z.glzStatusChip("fab", "off")],
+      [{ cls: "none", words: "Glass: not available" }, { cls: "none", words: "Fabrication: not available" }]);
+    assert.deepStrictEqual([Z.GLZ_UNKNOWN, Z.GLZ_OFF], ["?", "off"]);
     /* the glass list refused (403), then simply not there (404): the reader has
-       no rows, and the word is "?" - not "none", not blank */
+       no rows, and the word is "off" - not available - once it has answered,
+       "?" - checking - only before. Never "none", never blank. The page's own
+       rule for `known` is glazing.js's knownOf. */
+    assert.ok(/const knownOf = R => !R\.ready \? false : R\.items \? true : GZ\.GLZ_OFF;/.test(src("glazing.js")) &&
+              /\{ glass: knownOf\(OGLASS\), fab: knownOf\(OFAB\) \}, c\.needs\)/.test(src("glazing.js")),
+      "the tablet passes each reader's state, and its own row's needs");
     const GR = STU.stuListReader({ site: ST.GLASS.site, list: ST.GLASS.list, fields: ST.GLASS.fields, retryMs: 0 });
-    const word = () => Z.glzStatusNow(null, byJob.R8201, { glass: GR.ready && !!GR.items, fab: true }).glass;
-    assert.strictEqual(word(), "?", "before the first read");
+    const knownOf = R => !R.ready ? false : R.items ? true : Z.GLZ_OFF;
+    const word = () => Z.glzStatusNow(null, byJob.R8201, { glass: knownOf(GR), fab: true }, none).glass;
+    assert.strictEqual(word(), "?", "before the first read: checking");
     OWN_REFUSE = 1; await GR.read(); OWN_REFUSE = 0;
     assert.ok(GR.ready && GR.items === null);
-    assert.strictEqual(word(), "?", "403");
+    assert.strictEqual(word(), "off", "403: not available");
     await GR.read();
     assert.ok(GR.ready && GR.items === null && GR.missing);
-    assert.strictEqual(word(), "?", "404");
-    pass("ready: unknown is never ready; a glass list refused or missing is ?, not none");
+    assert.strictEqual(word(), "off", "404: not available");
+    pass("ready: unknown is never ready; checking before the first answer, not available for a list refused or missing");
 
     assert.strictEqual(Z.glzFabStatus(0, 0), "");
     assert.strictEqual(Z.glzFabStatus(0, 14), "none");

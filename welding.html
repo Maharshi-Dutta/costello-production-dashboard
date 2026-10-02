@@ -72,13 +72,18 @@
            text-transform:uppercase; white-space:nowrap; flex:none }
   /* WHO IS SIGNED IN, with Switch right beside it (2026-10-02, as glass.html).
      There is no idle lock any more, so the name on screen is the name every
-     tap is logged under: the brightest thing in the row. It is the one thing
-     on row 1 that may shrink, and the ellipsis eats " · welding" first. */
-  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+     tap is logged under: the brightest thing in the row. 17 px, the NAME ALONE
+     is its text, and the row's spare room is the name's (flex-grow); nothing
+     else on row 1 can shrink, so it is also the one thing that gives way when
+     the row is full. The stage rides in data-stages and follows the name only
+     where there is room (1000 px and up), as on the other three pages. */
+  #whois { font-size:17px; font-weight:700; color:var(--onbrand);
            background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
            padding:7px 14px; min-height:38px; display:block; line-height:22px;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:0 1 auto }
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:1 1 auto }
   #whois:empty { display:none }
+  #whois::after { content:" · " attr(data-stages); font-weight:500 }
+  @media (max-width:1000px){ #whois::after { content:none } }
   /* what the person signed in has left over the whole board, read at a glance
      and never tapped - so 38 px rather than a 44 px target, like #whois */
   #gtotalf, #gtotals { font-size:16px; font-weight:700; color:var(--onbrand);

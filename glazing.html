@@ -74,15 +74,15 @@
      There is no idle lock any more, so the name on screen is the name every
      tap is logged under: the brightest thing in the row, and the last to give
      way - #gtotal shrinks, and wraps inside its own pill, before the ellipsis
-     reaches the name. The stage follows the name only where there is room. */
-  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+     reaches the name. The stage follows the name only where there is room.
+     17 px, and the row's spare room is the name's (flex-grow). */
+  #whois { font-size:17px; font-weight:700; color:var(--onbrand);
            background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
            padding:7px 14px; min-height:38px; display:block; line-height:22px;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:0 1 auto }
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:80px; flex:1 1 auto }
   #whois:empty { display:none }
   #whois::after { content:" · " attr(data-stages); font-weight:500 }
   @media (max-width:1000px){
-    #whois { flex:none; max-width:180px }
     #whois::after { content:none }
   }
   /* what is left across the whole board, read at a glance and never tapped -
@@ -90,7 +90,7 @@
      row 1 that shrinks: two lines inside its own pill rather than a third row. */
   #gtotal { font-size:16px; font-weight:700; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-            padding:7px 16px; min-height:38px; flex:0 1 auto; min-width:0; line-height:1.2;
+            padding:7px 16px; min-height:38px; flex:0 10000 auto; min-width:12em; line-height:1.2;
             display:flex; align-items:center; justify-content:center; text-align:center }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   /* 16px exactly: anything smaller and iOS zooms the whole page in when the box

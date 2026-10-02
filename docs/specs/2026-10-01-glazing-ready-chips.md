@@ -1,6 +1,6 @@
 # Glazing: glass and fabrication status, ready to glaze (2026-10-01)
 
-Status: built on branch `glazing-ready-chips`, awaiting the owner's go.
+Status: built on branch `glazing-ready-chips`, then folded into `2026-10-02-stations-see-each-other.md` (branch `cross-station-direct-read`). The office-fed `Glass` / `Fabrication` status words in this brief are gone: the tablet reads the two lists itself, and the two columns now hold yes/no facts. Awaiting the owner's demo and go.
 
 ## Owner's words
 

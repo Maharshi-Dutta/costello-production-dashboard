@@ -987,11 +987,14 @@ const pass = m => { n++; console.log("  ok  " + m); };
     gsRow("E5", { Total: 20, Cut: 1, OfficeDone: "Yes", TuffTotal: 2 }),
     gsRow("G7", { Total: 20, Cut: 1, OfficeDone: "Yes" }),
     gsRow("H8", { Total: 0, TuffTotal: 0, OfficeDone: "Yes" }), gsRow("I9", { Total: 20 }),
-    gsRow("J10", { Total: 20, Cut: 20, Hotmelt: 20, TuffTotal: 2, Tuff: 2, Active: "No" })];
+    /* a later section: not Active, still on the sheet */
+    gsRow("J10", { Total: 20, Cut: 20, Hotmelt: 20, TuffTotal: 2, Tuff: 2, Active: "No", OnSheet: "Yes" }),
+    /* the glass was taken off the job (the feeder's GLASS_GONE): no chip, and not "none" */
+    gsRow("K11", { Total: 20, Cut: 5, Active: "No", OnSheet: "No" }), gsRow("L12", { Total: 20, Active: "No", OnSheet: "No" })];
   const gOf = F.fbGlassOf(gsItems, true);
-  assert.deepStrictEqual(["B2", "A1", "D4", "E5", "G7", "H8", "I9", "J10", "Z0"].map(gOf),
-    ["done", "part:14/20:9/20:tuff 0/2", "part:20/20:20/20:tuff 1/2", "part:20/20:20/20:tuff 0/2", "done", "", "none", "done", ""],
-    "done needs Tuff when the job has Tuff; OfficeDone stands in for cut and hotmelt only; no totals or no row: no glass");
+  assert.deepStrictEqual(["B2", "A1", "D4", "E5", "G7", "H8", "I9", "J10", "Z0", "K11", "L12"].map(gOf),
+    ["done", "part:14/20:9/20:tuff 0/2", "part:20/20:20/20:tuff 1/2", "part:20/20:20/20:tuff 0/2", "done", "", "none", "done", "", "", ""],
+    "done needs Tuff when the job has Tuff; OfficeDone stands in for cut and hotmelt only; no totals, no row or a row off the sheet: no glass");
   assert.strictEqual(F.fbGlassChip(gOf("A1")).words, "Glass: cut 14/20 · hotmelt 9/20 · tuff 0/2", "the breakdown on a part-done chip");
   assert.deepStrictEqual([F.fbGlassOf(gsItems, false)("B2"), F.fbGlassOf(null, false)("B2"), F.fbGlassOf(null, true)("B2")],
     ["wait", "wait", "off"], "a reader that has not answered is 'wait'; one with no rows (403 / 404) is 'off'");
@@ -1271,7 +1274,7 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.strictEqual(A("fabrGlassOf('R9200')"), "part:12/20:5/20", "derived from the glass row this page already holds");
   assert.strictEqual(A("fabrGlassOf('R9201')"), "", "no glass row: blank");
   A("STATION_OK = false;");
-  assert.strictEqual(A("fabrGlassOf('R9200')"), "", "the glass list unreadable: blank, never a 'not started' nobody said");
+  assert.strictEqual(A("fabrGlassOf('R9200')"), "off", "the glass list unreadable: not available, never a 'not started' nobody said");
   const sent = [];
   global.__SEND = async body => {
     if ("GlazeTotal" in body) throw new Error("PATCH x -> 400 {\"error\":\"Field 'GlazeTotal' is not recognized\"}");
@@ -1351,22 +1354,35 @@ const pass = m => { n++; console.log("  ok  " + m); };
   T("READY = false; tap('1', 'glazing', 1); READY = true;");
   assert.deepStrictEqual([T("Object.keys(QUEUE).length"), T("HINT['R9100'].why")], [0, "part"]);
 
-  /* Take, then Take again: refused for 15 s (a delta read can run a turn behind the write) */
+  /* Take, then Take again: refused until an assignments read that STARTED after
+     the request landed has been answered (fix pass 2026-10-02; it was a fixed 15 s) */
   {
     const reqs = () => TW.filter(w => w.what === "add:" + T("FABC.FB_ASSIGN_LIST")).length;
+    const K = "TAKING['R9100|PVC DOOR|frames']";
     setAssign(true, []);
-    T("ASG.items = []; ASG.missing = false; ASG.offAt = Date.now(); TAKING = {};");   // the read after the write sees nothing new yet
+    T("ASG.items = []; ASG.missing = false; ASG.offAt = Date.now(); TAKING = {};");   // the reader is waiting out a failure: no read
     TW.length = 0;
     await T("take('1', 'frames')");
-    assert.deepStrictEqual([reqs(), T("TAKING['R9100|PVC DOOR|frames'] > 1")], [1, true], "Take sends one request and stamps it");
+    assert.deepStrictEqual([reqs(), T(K + " > 1")], [1, true], "Take sends one request and stamps it");
     await T("take('1', 'frames')");
     assert.strictEqual(reqs(), 1, "a second Take inside the hold is refused, though the row has not shown yet");
-    T("TAKING['R9100|PVC DOOR|frames'] = Date.now() - TAKE_HOLD_MS - 1;");
+    T("ASG.asOf = " + K + " - 1;");
+    await T("readAssign()");
+    assert.strictEqual(T(K + " > 1"), true, "a read that went out BEFORE the request landed does not let it go");
+    T(K + " = Date.now() - 20000;");
     await T("take('1', 'frames')");
-    assert.deepStrictEqual([reqs(), T("TAKE_HOLD_MS")], [2, 15000], "and allowed again once the 15 s are up");
-    T("TAKING = {}; SOFT = '';");
+    assert.strictEqual(reqs(), 1, "and neither does the clock: twenty seconds on, with no read answered, it is still held");
+    T("ASG.asOf = " + K + " + 1;");
+    await T("readAssign()");
+    assert.strictEqual(T(K), undefined, "a read that went out after it does");
+    await T("take('1', 'frames')");
+    assert.strictEqual(reqs(), 2, "and Take is allowed again (the row is not in what was read)");
+    T(K + " = Date.now() - TAKE_HOLD_MS - 1; ASG.asOf = 0;");
+    await T("take('1', 'frames')");
+    assert.deepStrictEqual([reqs(), T("TAKE_HOLD_MS")], [3, 60000], "the ceiling: a list that never answers holds it for a minute, no longer");
+    T("TAKING = {}; SOFT = ''; ASG.asOf = 0;");
     setAssign(null);
-    pass("Take is refused for 15 s after a request, then allowed");
+    pass("Take is held until an assignments read that started after the request has been answered, 60 s at most");
   }
 
   /* the glass: the tablet's own read of `Glass station`, never the fabrication list's `Glass` column */
