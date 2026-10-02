@@ -1184,6 +1184,68 @@ JOBS.blockNames = NAMES;
     pass("astragal: the station report carries the astragal total and done count");
   }
 
+  /* ---------- READY TO GLAZE: glass and fabrication status (owner, 2026-10-01) ---------- */
+  {
+    const rj = [mkJob({ id: "R8201", cust: "Customer R", wnd: 4, blk: 4, seq: 20 }),
+                mkJob({ id: "R8202", cust: "Customer S", wnd: 2, blk: 4, seq: 21 })];
+    const sl = Z.glzSlice(rj, NAMES, j => j.id === "R8201" ? { glass: "done", fab: "part:8/14" } : null);
+    assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], [null, null]]);
+    /* unknown keeps the row's own word; a known word is left alone */
+    Z.glzKeepStatus(sl, [item({ Title: "R8202", Glass: "done", Fabrication: "part:1/2" }, "961"),
+                         item({ Title: "R8201", Glass: "none", Fabrication: "none" }, "962")]);
+    assert.deepStrictEqual(sl.map(r => [r.glass, r.fab]), [["done", "part:8/14"], ["done", "part:1/2"]]);
+    assert.strictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [])[0].glass, "?",
+      "unknown with no word on the row is ?, never blank (blank = no glass on the job)");
+    assert.strictEqual(Z.glzKeepStatus(Z.glzSlice([rj[1]], NAMES, () => null), [], true)[0].glass, "",
+      "while the office is still loading its lists a wordless row is left alone");
+    assert.strictEqual(Z.glzReady("?", "done"), false, "an unknown glass never reads ready");
+    assert.strictEqual(Z.glzReady("done", "?"), false);
+    assert.deepStrictEqual(Z.glzStatusChip("glass", "?"), { cls: "none", words: "Glass: checking" });
+    assert.strictEqual(Z.glzFeederFields(sl[0]).Glass, "done");
+    assert.strictEqual(Z.glzFeederFields(sl[0]).Fabrication, "part:8/14");
+    assert.ok(Z.GLZ_FLOOR_FIELDS.indexOf("Glass") < 0 && Z.GLZ_FLOOR_FIELDS.indexOf("Fabrication") < 0,
+      "the status columns are feeder facts: the tablet can never write them");
+    assert.deepStrictEqual(Z.glzFloorOnly({ Glass: "done", Fabrication: "done", Glazed: 1 }), { Glazed: 1 });
+    assert.notStrictEqual(ST.sliceHash(sl, Z.GLAZE),
+      ST.sliceHash(Z.glzSlice(rj, NAMES, () => ({ glass: "done", fab: "done" })), Z.GLAZE),
+      "a status change re-feeds");
+    /* a row fed before this build has no status columns: blank wants blank, so
+       the first feed with nothing known patches nothing */
+    const old = [item({ Title: "R8202", Job: "R8202", Customer: "Customer S", Section: "In production",
+      Seq: 21, Active: "Yes", Windows: 2, Doors: 0, Total: 2, AstragalTotal: 0, Comment: "" }, "960")];
+    assert.strictEqual(ST.feedPlan(Z.glzSlice([rj[1]], NAMES), old,
+      { at: "2026-10-01T09:00:00.000Z", by: "the office", def: Z.GLAZE }).patches.length, 0);
+    pass("ready: Glass and Fabrication are feeder facts, hashed, never floor-writable, blank patches nothing");
+
+    assert.strictEqual(Z.glzFabStatus(0, 0), "");
+    assert.strictEqual(Z.glzFabStatus(0, 14), "none");
+    assert.strictEqual(Z.glzFabStatus(8, 14), "part:8/14");
+    assert.strictEqual(Z.glzFabStatus(14, 14), "done");
+    assert.strictEqual(Z.glzFabStatus(0, 14, true), "done", "finished on the sheet is done");
+    assert.strictEqual(Z.glzStatusChip("glass", ""), null);
+    assert.deepStrictEqual(Z.glzStatusChip("glass", "done"), { cls: "done", words: "Glass ✓ done" });
+    assert.deepStrictEqual(Z.glzStatusChip("glass", "part:12/20:5/20:tuff 1/4"),
+      { cls: "part", words: "Glass: cut 12/20 · hotmelt 5/20 · tuff 1/4" });
+    assert.deepStrictEqual(Z.glzStatusChip("fab", "part:8/14"), { cls: "part", words: "Fabrication: 8/14" });
+    assert.deepStrictEqual(Z.glzStatusChip("fab", "none"), { cls: "none", words: "Fabrication: not started" });
+    pass("ready: status texts and chip words");
+
+    assert.strictEqual(Z.glzReady("done", "done"), true);
+    assert.strictEqual(Z.glzReady("done", ""), true, "no fabrication on the job does not hold it back");
+    assert.strictEqual(Z.glzReady("", ""), false, "two blanks is a row not fed yet, not a ready job");
+    assert.strictEqual(Z.glzReady("done", "part:8/14"), false);
+    assert.strictEqual(Z.glzReady("part:1/2:0/2", "done"), false);
+    const rc = (job, g, f, seq) => Z.glzRecord(item({ Title: job, Job: job, Active: "Yes",
+      Section: "In production", Windows: 2, Total: 2, Seq: seq, Glass: g, Fabrication: f }, job.slice(1)));
+    const cards = [rc("R8301", "none", "none", 1), rc("R8302", "done", "done", 2),
+                   rc("R8303", "done", "part:1/2", 3), rc("R8304", "done", "", 4)];
+    assert.deepStrictEqual(Z.glzReadyFirst(cards).map(c => c.job), ["R8302", "R8304", "R8301", "R8303"],
+      "ready first, each group in its own order");
+    assert.notStrictEqual(Z.glzCardSig(cards[0]), Z.glzCardSig(rc("R8301", "done", "none", 1)),
+      "a status change redraws the card");
+    pass("ready: both done (or not needed) is ready; Ready first keeps each group's order");
+  }
+
   const zsrc = src("glazing-core.js") + src("glazing.js") + src("glazing.html");
   ["setFill", "clearFill", "setValues", "appendLog", "saveProgress", "moveJobRow", "batchWrite",
    "/workbook", "downloadWorkbook", "parseWorkbook", "ExcelJS"].forEach(bad =>

@@ -120,6 +120,22 @@
           border:1px dashed var(--line); border-radius:7px; background:var(--surface-2);
           color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
   #more:active { background:var(--line-soft) }
+  /* Ready first (2026-10-01): how many jobs have their glass and fabrication
+     done, and a switch that brings them to the top. Off by default. */
+  #readybtn { display:block; width:100%; min-height:48px; margin:0 0 10px; padding:0 16px;
+              border:1px solid var(--line); border-radius:7px; background:var(--surface);
+              color:var(--ink-2); font-size:15px; font-weight:600; text-align:left; font-family:inherit }
+  #readybtn.on { border-color:var(--good-line); background:var(--good-bg); color:var(--ink) }
+  #readybtn[hidden] { display:none }
+  /* where the job's glass and fabrication have got to: read, never tapped */
+  .rchips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 8px; min-width:0 }
+  .rchip { font-size:13.5px; font-weight:600; padding:4px 10px; border-radius:14px;
+           border:1px solid var(--line); color:var(--ink-3); background:var(--surface-2);
+           max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .rchip.part { border-color:var(--warm-line); color:var(--ink) }
+  .rchip.done { border-color:var(--good-line); background:var(--good-bg); color:var(--good) }
+  .rchip.ready { border-color:var(--good); background:var(--good); color:var(--surface);
+                 text-transform:uppercase; letter-spacing:.03em; font-size:12.5px }
   #more[hidden] { display:none }
   .msg { padding:34px 20px; text-align:center; color:var(--ink-3); font-size:15px; line-height:1.6 }
   .again { margin-top:16px; min-height:48px; padding:0 20px; border:1px solid var(--line);
@@ -285,6 +301,7 @@
 <div id="main" hidden>
   <div id="soft" hidden></div>
   <button id="more" hidden></button>
+  <button id="readybtn" hidden aria-pressed="false"></button>
   <div id="board"></div>
 </div>
 
