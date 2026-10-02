@@ -846,6 +846,16 @@ channel to the other site at all.
 three glass lists are copied into `Floor stations`. One word, and it is the
 last step of that move.
 
+**One read crosses the two sites, and it is not the pin moving** (2026-10-01,
+`docs/specs/2026-10-01-glass-sees-fabrication.md`). The glass tablet reads the
+`Fabrication station` list, read only, to show each job's fabrication stage.
+It asks the `"floor"` channel for that one list and keeps the answer in its own
+`GFAB` (site id, delta token, one-minute retry clock) in `station.js`; the
+glass lists still resolve through `"own"` and share nothing with it. The
+station account must be a member of `Floor stations` for the line to appear;
+without that the cards say "Fabrication: not available" and nothing else
+changes.
+
 ### 8. Tests and docs
 
 A `test_<station>.js` in the offline pattern, added to the verification command

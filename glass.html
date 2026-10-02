@@ -19,6 +19,8 @@
     --brand:#0e0e11; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#6aa9ec;
     --fab:#e8e04a; --done:#e0c98a; --done-bg:#3a3116; --urgent:#f07a72;
+    /* fabrication's own three, as fabrication.html has them (2026-10-01) */
+    --lav:#c9bff0; --pur:#b19cf0; --sht:#7fca7f;
   }
   :root[data-theme="light"] {
     --bg:#f2f1ee; --surface:#fff; --surface-2:#faf9f7; --line:#dcd9d2; --line-soft:#efece7;
@@ -26,6 +28,7 @@
     --brand:#17171a; --onbrand:#f7f6f3; --brand-2:#26262a; --brand-line:#3a3a3e;
     --accent:#184f95;
     --fab:#8a6d00; --done:#8a6a1e; --done-bg:#fff6dd; --urgent:#b3261e;
+    --lav:#5e4f9e; --pur:#4b3591; --sht:#1f6b2c;
   }
   * { box-sizing:border-box }
   [hidden] { display:none !important }
@@ -111,6 +114,22 @@
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
             padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:.1; line-height:1.35; min-width:0;
             display:flex; align-items:center; justify-content:center }
+  /* "N waiting on glass": the jobs fabrication has finished and the person
+     signed in has not (2026-10-01). Only there when N > 0; a tap shows only
+     those cards, a second tap clears it. Under 900 px it reads "N waiting" -
+     the words "on glass" are the ::after, and its aria-label always says all
+     of it - so the header stays two rows at 700 px. When even that is too
+     wide (the hotmelting page, three-digit numbers) it breaks onto two lines
+     inside its own pill, never narrower than its longest word, and the name
+     gives up a little more. The red is the gate's own: the header is dark in
+     both themes. */
+  #gwait { background:var(--brand-2); color:#f07a72; border:1px solid #f07a72; border-radius:24px;
+           min-height:44px; padding:0 11px; font-size:14px; font-weight:700; line-height:1.15;
+           flex:0 .05 auto; min-width:min-content }
+  #gwait::after { content:" on glass" }
+  @media (max-width:900px){ #gwait::after { content:"" } }
+  @media (max-width:760px){ #whois { min-width:60px } }
+  #gwait.on { background:#f07a72; color:#17171a }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
                        border-radius:5px; min-height:44px; padding:0 10px; font-size:13px;
@@ -167,6 +186,18 @@
   /* the section of a job that has left In production (Finished tab only) */
   .csec { font-size:13px; font-weight:600; color:var(--ink-3); white-space:nowrap; flex:none;
           border:1px solid var(--line); border-radius:12px; padding:1px 9px }
+
+  /* what fabrication has done on this job, one line under the counters, read
+     from fabrication's own list (2026-10-01). Muted for not started and not
+     available; lavender in progress, purple done, green finished on the sheet.
+     The badge is the job to do first: fabrication done, this glass not. Both
+     may wrap, so neither can widen a card. */
+  .fabl { margin-top:10px; font-size:13.5px; font-weight:600; color:var(--ink-4); overflow-wrap:anywhere }
+  .fabl.f-progress { color:var(--lav) }
+  .fabl.f-done { color:var(--pur) }
+  .fabl.f-sheet { color:var(--sht) }
+  .fwait { font-size:12.5px; font-weight:700; letter-spacing:.03em; color:var(--bg);
+           background:var(--urgent); border-radius:12px; padding:2px 9px; flex:0 1 auto }
 
   .saving { margin-top:10px; font-size:12px; color:var(--ink-4) }
   .unsaved { margin-top:10px; font-size:12.5px; font-weight:600; color:var(--urgent) }
@@ -349,6 +380,7 @@
     <button id="stagebtn" hidden></button>
     <span id="whois"></span>
     <span id="gtotal" hidden></span>
+    <button id="gwait" aria-pressed="false" hidden></button>
     <span id="upd"></span>
     <button id="themebtn">Light</button>
   </div>
@@ -372,6 +404,7 @@
 <script src="vendor/msal-browser.min.js"></script>
 <script src="graph.js?v=20261002-0817"></script>
 <script src="station-core.js?v=20261002-0817"></script>
+<script src="fabrication-core.js?v=20261002-0817"></script>
 <script src="station-ui.js?v=20261002-0817"></script>
 <script src="station.js?v=20261002-0817"></script>
 </body>

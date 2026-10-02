@@ -301,7 +301,7 @@ const stationFetch = async (url, init) => {
 /** `search` is the query string this fake device was opened with - the page
     reads `location.search` for `?stage=` (2026-09-21). Omitted is a plain
     `glass.html`, which is what every test before that feature assumed. */
-function newStation(search) {
+function newStation(search, fab) {
   const sb = {
     console: console, setTimeout: setTimeout, clearTimeout: clearTimeout,
     setInterval: () => 0, clearInterval: clearInterval,
@@ -312,6 +312,10 @@ function newStation(search) {
   };
   sb.globalThis = sb;
   vm.createContext(sb);
+  /* since 2026-10-01 glass.html also loads fabrication-core.js, before these
+     two. Only section 15d asks for it (`fab`): every older test runs the page
+     without, where the feature is off and sends no request. */
+  if (fab) vm.runInContext(src("fabrication-core.js"), sb, { filename: "fabrication-core.js" });
   /* glass.html loads station-ui.js before station.js (the day sheet lives there) */
   vm.runInContext(src("station-ui.js"), sb, { filename: "station-ui.js" });
   vm.runInContext(src("station.js"), sb, { filename: "station.js" });
@@ -5019,6 +5023,149 @@ const person = (name, stages, pin, active, station) =>
   SQ("if (retryT) { clearTimeout(retryT); retryT = null; }");
   delete mem.cw_stationq;
   pass("a `glazed` tap queued by an old build is dropped on replay: no request, no error, no data touched");
+
+  /* ================= 15d. THE GLASS TABLETS SEE FABRICATION (2026-10-01) ==========
+     docs/specs/2026-10-01-glass-sees-fabrication.md. Read only: one line per
+     card from the `Fabrication station` list, a badge and a filter for the jobs
+     fabrication has finished and this person has not. */
+  const FBC = require("./fabrication-core.js");
+  const fbRow = (title, f, id) => item(Object.assign({ Title: title, Job: title.split("|")[0],
+    Group: title.split("|")[1], Section: "In production", Active: "Yes", OnSheet: "Yes" }, f), id);
+  const fabOne = rows => { const c = FBC.fbOfficeBoard(rows)[0]; return ST.fabOfJob(c ? c.groups : []); };
+  assert.deepStrictEqual(ST.fabOfJob([]), { state: "none", sheet: false, parts: {} }, "no rows: none");
+  assert.strictEqual(fabOne([fbRow("R1|PVC DOOR", { Frames: 2, Sashes: 2 }, 1)]).state, "notstarted");
+  let fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 2, Sashes: 2, SashesDone: 1 }, 1),
+                   fbRow("R1|CASEMENT WINDOWS", { Frames: 3, FramesDone: 1, Transoms: 0, TransomsDone: 0,
+                                                  GlazeTotal: 5, GlazeDone: 5 }, 2)]);
+  assert.strictEqual(fo.state, "progress");
+  assert.deepStrictEqual(fo.parts, { frames: { done: 3, total: 5 }, sashes: { done: 1, total: 2 } },
+    "summed across the job's two groups; a part with total 0 is left out; door glazing is not a part");
+  fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 2, GlazeTotal: 2, GlazeDone: 0 }, 1)]);
+  assert.strictEqual(fo.state, "done", "every line full is done - door glazing, in `extra`, is not counted");
+  assert.strictEqual(fo.sheet, false);
+  fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 0, Section: "Ready to fit", Active: "No" }, 1)]);
+  assert.deepStrictEqual([fo.state, fo.sheet], ["done", true], "a finished section on the sheet gives done");
+  pass("fabOfJob: none / not started / in progress / done, summed over groups, zero parts out, finished section done");
+
+  const gRec = f => ST.jobBoard([item(Object.assign({ Title: "R1", Job: "R1", Total: 6, TuffTotal: 0,
+    Cut: 0, Hotmelt: 0, Tuff: 0, Seq: 1, Active: "Yes", OfficeDone: "No" }, f), 1)])[0];
+  const FDONE = { state: "done" }, FPROG = { state: "progress" };
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), FDONE, ["cut"]), true, "fab done, cutting not complete");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), FPROG, ["cut"]), false, "fab not done: nothing waits");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), { state: "off" }, ["cut"]), false, "nor when it cannot be read");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, Hotmelt: 0 }), FDONE, ["cut"]), false,
+    "a cutter whose cutting is complete is not waiting, though hotmelting is not done");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, Hotmelt: 0 }), FDONE, ["hotmelt"]), true, "the hotmelter is");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, TuffTotal: 4, Tuff: 1 }), FDONE, ["cut", "tuff"]), true,
+    "tuff owed counts for somebody who holds the tuff counter");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, TuffTotal: 4, Tuff: 1 }), FDONE, ["cut"]), false,
+    "and not for somebody who does not");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2, OfficeDone: "Yes" }), FDONE, ["cut"]), false,
+    "glass the office has locked is not this person's to finish");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2, Active: "No" }), FDONE, ["cut"]), false,
+    "and a job that has left In production is not waiting");
+  pass("glassWaiting: only fab done AND this person's own stage not complete; tuff owed for a tuff holder");
+
+  /* the page: its own lookup of the floor site, never the glass one's */
+  mem.cw_stationstage = "cut";
+  delete mem.cw_stationq; delete mem.cw_stationlogq; delete mem.cw_person;
+  /* a page without fabrication-core.js (every sandbox above) has no such feature */
+  reset();
+  assert.strictEqual(S("fabOf('R7001')"), null);
+  assert.strictEqual(await S("readFab()"), false);
+  assert.strictEqual(S("fabLineHtml({ job: 'R7001' })"), "", "it draws no line");
+  assert.strictEqual(REQ.length, 0, "and asks nothing");
+  const sbF = newStation("", true);
+  const SF = code => vm.runInContext(code, sbF);
+  await settle();
+  const FCALLS = [];
+  let fabMode = "refused", fabFeed = [];
+  const fakeCW = Object.assign(Object.create(CW), {
+    stationSite: async which => { FCALLS.push("site:" + which); return which === "floor" ? "FLOORSITE" : FSITE; },
+    forgetStationSite: (look, which) => { FCALLS.push("forget:" + which); },
+    listDelta: async (name, o) => {
+      FCALLS.push("delta:" + name + ":" + o.siteId + ":" + (o.token || ""));
+      if (fabMode === "refused") throw new Error("GET /sites/FLOORSITE/lists -> 403 {\"error\":{\"code\":\"accessDenied\"}}");
+      if (fabMode === "missing") throw new Error("GET /sites/FLOORSITE/lists -> 404 {\"error\":{\"code\":\"itemNotFound\"}}");
+      return { items: fabFeed.map(x => ({ id: x.id, fields: x.fields, removed: false })), next: "tok" + FCALLS.length };
+    }
+  });
+  ["listItems", "listPatch", "listAdd", "listUpsert", "listDelete"].forEach(k => {
+    fakeCW[k] = async name => { FCALLS.push("OTHER:" + k + ":" + name); return null; };
+  });
+  sbF.CW = fakeCW;
+  SF("SITEID = " + JSON.stringify(FSITE) + "; TOKEN = 'tk'; READY = true; PEOPLE_READ = true; QUEUE = {}; LOGQ = {};");
+  SF("ITEMS = " + JSON.stringify([
+    item({ Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6, TuffTotal: 4, Seq: 1,
+           Active: "Yes", OfficeDone: "No", Cut: 4, Hotmelt: 2, Tuff: 0 }, "800"),
+    item({ Title: "R7002", Job: "R7002", Customer: "Customer Two", Total: 3, TuffTotal: 0, Seq: 2,
+           Active: "Yes", OfficeDone: "No", Cut: 0, Hotmelt: 0, Tuff: 0 }, "801")]) + ";");
+  SF("PEOPLE = [{ name: 'Person A', stages: ['cut'], pin: '' }, { name: 'Person T', stages: ['cut', 'tuff'], pin: '' }];");
+  SF("PERSON = PEOPLE[0]; LAST_TAP = Date.now(); render();");
+  const fHtml = () => SF("Object.keys(NODES).map(k => NODES[k].innerHTML).join('')");
+  assert.strictEqual(fHtml().indexOf("FABRICATION DONE") < 0 && SF("Object.keys(NODES).length"), 2);
+
+  await SF("readFab()"); SF("render()");
+  assert.deepStrictEqual(FCALLS, ["site:floor", "delta:Fabrication station:FLOORSITE:"],
+    "it asks for the FLOOR site, and the list in it - and nothing else");
+  assert.strictEqual((fHtml().match(/Fabrication: not available/g) || []).length, 2,
+    "a list that will not be read (403) says so, muted, on every card");
+  assert.ok(fHtml().indexOf('class="fabl"') > 0 && fHtml().indexOf("fwait") < 0, "with no colour and no badge");
+  assert.strictEqual(EL["#gwait"].hidden, true, "and no capsule");
+  assert.deepStrictEqual([SF("SITEID"), SF("TOKEN"), SF("PROBLEM"), SF("SOFT"), SF("READY")], [FSITE, "tk", "", "", true],
+    "and the glass page's own site, token and state are exactly as they were");
+  assert.ok(fHtml().indexOf('data-stage="cut"') > 0, "the steppers are still there");
+  await SF("readFab()");
+  assert.strictEqual(FCALLS.length, 2, "and it is not asked again inside the minute: no retry storm");
+  SF("GFAB.offAt = 0;"); fabMode = "missing"; FCALLS.length = 0;
+  await SF("readFab()");
+  assert.deepStrictEqual(FCALLS.filter(c => c.indexOf("forget") === 0), ["forget:floor"],
+    "a 404 forgets the FLOOR channel's cached site and never the glass one's");
+  assert.strictEqual(SF("fabOf('R7001').state"), "off");
+  pass("the fabrication list unreadable: 'Fabrication: not available', glass untouched, no retry storm");
+
+  fabMode = "ok"; FCALLS.length = 0; SF("GFAB.offAt = 0;");
+  fabFeed = [fbRow("R7001|CASEMENT WINDOWS", { Frames: 4, FramesDone: 4, Sashes: 4, SashesDone: 1 }, "900")];
+  assert.strictEqual(await SF("readFab()"), true, "a read that changes a line says so");
+  SF("render()");
+  assert.ok(fHtml().indexOf('<div class="fabl f-progress">Fabrication: in progress · Frames 4/4 · Sashes 1/4</div>') > 0);
+  assert.strictEqual((fHtml().match(/class="fabl/g) || []).length, 1, "a job with no fabrication rows has no line");
+  const q2 = SF("qState(boardNow()[1])");
+  fabFeed = [fbRow("R7001|CASEMENT WINDOWS", { Frames: 4, FramesDone: 4, Sashes: 4, SashesDone: 4 }, "900")];
+  assert.strictEqual(await SF("readFab()"), true);
+  assert.ok(/^delta:Fabrication station:FLOORSITE:tok\d+$/.test(FCALLS[FCALLS.length - 1]),
+    "the second pass is a delta on its own token");
+  assert.strictEqual(SF("TOKEN"), "tk", "which is not the glass list's token");
+  assert.ok(SF("qState(boardNow()[0])").indexOf('"done"') > 0, "the line is in the card's signature");
+  assert.strictEqual(SF("qState(boardNow()[1])"), q2, "and the other card's signature has not moved");
+  SF("render()");
+  assert.ok(fHtml().indexOf('<div class="fabl f-done">Fabrication: done · Frames 4/4 · Sashes 4/4</div>') > 0);
+  assert.strictEqual((fHtml().match(/FABRICATION DONE — GLASS WAITING/g) || []).length, 1,
+    "fabrication done and two still to cut: the badge, on that card only");
+  /* the stylesheet adds " on glass" after it where the header has the room */
+  assert.deepStrictEqual([EL["#gwait"].hidden, EL["#gwait"].textContent], [false, "1 waiting"]);
+  pass("the line in each state, the badge and the capsule; a fabrication tap moves one card's signature");
+
+  SF("WAITONLY = true; render();");
+  assert.strictEqual(SF("Object.keys(NODES).join(',')"), "R7001", "the filter shows only the waiting cards");
+  assert.strictEqual(EL["#gwait"].className, "on");
+  SF("QUERY = 'R7002'; render();");
+  assert.ok(EL["#board"].innerHTML.indexOf("No job waiting on glass") > 0, "and works with the search box");
+  SF("clearSearch(); render();");
+  assert.strictEqual(SF("WAITONLY"), false, "it is cleared where the search is cleared");
+  assert.strictEqual(SF("Object.keys(NODES).length"), 2);
+  /* cutting complete: Person A (cut only) is no longer waiting; Person T, who
+     holds the tuff counter, still is - the job owes tuff */
+  SF("ITEMS[0].fields.Cut = 6; WAITONLY = true; render();");
+  assert.deepStrictEqual([EL["#gwait"].hidden, SF("WAITONLY")], [true, false],
+    "with nothing left waiting the capsule goes and the filter lets go");
+  SF("PERSON = PEOPLE[1]; render();");
+  assert.strictEqual(EL["#gwait"].textContent, "1 waiting", "tuff owed keeps it waiting for a tuff holder");
+  assert.deepStrictEqual(FCALLS.filter(c => !/^(site:floor|delta:Fabrication station:FLOORSITE:)/.test(c)), [],
+    "over all of it: the floor site and a delta of the one list - no write, no other read, no glass-site call");
+  assert.ok(!/list(Patch|Add|Upsert|Delete)\(\s*FABC/.test(src("station.js")),
+    "and station.js has no call that could write the fabrication list");
+  pass("the waiting filter: on, with search, cleared with it, gone with the last waiting job; and no write anywhere");
 
   /* ================= 16. what the station page cannot do ================= */
   const stationSrc = src("station.js"), glassSrc = src("glass.html"), coreSrc = src("station-core.js");
