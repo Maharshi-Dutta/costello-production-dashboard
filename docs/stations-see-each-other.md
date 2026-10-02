@@ -1,8 +1,7 @@
 # Stations see each other
 
-Built 2026-10-02 on branch `cross-station-direct-read`. Brief, with its
-Amendments after review: `specs/2026-10-02-stations-see-each-other.md`.
-Decisions: HISTORY A44. Problems met: HISTORY B37, B38.
+Built 2026-10-02 on branch `cross-station-direct-read`. Brief and amendments:
+`specs/2026-10-02-stations-see-each-other.md`. HISTORY A44, B37, B38.
 
 ## One owner per fact
 
@@ -17,29 +16,25 @@ Nobody copies it into a second list, so two screens cannot disagree.
 | glazed windows / astragal | `Glazing station` (`Floor stations`) |
 | job facts (customer, totals, section, and whether a job has glass or windows) | the `Production` sheet, fed by the office |
 
-The office no longer feeds any status word. The `Glass` column of
-`Fabrication station` is unread and unwritten (kept on the list). The `Glass`
-and `Fabrication` columns of `Glazing station` hold yes/no job facts (see
-"Glazing" below), not status.
+The office feeds no status word. `Fabrication station`'s `Glass` column is
+unread and unwritten (kept on the list). `Glazing station`'s `Glass` and
+`Fabrication` columns hold yes/no job facts, not status (see below).
 
 ## The shared reader: `STU.stuListReader`
 
 In `station-ui.js`. One helper, used by glass, glazing and fabrication.
 
 - **Given:** `{ site: "own" | "floor", list, fields, tag, retryMs? }`.
-- **Gives:** `read()` (answers true when something changed), `ready`, `items`,
-  `missing`, `asOf`.
-  - `ready`: false until the first read has answered. Say "checking".
-  - `items`: the rows, or `null` when the list cannot be read. Never read
-    `null` as "nothing done" or "ready".
-  - `missing`: `items` is null because the list is positively not there.
+- **Gives:** `read()` (true when something changed), `ready` (false until the
+  first answer: say "checking"), `items` (the rows, or `null` when the list
+  cannot be read: never read `null` as "nothing done" or "ready"), `missing`
+  (null because the list is positively not there), `asOf`.
 - **Read only.** No write path. It never touches the page's own site id, token,
   `PROBLEM` or `SOFT`. Two readers on one page share nothing.
 - **One read in flight.** A second `read()` while one is running answers false.
 - **How it reads:** `CW.listDelta` on its own token. A list that refuses delta
   is read the plain way for five minutes.
 - **Failures:**
-
 | Answer | What the reader does |
 |---|---|
 | 403 | rows dropped (`items` null), retry after the retry clock (a minute) |
@@ -55,14 +50,13 @@ by all list calls, and gives up on a list call after 30 s.
 
 One timer beats every second; `ST.tickDue` says whether a turn is due.
 
-- **5 s** normally (`ST.REFRESH_MS`).
-- **2 s for 20 s** after the tablet's own tap (`TICK.burst()`), and only then.
-  A change seen in a poll does not start a burst (HISTORY B38).
+- **A steady 5 s tick, no burst** (`ST.REFRESH_MS`). Neither a tap nor a
+  change seen in a poll alters the rate. A 2 s burst after a tap was built and
+  removed before the ship (HISTORY B38).
 - **In-flight guard.** A turn never starts while the last is running. One that
   has not come back after 5 minutes is given up on.
-- No pause and no visibility check: a tablet polls all the time.
-
-The office station poll is 5 s, always, and its five polls run together.
+- No pause and no visibility check. The office station poll is 5 s, always,
+  and its five polls run together.
 
 ## What each page reads per tick
 
@@ -73,14 +67,13 @@ The office station poll is 5 s, always, and its five polls run together.
 | glazing | own board, `Glass station`, `Fabrication station` | 36 |
 | fabrication | own board, assignments (by delta), `Glass station` | 36 |
 
-Microsoft limits an account to about 600 requests a minute (3,000 in 5
-minutes). Two floor accounts:
-
+Microsoft limits an account to about 600 requests a minute (3,000 in 5 minutes).
 - **Glass account** (cutting, hotmelting, glazing): 24 + 24 + 36 = 84 a minute.
-  Measured idle in the rig: 84.
-- **Welding account** (welding and fabrication, ten tablets, worst case):
-  measured idle 336 a minute. The burst only adds requests for the tablet that
-  was tapped.
+  Measured in the rig: 84 idle, 138 with every tablet tapping every 10 s.
+- **Welding account** (1 welding + 9 fabrication tablets, worst case):
+  measured 336 idle, 516 with every tablet tapping every 10 s.
+- The budget is the idle rate plus 3 requests per tap. There is no burst, so
+  tapping never raises the read rate.
 
 ## What each station sees of the others
 
@@ -109,17 +102,15 @@ All per job, never per window: the floor's glass count is one DG + TG number.
   - **Needs facts.** The office feeder writes `Glass` = yes/no and
     `Fabrication` = yes/no on each `Glazing station` row (`GLZC.glzNeeds`). A
     job with no row on a list is "checking", never ready, unless the fact says
-    no. These are facts off the sheet, not a status copy.
-  - The first office load after the ship PATCHes every Glazing row once.
+    no. Facts off the sheet, not a status copy. The first office load after
+    the ship PATCHes every Glazing row once.
 - **The office boards** work the same words out from the lists the office
-  already holds, with the same functions. The glass-colour and glazing chips
-  redraw when those lists move.
+  already holds, with the same functions.
 
 ## No idle lock
 
 The ten-minute lock is gone on all four pages. The picked name stays across
 reloads and new builds. The picker still returns when:
-
 - somebody presses Switch;
 - the person is removed from `Station people`, or holds nothing the page draws;
 - a glass tablet's stage is changed.
@@ -153,7 +144,6 @@ on a real tablet over two days.
 - A tablet's account must be a member of both sites to read both lists.
 
 ## See also
-
 [[glass-station-overview]], [[glazing-station]], [[fabrication-station]],
 [[welding-station]], [[fabrication-glass-and-door-glazing]], [[auth-and-graph]],
 [[REFERENCE]], [[ARCHITECTURE]]

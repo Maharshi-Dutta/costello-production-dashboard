@@ -328,8 +328,7 @@ with a read-only board: one card per active job, in the office's own order,
 with the job number, customer, the total glass count, and the three counters
 (Cutting, Hotmelting, Glazing) each showing who last moved it and when. A
 job whose three counters have all reached the total turns gold and drops to
-the bottom of the board. The board refreshes about every ten seconds while
-it is on screen. Nothing on it can be clicked to change anything.
+the bottom of the board. The board refreshes about every five seconds. Nothing on it can be clicked to change anything.
 
 ![Show ▸ Glass station board](img/guide-master-board.png)
 *The office's read-only Glass station board.*
@@ -352,7 +351,7 @@ read-only — nothing here can be edited or deleted from the dashboard.
 
 ### 4.1 Who are you?
 
-On opening (or after a lock, or Switch person), the tablet shows a picker of
+On opening (or after Switch person), the tablet shows a picker of
 active people for the glass station, read from a list the admin maintains.
 Tap your name.
 
@@ -423,11 +422,12 @@ as you type.
 
 The header shows how recently the board was last refreshed.
 
-### 4.6 Switch person and the ten-minute lock
+### 4.6 Switch person
 
 **Switch person** returns to the picker immediately and clears the search
-box. If nobody taps anything on the tablet for ten minutes, it locks back to
-the picker on its own.
+box. The tablet no longer locks itself after ten quiet minutes (since
+2026-10-02): the name stays until someone presses Switch person, so press it
+when you hand the tablet over, or your taps are logged under your name.
 
 ### 4.7 Light / Dark
 

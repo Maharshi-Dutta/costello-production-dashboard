@@ -345,21 +345,20 @@ const CUSTOMER_MAX = 70;
    2026-10-02 (it was ten): the stations read each other's lists directly, and
    a tap on one tablet should be on the next before anybody walks over. */
 const REFRESH_MS = 5000;
-/* ... and for TICK_BURST_MS after this tablet's OWN tap - never after a change
-   it merely saw - it looks every TICK_FAST_MS instead: work comes in runs.
+/* A steady tick, always: no faster rate after a tap (a 2 s burst was built and
+   removed 2026-10-02 - nine tablets tapping measured 1020 requests a minute on
+   one account, and the tapping tablet shows its own tap at once anyway).
    The timer itself beats once a second and asks tickDue() each time. A turn
    still running is never joined by a second one; one that has not come back
    after TICK_STUCK_MS is given up on, so a reply that never arrives cannot
    stop a tablet that is left on for weeks. */
-const TICK_FAST_MS = 2000;
-const TICK_BURST_MS = 20000;
 const TICK_BEAT_MS = 1000;
 const TICK_STUCK_MS = 300000;
 /** Is a turn of the clock due? `lastAt` is when the last one STARTED. A
     quarter of a second of grace, because a one-second timer lands a few
     milliseconds either side of the second. */
-function tickDue(now, lastAt, burstUntil) {
-  return now - lastAt >= (now < burstUntil ? TICK_FAST_MS : REFRESH_MS) - 250;
+function tickDue(now, lastAt) {
+  return now - lastAt >= REFRESH_MS - 250;
 }
 /* How far back the office reads the log to begin with. The list is never
    deleted from, so after a year it is thousands of lines of last spring: the
@@ -2270,7 +2269,7 @@ const ST = {
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,
   PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, REFRESH_MS, LOG_DAYS, logSince,
-  TICK_FAST_MS, TICK_BURST_MS, TICK_BEAT_MS, TICK_STUCK_MS, tickDue,
+  TICK_BEAT_MS, TICK_STUCK_MS, tickDue,
   COMMENT_LIST, COMMENT_FIELDS, COMMENT_MAX, COMMENT_POLL_MS,
   COMMENT_MISSING_FLOOR, COMMENT_MISSING_OFFICE, COMMENT_UNREACHABLE, COMMENT_CHECKING,
   COMMENT_EMPTY_FLOOR, COMMENT_EMPTY_OFFICE, COMMENT_UNSENT, COMMENT_KEPT,

@@ -5,10 +5,10 @@ Costello Windows runs its factory from one SharePoint workbook (`Production` she
 This dashboard (`d:\Costello Windows\Excel Dashboard\web`, a static site: `index.html`,
 `app.js`, `parser.js`, `graph.js`, vendored MSAL + ExcelJS, no bundler, plain ES2017,
 no modules) reads the workbook by downloading it and writes surgically through the
-Microsoft Graph Excel API. Users: 3–4 office/factory people; Abin ticks work off from
-his phone.
+Microsoft Graph Excel API. Users: 3–4 office/factory people; a colleague ticks work off from
+their phone.
 
-The user (Maharshi) approved this feature with these answers:
+The owner approved this feature with these answers:
 1. Windows, doors and glass cells: **gold when finished, yellow while in process**.
 2. **Also** do counts for each product's F / S / T (Frame, Sashes, Transom).
 3. When everything is ticked do **not** auto mark-ready (QA may still be pending); leave the existing button.
@@ -114,7 +114,7 @@ Bars: 0 = empty, partial = yellow (`--fab`), complete = gold (`--done`); "in pro
 count unknown" = half bar in yellow with the words "in progress". Tap targets ≥ 40 px
 (phones). A per-job summary line at the top of the section: "Windows 6/10 · Doors 0/2 ·
 Glass 0/52 · Frames/Sashes/Transoms 0/35". A tiny "who/when" under a line when the
-stored row has it ("Abin, 10:42").
+stored row has it ("Person A, 10:42").
 The list row (`rowHtml`) gets a small "cp" badge when any item is partially done
 (e.g. "3 in progress") - keep it subtle.
 

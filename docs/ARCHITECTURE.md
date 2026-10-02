@@ -18,6 +18,8 @@ Last updated 2026-09-22 (split into linked notes; content unchanged).
 - **A fourth station, fabrication: eligibility per group/part, the fourth
   sanctioned fill, assignments** — [[fabrication-station]]; door glazing gold
   via the checkpoint record — [[fabrication-glass-and-door-glazing]]
+- **One owner per fact; the shared read-only list reader; the poll clock;
+  request budget per account** — [[stations-see-each-other]]
 - **Module map; key invariants; where state lives** —
   [[module-map-and-invariants]]
 

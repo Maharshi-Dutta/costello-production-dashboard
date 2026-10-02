@@ -588,8 +588,8 @@ const person = (name, stages, pin, active, station) =>
 
   assert.strictEqual(ST.PERSON_LOCK_MS, undefined, "there is no idle lock any more (owner, 2026-10-02)");
   assert.strictEqual(ST.personExpired, undefined);
-  assert.deepStrictEqual([ST.REFRESH_MS, ST.TICK_FAST_MS, ST.TICK_BURST_MS], [5000, 2000, 20000],
-    "five seconds, and two for twenty after a tap or a change");
+  assert.deepStrictEqual([ST.REFRESH_MS, ST.TICK_FAST_MS, ST.TICK_BURST_MS], [5000, undefined, undefined],
+    "five seconds, always: there is no faster rate after a tap any more");
   pass("the poll is one constant, at the numbers the owner asked for; the idle lock is gone");
 
   /* ================= 2. the slice ================= */
@@ -1366,17 +1366,13 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ST.pinOk(ppl[1], " 1234 "), true, "trimmed, because a pad can add nothing else");
   pass("a PIN is asked for only where the column is filled in, and then it must match exactly");
 
-  /* the clock (2026-10-02): due every five seconds, every two inside a burst,
-     and the burst ends by itself */
+  /* the clock (2026-10-02): due every five seconds, and nothing else */
   const T0 = 1757325600000;
-  assert.strictEqual(ST.tickDue(T0 + 4000, T0, 0), false, "four seconds after the last turn: not yet");
-  assert.strictEqual(ST.tickDue(T0 + 5000, T0, 0), true, "five: due");
-  assert.strictEqual(ST.tickDue(T0 + 4800, T0, 0), true, "a one-second timer landing a touch early still counts");
-  assert.strictEqual(ST.tickDue(T0 + 1000, T0, T0 + 20000), false, "in a burst, one second is not two");
-  assert.strictEqual(ST.tickDue(T0 + 2000, T0, T0 + 20000), true, "the burst starts: two seconds is due");
-  assert.strictEqual(ST.tickDue(T0 + 21000, T0 + 19000, T0 + 20000), false, "and ends: after twenty it is five again");
-  assert.strictEqual(ST.tickDue(T0 + 24000, T0 + 19000, T0 + 20000), true);
-  pass("tickDue: five seconds, two inside a burst, back to five when the burst is over");
+  assert.strictEqual(ST.tickDue(T0 + 4000, T0), false, "four seconds after the last turn: not yet");
+  assert.strictEqual(ST.tickDue(T0 + 5000, T0), true, "five: due");
+  assert.strictEqual(ST.tickDue(T0 + 4800, T0), true, "a one-second timer landing a touch early still counts");
+  assert.strictEqual(ST.tickDue(T0 + 2000, T0, T0 + 20000), false, "and there is no third argument that makes two seconds due");
+  pass("tickDue: a steady five seconds");
 
   /* ================= 8. the writes one tap makes ================= */
   const tf = ST.tapFields("cut", 5, "Person A", "2026-09-08T15:00:00.000Z");
@@ -5332,10 +5328,8 @@ const person = (name, stages, pin, active, station) =>
   fakeCW.listDelta = fabDelta; fakeCW.listItems = fabItems;
   pass("the shared reader: plain-read fallback, two instances apart, not available is null, no write path");
 
-  /* THE CLOCK: one turn at a time, a burst after this tablet's OWN tap and
-     after nothing else (fix pass 2026-10-02: a change SEEN used to start one,
-     so every tablet on an account burst when any one was tapped), and every
-     page on it */
+  /* THE CLOCK: one turn at a time, a steady five seconds that neither a tap
+     nor a change seen can alter, and every page on it */
   SF("var __n = 0, __go = null; var __T = STU.stuTicker(() => { __n++; return new Promise(r => { __go = r; }); });");
   const turn1 = SF("__T.turn()");
   assert.strictEqual(await SF("__T.turn()"), false, "a turn never starts while the last one is still running");
@@ -5347,26 +5341,21 @@ const person = (name, stages, pin, active, station) =>
   SF("__T.busy = true; __T.lastAt = Date.now() - ST.TICK_STUCK_MS - 1;");
   const turn3 = SF("__T.turn()"); SF("__go()");
   assert.strictEqual(await turn3, true, "a turn that never came back does not stop the clock for ever");
-  SF("__T.until = 0; __T.burst();");
-  assert.ok(SF("__T.until - Date.now()") > 19000 && SF("__T.until - Date.now()") <= 20000, "burst() is twenty seconds of the fast rate");
+  assert.deepStrictEqual([SF("typeof __T.burst"), SF("'until' in __T")], ["undefined", false], "the clock has no burst and no fast rate");
   ["station.js", "welding.js", "glazing.js", "fabrication.js"].forEach(f => {
     assert.ok(/const TICK = STU\.stuTicker\(tickOnce\);/.test(src(f)) && /\n  TICK\.start\(\);/.test(src(f)) &&
               !/setInterval\(tickOnce/.test(src(f)), f + " polls on the shared clock, not on a setInterval of its own");
-    assert.ok(/queueTap\([^;]*\);\r?\n  TICK\.burst\(\);/.test(src(f)), f + ": the tablet's own tap starts a burst");
-    /* fabrication's second is Take - that tablet's own tap too */
-    assert.strictEqual((src(f).match(/TICK\.burst\(\)/g) || []).length, f === "fabrication.js" ? 2 : 1,
-      f + ": and nothing else does - not a poll that brought a change, not a read of another station's list");
+    assert.ok(!/TICK\.(burst|until)|TICK_FAST_MS|TICK_BURST_MS/.test(src(f)), f + ": nothing on the page touches the clock's rate");
     assert.ok(/let polling = false;\r?\nasync function pollList\(\) \{\r?\n  if \(polling\) return false;/.test(src(f)),
       f + ": its board poll is one in the air at a time");
   });
   SF("ITEMS = " + JSON.stringify([item({ Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6,
     TuffTotal: 4, Seq: 1, Active: "Yes", OfficeDone: "No", Cut: 6, Hotmelt: 2, Tuff: 0 }, "800")]) +
-    "; TOKEN = 'tk'; siteMoved(); TICK.until = 0;");
+    "; TOKEN = 'tk'; siteMoved();");
   await SF("pollList()");
-  assert.strictEqual(SF("TICK.until"), 0, "a poll that brought nothing starts no burst");
   {
     /* a change SEEN - on this page's own board, and on the other station's
-       list - is drawn and starts no burst; a throttled delta is not a list
+       list - is taken in and drawn; a throttled delta is not a list
        that refuses delta; and two polls never run on one token */
     const clockDelta = fakeCW.listDelta;
     let boardMode = "change", boardGate = null;
@@ -5384,8 +5373,8 @@ const person = (name, stages, pin, active, station) =>
     };
     SF("GFAB.offAt = 0;");
     await SF("tickOnce()");
-    assert.deepStrictEqual([SF("ITEMS[0].fields.Hotmelt"), SF("TOKEN"), SF("GFAB.changed"), SF("TICK.until")], [5, "tk2", true, 0],
-      "a change seen on the board and on the fabrication list is taken in and drawn, and starts NO burst");
+    assert.deepStrictEqual([SF("ITEMS[0].fields.Hotmelt"), SF("TOKEN"), SF("GFAB.changed")], [5, "tk2", true],
+      "a change seen on the board and on the fabrication list is taken in and drawn");
     boardMode = "throttled"; FCALLS.length = 0;
     assert.strictEqual(await SF("pollList()"), false);
     assert.deepStrictEqual([SF("TOKEN"), SF("DELTA_OFF"), SF("READY"), SF("ITEMS[0].fields.Hotmelt"), SF("PROBLEM")],
@@ -5406,13 +5395,19 @@ const person = (name, stages, pin, active, station) =>
     assert.strictEqual(FCALLS.filter(c => c.indexOf("delta:" + ST.STATION_LIST) === 0).length, 1, "so one delta went out on that token, not two");
     assert.strictEqual(await SF("pollList()"), true, "and the guard is let go when the poll ends");
     fakeCW.listDelta = clockDelta;
-    SF("TOKEN = 'tk'; TICK.until = 0;");
+    SF("TOKEN = 'tk';");
   }
+  /* a tap does not change the tick interval: the clock is exactly as it was,
+     and a turn is due at five seconds after it, not at two */
+  const tickKeys = SF("JSON.stringify(Object.keys(TICK).sort())"), lastWas = SF("TICK.lastAt");
   SF("tap('800', 'tuff', 1)");
-  assert.ok(SF("TICK.until") > Date.now() + 19000, "a tap does");
+  assert.deepStrictEqual([SF("JSON.stringify(Object.keys(TICK).sort())"), SF("TICK.lastAt"), ST.REFRESH_MS], [tickKeys, lastWas, 5000],
+    "a tap leaves the clock untouched");
+  assert.deepStrictEqual([ST.tickDue(lastWas + 2000, SF("TICK.lastAt")), ST.tickDue(lastWas + 5000, SF("TICK.lastAt"))], [false, true],
+    "after a tap the next turn is still five seconds on, not two");
   await settle(60);
   SF("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
-  pass("the clock: no overlapping turns or polls, a stuck turn is given up on, a burst after this tablet's own tap ONLY, a 429 keeps the token, all four pages on it");
+  pass("the clock: no overlapping turns or polls, a stuck turn is given up on, a steady five seconds a tap does not change, a 429 keeps the token, all four pages on it");
 
   /* THROTTLING: Retry-After is obeyed (capped at a minute), and while it is in
      force the other LIST calls wait for it too. Workbook calls do not join it. */

@@ -367,14 +367,24 @@ the one that first wrote them down.
      **Door glazing (2026-10-01):** a fourth counter on PVC DOOR and PVC SMART
      rows, `GlazeDone` with `GlazeBy`/`GlazeAt`, written by the tablet and by
      the office's board through the same five-field body (`fbTapFields`
-     with part `glazing`); `GlazeTotal` and `Glass` are feeder columns and the
-     feeder never writes `GlazeDone/By/At`. A role, not an assignment: `Stages`
+     with part `glazing`); `GlazeTotal` is a feeder column and the feeder
+     never writes `GlazeDone/By/At`. The `Glass` column of this list is unread
+     and unwritten since 2026-10-02 (kept on the list). A role, not an assignment: `Stages`
      must name it (`PVC DOOR:glazing`, `ALL:glazing`).
    Only the tablet (`station.js`, `welding.js`, `glazing.js`, `fabrication.js`) writes a By, an At,
    a last touch or a log line — **or a note**: `Station comments` is written by a floor tablet
    and by nothing else, one POST per note, and is read here and in no export.
    The floor's list columns are never the office's to write for any other
    reason: not to correct one, not to tidy up, not from a reconciliation pass.
+
+   **Stations read each other (2026-10-02, one owner per fact).** A tablet may
+   READ another station's list, through `STU.stuListReader` only (no write
+   path) - never copy a fact from one station's list into another's. The one
+   exception is a job fact off the `Production` sheet: `Glazing station`'s
+   `Glass` and `Fabrication` columns hold `yes`/`no` (does the sheet give the
+   job glass / window groups), never where the glass or fabrication has got
+   to. See `docs/stations-see-each-other.md`. There is no idle lock on any
+   tablet: the picked name stays until Switch.
 4. **No phone number and no eircode leave the app in any export, ever.**
    `j.ph3` and `j.eir` (and the sheet's PHONE NO. / EIRCODE columns) are
    never read into an export path, in any format, under any filter or

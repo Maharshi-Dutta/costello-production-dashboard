@@ -94,7 +94,8 @@
 | a queued/not-yet-sent checkpoint tap | `cw_cpqueue`, replayed on the next page load |
 | a queued/not-yet-sent station tap | `cw_stationq` (counters) and `cw_stationlogq` (the log lines they owe) — tablet only, shipped 2026-09-08 |
 | a queued tap the office's lock arrived under, so it was dropped rather than sent | `cw_stationblocked` — tablet only, drawn on the card in red until the office unlocks the job (2026-09-10) |
-| who is at the station tablet, and when they last tapped | `cw_person` — tablet only; the stages always come back from the list, never from storage |
+| who is at the station tablet, and when they last tapped | `cw_person` — tablet only; no longer expires (no idle lock since 2026-10-02); the stages always come back from the list, never from storage |
+| the hotmelting tablet's "Cut first" switch | `cw_glasscutfirst` — hotmelting tablet only, `1` or `0`, off by default (2026-10-02, [[stations-see-each-other]]) |
 | **which of the two glass tablets this device is** | `cw_stationstage` — tablet only, `cut` or `hotmelt` (2026-09-21). A `?stage=` in the URL wins over it and is written to it; a device holding neither is asked once, on screen, before the person picker |
 | when the master last fed the `Glass station` list, and the hash of what it sent | `cw_stationfeed` — read by `feedStation()` to decide whether a run can be skipped |
 | the cutter's end-of-day sheets, and the weekly target they are measured against | `Station day sheets` and `Station targets` SharePoint lists, same site as the station's other lists (resolved through the definition's `site`) — one row per person per station-stage per day, and one row per station-stage. Append-only from the tablet; the office may correct the counts and the note, and is the only writer of the target — 2026-09-21 |

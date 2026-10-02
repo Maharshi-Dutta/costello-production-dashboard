@@ -77,6 +77,10 @@ tooling; lessons** — [[overview-and-process]]
 27. **The Sales page** — [[sales-page]] (`sales.html` on the same `app.js`,
     customer cells, text colour, delete/restore, delivery date, requests)
 
+28. **Stations see each other directly** — [[stations-see-each-other]] (one
+    owner per fact, the shared list reader, the steady 5 s ticker (no burst), no
+    idle lock, tablet sign-in renewal)
+
 ## See also
 
 - [[ARCHITECTURE]] — the companion index: data flow, module map, invariants

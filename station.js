@@ -874,7 +874,6 @@ function tap(id, stage, delta) {
   /* queued first, drawn second: boardNow() lays the queue over the list, so
      the new number is on screen before the write has left the tablet */
   queueTap(row, job, stage, value);
-  TICK.burst();
   render();
   flushQueue();
 }

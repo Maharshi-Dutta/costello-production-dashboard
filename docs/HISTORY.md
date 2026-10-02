@@ -70,6 +70,7 @@ that wants to change one has to ask. The date is when the owner said it.
 | A41 | 2026-10-01 | **"Only data on the `Production` sheet is visible on the main page; `Production (2)` is the John sheet."** The office page and Sales read Production-only fields: identity cells, counts, product groups, glass, dates, status words, the ready flag, sheets. Floor tablets keep comments from every sheet (owner's call). 25 window-type checkpoint lines on 9 jobs are now hidden because they exist only on other sheets; their records in `Dashboard progress` are untouched. | Owner, in the Sales demo, after cross-sheet data showed up on the main page; extends the 2026-09-18 standing rule (stations read `Production` only) to the office and Sales. |
 | A42 | 2026-10-01 | **Sales send reports and customer complaints through the dashboard only, with photos.** No email, no alert. A report is free text plus photos. Photos upload from a PC file picker (a phone's picker may offer the camera). The office and Sales can both resolve and reopen a complaint. Photos live in a new document library `Sales photos` in the workbook's site; five new columns on `Sales requests` were created by script after a rehearsal on a throwaway library. | Owner, 2026-10-01. Spec `docs/specs/2026-10-01-sales-reports-complaints-photos.md`. |
 | A43 | 2026-10-02 | **Fabrication tablet: an Everything / My work / Assigned to me filter, a glass status chip with Glass ready first, and door glazing as a role-only fourth part.** (1) The filter is display only and never grants a tap; cards are placed by the lines a person actually sees, so a job with nothing left for them is not drawn. (2) Door glazing exists only on PVC DOOR and PVC SMART and is granted only by `GROUP:glazing` / `ALL:glazing` in `Stages`; a bare group name never grants it. No assignment, no Take, no split. Door code table: `SS` goes to PVC SMART; `CD`, `SFCD`, `BF`, `ACSD`, `ACSS` never count; any other non-empty code goes to PVC DOOR. (3) When a group's door glazing is full, the office turns that job's counted DOORS DONE cells gold **through the checkpoint record** (`Dashboard progress`), full count only, raise only, never lowered by fabrication. (4) Glass is `done` only when cutting and hotmelting are complete **and Tuff too when the job has Tuff**; the chip is one combined DG+TG count, not per type. | Owner, 2026-10-01. Specs `docs/specs/2026-10-01-fabrication-my-work-filter.md` and `docs/specs/2026-10-01-fabrication-glass-status-door-glazing.md`. |
+| A44 | 2026-10-02 | **Stations read each other's lists directly: one owner per fact, nobody copies a fact.** (1) Fabrication sees glass, glass sees fabrication, hotmelt sees cutting and Tuff (greyed, read only, with a "Cut first" switch off by default), glazing sees glass and window-only fabrication, all through one shared read-only reader (`STU.stuListReader`); the office boards work the same words out from the lists they already hold. The three office-fed status columns stop being written. (2) Tablets poll on a steady 5 s tick, no burst (a 2 s burst after a tap was built and removed before the ship, B38), and the office station poll is 5 s. (3) **The idle lock is removed on all four pages.** The owner accepted that a tap is logged under the last picked name, that a PIN now guards only the moment of switching, and that fabrication eligibility follows the picked person until Switch. The hotmelt "waiting" badge is kept as built: every waiting job is badged, even when none of its glass is cut yet. (4) Tablets try one automatic sign-in renewal before showing "Sign in again" (needs the page URLs registered in Entra). (5) The welding account stays a full member of the workbook's site. | Owner, 2026-10-02. Brief `docs/specs/2026-10-02-stations-see-each-other.md` (decisions in section 12, Amendments after review). Note [[stations-see-each-other]]. |
 
 **Rules that came out of these:** repo rule 1 (two sanctioned fill reasons; a
 third is the owner's decision, not a session's), rule 2 (dashboard-owned
@@ -684,6 +685,49 @@ never add.
 **Lesson:** time that crosses devices comes from the server; a write that
 "adds if missing" must re-read inside the chain before deciding it is missing.
 
+### B37. "Ready to glaze" showed on a job that was not ready
+
+With the office copy of the status gone, the glazing tablet read the glass and
+fabrication lists itself. A job with no row on one of them was read as "nothing
+to do there", so a job whose glass had simply not been fed yet could show READY
+TO GLAZE. Every suite passed it; independent review found it.
+
+**Cause:** a missing row means two different things, "the sheet gives this job
+no glass (or no windows)" and "the feeder has not got to it yet", and the reader
+cannot tell them apart. **Fix:** the office feeder writes the sheet's answer as
+two job facts, `Glass` and `Fabrication` = yes/no, on the `Glazing station` row
+(`GLZC.glzNeeds`). No row and a "yes" (or a blank) reads "checking", never
+ready; only "no" means nothing to do. A glass row off the sheet reads as no
+glass. A list that has not answered is "checking"; one that cannot be read is
+"not available". Neither is ever ready, and two blanks alone are not ready.
+
+**Lesson:** when a copy is removed, ask what a missing row used to mean, and
+test the fixture that has no row.
+
+### B38. The floor account is throttled when everyone is tapping
+
+In the first build a tablet polled every 2 s for 20 s (a "burst") after its own
+tap or after any change it saw. Every tablet on an account saw every other
+tablet's tap, so one tap started a burst on all ten. The fix pass narrowed the
+burst to the tablet's own tap. The stubbed rig still measured about 1020
+requests a minute on the welding account (1 welding + 9 fabrication tablets,
+each tapping every 10 s), against a limit of about 600: a tablet tapped every
+10 s never leaves its burst.
+
+**Cause:** a faster rate after a tap, multiplied by every tablet on the
+account. It bought almost nothing: the tapping tablet shows its own tap at
+once, so the burst only showed it other tablets' changes a little sooner.
+**Fix:** the burst is removed altogether. A steady 5 s tick, always; neither a
+tap nor a change seen alters the rate. Budget = idle + 3 requests per tap.
+Measured after: welding account 336 idle, 516 tapping; glass account 84 idle,
+138 tapping; tablet to tablet 2 to 3 s typical, 5.2 s worst. A 429 from a delta endpoint
+is no longer read as "the list refuses delta" (it sent pages to full reads), a
+`Retry-After` is waited out with one back-off shared by all list calls, and a
+list call gives up after 30 s.
+
+**Lesson:** a rate that rises on what others did is multiplied by the number of
+others. Count requests per account in the rig before shipping a faster clock.
+
 ---
 
 ## C. Build log
@@ -897,6 +941,12 @@ Five columns (`Glass`, `GlazeTotal`, `GlazeDone`, `GlazeBy`, `GlazeAt`) added to
 
 Independent reviews: two on the filter (0 blockers, 2 minor, fixed); one on glass and door glazing (0 blockers, 7 minor, 5 fixed, 2 documented in the spec). `Modified` confirmed selectable on the live lists by a read-only probe. Suites: fabrication 34, pages 6/6, rest unchanged. Rigs: `fab_check` 19/19, `fab_view_check` 20/20, `fab_glass_check` 12/12, `fab_check_b` 16/16.
 
+### C/2026-10-0X — to be filled at ship
+
+Stations see each other (A44, B37, B38, note [[stations-see-each-other]]), branch
+`cross-station-direct-read`. The manager adds commits, build number and suite
+counts here when it ships.
+
 ---
 
 ## D. Symptom index
@@ -925,6 +975,8 @@ Independent reviews: two on the filter (0 blockers, 2 minor, fixed); one on glas
 | The glazing tablet's Sign in does nothing | B29 |
 | Columns on a station board do not line up | B30 |
 | The Floor log window is missing lines from a station | B33 |
+| A chip or badge says ready and the other station is not done | B37 |
+| A floor account is throttled (429) when everyone is tapping | B38 |
 
 ---
 

@@ -23,15 +23,19 @@ Each tab has its own empty state.
 
 ### Glass status chip, Glass ready first
 
-The office feeder writes a `Glass` word on every row of a job, from the glass
-station record and the checkpoint record already held (no new workbook read):
+Since 2026-10-02 nobody writes a `Glass` word. The tablet reads `Glass station`
+itself (`STU.stuListReader`, `FABC.fbGlassOf`) and the office board works the
+same word out from the glass list it already holds; the `Glass` column of
+`Fabrication station` stays on the list, unread and unwritten. The word is
 `done`, `part:<cut>/<total>:<hotmelt>/<total>` (plus `:tuff n/m` with Tuff),
-`none`, or blank for no glass. **Done requires Tuff complete when the job has
-Tuff.** The chip (green done, amber partial, grey not started) is one
-**combined DG+TG count, not per type**. When glass is done and nothing is
-fabricated yet, the card says so. The tablet toggle **Glass ready first**
-sorts glass-done unfinished jobs to the top, after urgent. The tablet never
-reads the glass list. The word follows the glass list at most once a minute.
+`none`, or blank for no glass (no row, or a row off the sheet). Before the
+first answer the chip says "checking", and "not available" when the list
+cannot be read; neither is ever done. **Done requires Tuff complete when the
+job has Tuff.** The chip (green done, amber partial, grey not started) is one
+**combined DG+TG count, not per type**. A Door glazing line carries the job's
+chip. When glass is done and nothing is fabricated yet, the card says so. The
+tablet toggle **Glass ready first** sorts glass-done unfinished jobs to the
+top, after urgent. See [[stations-see-each-other]].
 
 ### Door glazing: a role-only fourth part
 
@@ -70,12 +74,13 @@ feed's continuation (HISTORY B35).
 
 - `cw_fabview` — `{ "<person>": "all" | "mine" | "assigned" }`.
 - `cw_fabglassfirst` — the Glass ready first toggle.
+- (`cw_glasscutfirst` is the glass hotmelt tablet's, see [[stations-see-each-other]].)
 
 ### Not built / deferred
 
 The sheet's yellow/gold raising fabrication counts (owner, 2026-10-01: "leave
 for now"). Glass tablets seeing the fabrication stage is a separate approved
-design, not built.
+design, built the next day: see [[stations-see-each-other]].
 
 ## See also
 

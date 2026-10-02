@@ -510,7 +510,8 @@ directly — regenerate it from the `.js` core and re-paste.
   is open, dropping back to once a minute otherwise.
 - **PIN and gating are deterrents, not security.** The PIN is compared on
   the tablet itself against a column the station account can read; the
-  ten-minute lock and stage gating are enforced the same way. None of it is
+  stage gating is enforced the same way (the ten-minute lock was removed
+  2026-10-02). None of it is
   authentication — the real boundary is that the station account can reach
   only the `Floor stations` site (or its interim fallback) and nothing else.
 - **The feeder needs an office dashboard open.** A job only ever reaches the

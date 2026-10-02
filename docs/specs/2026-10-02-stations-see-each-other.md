@@ -268,11 +268,18 @@ What changed from the draft above. Two independent reviews, 0 blockers, 4
 major (the burst budget, a throttle read as "the list refuses delta", and two
 "ready too early" cases), about 15 minor. One fix pass closed them.
 
-1. **The 2 s burst starts only from the tablet's own tap.** The draft said "or
-   a change seen". Measured in the rig, that put the welding account at about
-   1020 requests a minute with the floor tapping, against a limit of about
-   600, because every tablet on the account burst whenever any one was tapped.
-   Idle, measured: glass account 84 a minute, welding account 336 a minute.
+1. **There is no burst: a steady 5 s tick, always.** The draft's 2 s burst
+   ("after a tap or a change seen") was first narrowed to the tablet's own
+   tap, then removed altogether: the rig still measured 1020 requests a minute
+   on the welding account with every fabrication tablet tapping every 10 s,
+   against a limit of about 600. The tapping tablet shows its own tap at once,
+   so the burst bought almost nothing. Budget = idle + 3 requests per tap.
+   Measured in the rig after the removal (requests a minute, idle / every
+   tablet tapping every 10 s): glass account 84 / 138; welding account
+   (1 welding + 9 fabrication) 336 / 516; office 100 / 134. Per page: cut and
+   hotmelt 24 / 42, glazing and fabrication 36 / 54, welding 12 / 30.
+   Latency after the removal: tablet to tablet 2 to 3 s typical, 5.2 s worst;
+   office board 2.5 s typical, 5.3 s worst.
 2. **"Not fed yet" is not "nothing to do".** With the office copy gone, a job
    with no row on the glass or fabrication list could mean "no glass" or "not
    fed yet". The office feeder now writes two FACTS from the sheet into the

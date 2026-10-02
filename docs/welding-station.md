@@ -88,9 +88,9 @@ three sanctioned fills and welding is not a fourth.
 ### The tablet
 
 `welding.html` + `welding.js`, the same shell as the glass page and the same
-shared station account: the picker, the PIN, the ten-minute lock, Switch
-person, the search box, the note channel (`ST.stationComments({ station:
-"Welding" })` — one word changed), ten-second delta polling, queued absolute
+shared station account: the picker, the PIN, Switch
+person (no idle lock since 2026-10-02), the search box, the note channel (`ST.stationComments({ station:
+"Welding" })` — one word changed), five-second delta polling (a steady tick, no burst), queued absolute
 writes rebased against the list, incremental redrawing.
 
 One card per job, its groups inside it in the sheet's own order, Frames and
@@ -117,4 +117,5 @@ welding does not need one, because the office edits the same counters instead.
 - [[station-comments-amendment]] — previous: amendment E, the job-row icon and board notes
 - [[welding-station-office-and-site]] — next: the office board, generalisation and the site pin
 - [[status-list-is-truth]] — the record welding's seed reads
+- [[stations-see-each-other]] — a steady 5 s tick (no burst), no idle lock, tablet sign-in renewal
 - [[glazing-station]] — the third station, built from the checklist this one started

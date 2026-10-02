@@ -57,7 +57,8 @@ those words rather than "of 0".
   filed the evening under tomorrow, and the same tick threw an unsaved draft
   away. `who` is why the next person to pick their name is never handed
   somebody else's numbers on a form that would save them under their own —
-  and **switching person, or the ten-minute idle lock, closes the sheet.**
+  and **switching person closes the sheet** (the idle lock that used to do it went
+  on 2026-10-02).
 - **Save is dead until something has been written.** An untouched form is not
   four noughts. A day with nothing cut but a line about why ("machine down all
   day") is a real entry and saves perfectly well.

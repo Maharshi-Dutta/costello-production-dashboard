@@ -98,6 +98,8 @@ said so, and the colour painter skips it outright.
   Finished, the same shape as `cw_weldtab`/`cw_glztab`/`cw_glasstab`).
 - `cw_fabseen` — per-person seen state for the Part B notification badges.
 - `cw_fabview`, `cw_fabglassfirst` — added 2026-10-02, see [[fabrication-glass-and-door-glazing]].
+- Since 2026-10-02 the tablet also reads `Glass station`, polls every 5 s and has
+  no idle lock (`cw_fabperson` no longer expires): [[stations-see-each-other]].
 
 ## See also
 

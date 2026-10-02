@@ -713,21 +713,17 @@ function stuListReader(cfg) {
 
 /* ---- the clock every station page polls on ----------------------------------
    2026-10-02. One timer, beating once a second, and ST.tickDue says whether a
-   turn is due: every ST.REFRESH_MS, or every ST.TICK_FAST_MS for a while after
-   burst() - which a page calls on ITS OWN TAP AND NOTHING ELSE. A change seen
-   in a poll, or in a read of another station's list, is redrawn and does not
-   touch the rate: when a change seen started a burst, every tablet on an
-   account burst whenever any one of them was tapped, and ten tablets measured
-   1020 requests a minute. A TURN NEVER STARTS WHILE THE LAST ONE IS STILL
+   turn is due: every ST.REFRESH_MS, always. Nothing changes the rate - not a
+   tap, not a change seen in a poll (a faster rate after a tap was built and
+   removed the same day: ten tablets on one account measured 1020 requests a
+   minute). A TURN NEVER STARTS WHILE THE LAST ONE IS STILL
    RUNNING: a slow reply costs skipped turns, not a pile of them. No pause and
    no visibility check - a tablet polls all the time.
 
      const TICK = STU.stuTicker(tickOnce);     // tickOnce: the page's own turn
-     TICK.start();                             // in start(), in setInterval's place
-     TICK.burst();                             // on this tablet's own tap, only   */
+     TICK.start();                             // in start(), in setInterval's place */
 function stuTicker(fn) {
-  const T = { busy: false, lastAt: 0, until: 0, timer: null };
-  T.burst = () => { T.until = Date.now() + ST.TICK_BURST_MS; };
+  const T = { busy: false, lastAt: 0, timer: null };
   /** One turn now, unless one is in the air. Answers whether it ran. */
   T.turn = async function () {
     if (T.busy && Date.now() - T.lastAt < ST.TICK_STUCK_MS) return false;
@@ -741,7 +737,7 @@ function stuTicker(fn) {
   T.start = function () {
     if (T.timer) clearInterval(T.timer);
     T.lastAt = Date.now();
-    T.timer = setInterval(() => { if (ST.tickDue(Date.now(), T.lastAt, T.until)) T.turn(); }, ST.TICK_BEAT_MS);
+    T.timer = setInterval(() => { if (ST.tickDue(Date.now(), T.lastAt)) T.turn(); }, ST.TICK_BEAT_MS);
   };
   return T;
 }

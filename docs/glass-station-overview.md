@@ -72,16 +72,14 @@ guide: `docs/STATIONS.md`.
    ("Cutting 8 left · Tuff 11 left"), never narrowed by the search and hidden
    whenever the search box is — and absent entirely for somebody who holds no
    stages. All of it is derived on the device at every draw and stored nowhere.
-   Ten quiet minutes lock the
-   tablet back to the picker; Switch person does the same. Every tap shows at
+   There is no idle lock (since 2026-10-02): the name stays until Switch person. Every tap shows at
    once, is queued in `cw_stationq`, PATCHes only that stage's counter plus
    `<Stage>By/<Stage>At/DoneBy/DoneAt`, then POSTs one `Station log` line
    (Title=job, Station, GlassType, Stage, From, To, Who, At) with `From`
    captured at tap time. The queue drains until empty, retries, and survives
    a reload; a replayed queue is whitelisted to the counter fields.
-4. **Real time.** Both pages poll by delta (`listDelta`, 10 s on the tablet;
-   10 s on the office while the board, a glass job's drawer or the log window
-   is open, 60 s otherwise). `mergeDelta` applies last-occurrence-wins and
+4. **Real time.** Both pages poll by delta (`listDelta`, 5 s on the tablet,
+   a steady tick, no burst; 5 s on the office whatever is on screen). `mergeDelta` applies last-occurrence-wins and
    `@removed`; a 410 resync or a refused delta falls back to one full read
    (and a 5-minute "delta off" flag). The tablet repaints only the cards that
    changed (`boardDiff`), re-bases a queued tap whose row has risen under it
@@ -107,15 +105,16 @@ list-id caches are dropped on the move). In that interim the station account
 is a member of the workbook's site and can therefore open the workbook; the
 owner accepted that. See `docs/STATIONS.md`, "Interim".
 
-**Honest limits (told to the owner).** PIN, gating and the lock are a
+**Honest limits (told to the owner).** PIN and gating are a
 deterrent on a shared device, not security; the real boundary is site
-membership. Graph has no push; 10 s delta polling is the real-time mechanism.
+membership. Graph has no push; 5 s delta polling is the real-time mechanism.
 Jobs reach the floor only while an office dashboard is open.
 
 **The glass tablets see fabrication (2026-10-01,
 [spec](specs/2026-10-01-glass-sees-fabrication.md)).** Tablet only, read only.
 `glass.html` loads `fabrication-core.js`, and `station.js` (`readFab`) reads
-the `Fabrication station` list by delta on the board's own ten-second clock.
+the `Fabrication station` list through the shared reader
+(`STU.stuListReader`), by delta, on the board's own five-second clock.
 Each card gets one line under its counters, summed over the job's product
 groups (`ST.fabOfJob`, fed `FABC.fbOfficeBoard`'s records; door glazing is not
 counted): not started (muted), in progress (lavender), done (purple, or green
@@ -128,12 +127,15 @@ a capsule that toggles a filter: it reads "N waiting on glass" above 1000 px,
 (the full words are always its aria-label). No sort change; the
 filter is not remembered and clears where the search clears.
 It is a **separate lookup** — `CW.stationSite("floor")`, its own site id and
-token in `GFAB` — and never touches the glass lists' pin, token or problem
+token in `GFAB` (the reader) — and never touches the glass lists' pin, token or problem
 state. If the site or list cannot be read every card says "Fabrication: not
 available" and it is asked again a minute later; glass works as before.
+The hotmelting tablet also shows a greyed read-only Cut (and Tuff) line and a
+"Cut first" switch (`cw_glasscutfirst`). Whole story: [[stations-see-each-other]].
 
 ## See also
 
+- [[stations-see-each-other]] — the shared reader, the poll clock, what each tablet sees of the others
 - [[export]] — previous: export to Excel / PDF
 - [[glass-station-job-row]] — next: the glass chip on the ordinary job list
 - [[glass-colours]] — the floor's counters reaching the Production sheet

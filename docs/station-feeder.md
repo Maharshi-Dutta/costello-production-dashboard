@@ -60,9 +60,9 @@ none of the three.
   never writes `Glass station`'s floor columns, and never writes `Station
   people`, `Station log` or `Station comments` at all. It reads all four (the people list once, for the log
   window's filters) and keeps the board, the drawer's timeline and the log
-  window current with `listDelta()` — every 10 seconds while the station
-  board, the log window, or a drawer for a job with glass is open
-  (`stationTick()`/`stationWatching()`), once a minute otherwise.
+  window current with `listDelta()` — every 5 seconds whatever is on
+  screen (`stationTick()`, since 2026-10-02; `stationWatching()` is gone), the
+  five floor polls running together.
 
 See `docs/STATIONS.md` for the full data model, admin setup and
 troubleshooting, and [`docs/specs/2026-09-08-glass-station.md`](specs/2026-09-08-glass-station.md) plus its v2 and

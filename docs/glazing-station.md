@@ -60,8 +60,9 @@ it: a card is a job, one stepper and a note box.
 
 Borrowed from `station-core.js` rather than repeated: `feedPlan`, `sliceHash`,
 `floorOnly`, `logFields`, `stationComments`, `stationPeople`, `mergeDelta`,
-`boardDiff`, `stripContact`, `atCmp`, `canStage`, `pinOk`, `personExpired`,
-`REFRESH_MS`, `PERSON_LOCK_MS`. From `station-ui.js`: the theme, the sign-in
+`boardDiff`, `stripContact`, `atCmp`, `canStage`, `pinOk`,
+`REFRESH_MS` (`personExpired` and `PERSON_LOCK_MS` went with the idle lock,
+2026-10-02). From `station-ui.js`: the theme, the sign-in
 gate, the "Who are you?" picker and its PIN pad.
 
 One helper moved *into* `station-core.js` for this: **`ST.sectionInProduction`**,
@@ -77,9 +78,18 @@ Pulling it out would touch the glass tablet, whose suite is frozen at 270
 checks, and it is the kind of change that wants its own brief rather than a
 ride on a feature's.
 
+### Ready to glaze (2026-10-02)
+
+The tablet and the office board show a Glass chip, a Fabrication chip (window
+groups only) and a READY TO GLAZE badge, read off `Glass station` and
+`Fabrication station` directly, never fed. The row's `Glass` / `Fabrication`
+columns are yes/no facts off the sheet that say whether a missing row on those
+lists means "nothing to do" or "not fed yet". Unknown is never ready. See [[stations-see-each-other]].
+
 ## See also
 
 - [[station-reports]] — previous: the station report
 - [[glazing-station-phase-bar]] — next: the phase bar hears the floor, tests, review
+- [[stations-see-each-other]] — the glass and fabrication chips, the poll clock, no idle lock
 - [[welding-station]] — the earlier station this one borrows its pattern from
 - [[glass-two-stage]] — where glazing left the glass station

@@ -414,7 +414,6 @@ function tap(id, part, delta) {
   if (value == null || value === rec[part]) return;
   delete LOST[String(rec.job).trim().toUpperCase()];
   queueTap(rec, part, value);
-  TICK.burst();
   render();
   flushQueue();
 }
@@ -534,7 +533,7 @@ async function take(id, part) {
   TAKING[k] = 1; render();
   try {
     await CW.listAdd(F.FB_ASSIGN_LIST, body, assignOpts());
-    TAKING[k] = Date.now(); TICK.burst();
+    TAKING[k] = Date.now();
     await readAssign();
   } catch (e) {
     delete TAKING[k];

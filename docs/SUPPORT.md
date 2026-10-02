@@ -131,6 +131,22 @@ has finished the setup in `docs/STATIONS.md` — walk through that setup, then
 tap the tablet's "Try again" button (this also clears the cached site id, in
 case it was the stale part).
 
+## A chip says "checking" or "not available" (stations see each other)
+
+The glass, glazing and fabrication chips read another station's list
+themselves ([[stations-see-each-other]]).
+
+- **"Not available"** means this tablet's account cannot read the other
+  station's list (403 or 404). Check that the account is a member of that
+  list's site: `Glass station` is in the workbook's site, the others in
+  `Floor stations`. The chip clears on its own a minute after the fix.
+- **"Checking"** for a few seconds after the page opens is normal. If it
+  never clears on the glazing tablet, the office has not fed that job yet
+  (the job's `Glass` / `Fabrication` fact is blank and its row is missing on
+  the other list): open the office dashboard once. It is never shown as ready.
+- **"Sign in again" every morning**: the automatic renewal needs the tablet
+  page URLs registered as SPA redirect URIs in Entra (owner step).
+
 ## Station tablet: "Tap Sign out, then Sign in again"
 
 This is the tablet's wording for an expired sign-in (MSAL's
@@ -322,8 +338,7 @@ deliberate: this is a record of what was said, like `Station log`.
    and writes nothing anywhere.
 2. **It is on another job.** The drawer shows one job's notes and nothing else.
 3. **Give it a minute.** A note reaches the office on the floor's own poll —
-   ten seconds while somebody is looking at the floor or has a glass job's
-   drawer open, up to a minute otherwise. The Changes panel gets a line the
+   five seconds, whatever is on screen. The Changes panel gets a line the
    moment it arrives.
 4. **The tablet says "not sent — tap Send again".** Then it never left the
    tablet. The typing is still in the box; tapping Send again sends it. This is

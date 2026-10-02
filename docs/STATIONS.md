@@ -246,7 +246,8 @@ ten minutes, and by the master for the log window's filters.
 **Everything the tablet enforces is a deterrent, not a secret.** The PIN is
 compared on the tablet, against a column the station account itself can read,
 so anybody who can sign in as the station account can read every PIN in the
-list. The same goes for the stage gating and the ten-minute lock: they are
+list. The same goes for the stage gating (and, until 2026-10-02, the ten-minute
+lock, since removed): they are
 drawn and enforced by a page running on the device, so somebody with the
 device and the will can get past all three. They exist to stop one person
 tapping in another's name, or moving a stage that is not theirs, on a tablet
@@ -516,8 +517,7 @@ about this job, oldest first, each tagged with the station, the person and the
 time. Read-only — there is no reply box in this build. It is shown for **every**
 job, not only a glass one, because the channel belongs to every station. A new
 note also appears in the **Changes** panel, as "New floor note on `<job>`, from
-`<station>`, `<who>`", within the same ten seconds (or a minute when nobody is
-looking at the floor) as the rest of the floor's work. There is no new column
+`<station>`, `<who>`", within the same five seconds as the rest of the floor's work. There is no new column
 on the job row — per-job detail goes in the card (owner's rule, 2026-09-09).
 Since 2026-09-16, a new note also shows a 💬 badge on the job row and on that
 job's Glass station board card, until the job is opened on that screen.
@@ -534,11 +534,9 @@ path in the master dashboard that writes or deletes a line, and log lines are
 never part of an export.
 
 **Keeping up in real time.** A tap on the tablet is meant to reach the office
-within about ten seconds. The tablet polls the `Glass station` list every
-10 seconds; the master dashboard does the same for both `Glass station` and
-`Station log`, but only while somebody is actually looking at the floor's
-data — the station board is showing, the log window is open, or a job with
-glass is open in the drawer — and drops back to once a minute otherwise. Both
+within about five seconds. Since 2026-10-02 the tablet polls every 5 seconds
+(a steady 5 s tick, no burst) and the master dashboard polls the
+floor's lists every 5 seconds whatever is on screen. Both
 sides use SharePoint's delta feed (`listDelta`) rather than re-reading the
 whole list each time, merging in only what changed; a stale delta token (a
 410) is answered by reading the list once and starting a fresh delta
@@ -846,17 +844,23 @@ channel to the other site at all.
 three glass lists are copied into `Floor stations`. One word, and it is the
 last step of that move.
 
-**One read crosses the two sites, and it is not the pin moving** (2026-10-01,
-`docs/specs/2026-10-01-glass-sees-fabrication.md`). The glass tablet reads the
-`Fabrication station` list, read only, to show each job's fabrication stage.
-It asks the `"floor"` channel for that one list and keeps the answer in its own
-`GFAB` (site id, delta token, one-minute retry clock) in `station.js`; the
-glass lists still resolve through `"own"` and share nothing with it. The
-station account must be a member of `Floor stations` for the line to appear;
-without that the cards say "Fabrication: not available" and nothing else
-changes. The read is a delta and has no plain-read fallback: a `Fabrication
-station` list that refuses delta outright also reads "not available" on the
-glass tablets, retried once a minute.
+**Reads cross the two sites, and that is not the pin moving** (2026-10-01,
+rebuilt 2026-10-02, [[stations-see-each-other]]). Every station page reads the
+other stations' lists it needs, read only, through the shared reader
+(`STU.stuListReader`). It asks `CW.stationSite("own")` or `("floor")` for that
+one list and keeps site id, delta token and retry clock in the reader, never in
+the page's own board. Which page reads which list, in which site:
+
+| Page | Own board | Also reads (read only) |
+|---|---|---|
+| glass (cut, hotmelt) | `Glass station` (own) | `Fabrication station` (floor) |
+| welding | `Welding station` (floor) | nothing |
+| glazing | `Glazing station` (floor) | `Glass station` (own), `Fabrication station` (floor) |
+| fabrication | `Fabrication station` (floor), `Fabrication assignments` | `Glass station` (own) |
+
+The station account must be a member of both sites. Without that a chip says
+"not available" and nothing else changes. A list that refuses delta outright
+is read the plain way for five minutes. A throttle (429) keeps the last read.
 
 ### 8. Tests and docs
 
@@ -1011,6 +1015,7 @@ In the **`Floor stations`** site. `Title` is unique.
 | `Windows` / `Doors` | Number | feeder | the job's quantities **on the `Production` sheet** |
 | `Total` | Number | feeder | `Windows` — the units to glaze. It was `Windows + Doors` until 2026-09-23, when the owner took the doors out of the count; `Doors` is still fed as a fact and is counted nowhere |
 | `Comment` | Multiple lines of text | feeder | the sheet's COMMENT after the rule-3 strip, max 140 characters, may be blank |
+| `Glass` / `Fabrication` | Single line | feeder (2026-10-02) | **facts off the sheet, `yes` or `no`, never a status**: does the job have glass on the sheet, does it have window groups the fabrication feeder feeds (`GLZC.glzNeeds`). They tell the tablet whether a job with no row on the glass or fabrication list means "nothing to do" (`no`) or "not fed yet" (`yes`, or blank: checking). Where the glass and fabrication have got to is read off their own lists, never stored here |
 | `FedAt` / `FedBy` | Single line | feeder | the last feed that changed this row, and whose dashboard did it |
 | `Glazed` | Number | the tablet; the office from its glazing board | units glazed so far, 0…`Total` |
 | `GlazedBy` / `GlazedAt` | Single line | the same | who last moved the counter, and when (ISO) |
@@ -1158,7 +1163,7 @@ station**. Definition: `FABC.FAB` in `fabrication-core.js`, `site: "floor"`.
 | `FramesBy/At`, `SashesBy/At`, `TransomsBy/At` | Single line | the tablet; the office | last mover of that counter |
 | `DoneBy` / `DoneAt` | Single line | the tablet; the office | last touch of any counter |
 | `Urgent` | Single line | the office only (Part B) | blank, or a comma list of `job`, `group`, `frames`, `sashes`, `transoms`. `job` is the job-level flag, written on every row of the job. Never written by the feeder |
-| `Glass` | Single line | feeder (2026-10-01) | the job's glass, in one word, on every row of the job: blank (no glass), `none`, `part:<cut>/<total>:<hotmelt>/<total>` (plus `:tuff <n>/<m>` when the job has Tuff), or `done` (cut and hotmelt complete, and Tuff when the job has Tuff — or the office says the glass is done). Worked out by the office from the glass station's row it already holds; the fabrication tablet never reads the glass list |
+| `Glass` | Single line | nobody (2026-10-02) | **unread and unwritten, kept on the list.** Added 2026-10-01 for an office-fed glass word; since 2026-10-02 the fabrication tablet and the office board read the glass status off `Glass station` itself. Existing values are stale and mean nothing |
 | `GlazeTotal` | Number | feeder (2026-10-01) | door glazing to do on this row: the job's DOORS DONE cells whose code is glazed in this group. PVC DOOR and PVC SMART rows only; 0 elsewhere |
 | `GlazeDone` | Number | the tablet; the office board | doors glazed so far |
 | `GlazeBy` / `GlazeAt` | Single line | the tablet; the office | last mover of that counter |
@@ -1210,11 +1215,8 @@ office row written after the glazing stands, CD-type cells are never touched.
 - **A changed door code leaves earlier gold** (accepted, review B-1). If a
   door's code is changed after its cell was gilded (PVC → CD, say), the cell
   stays gold: nothing here ever clears. Only the office clears a door.
-- **Churn.** The `Glass` word follows the glass list at most once a minute,
-  and the fabrication feed waits for the glass list to be read before its
-  first feed rather than writing every job's `Glass` blank and then again.
 
-**A list without the 2026-10-01 columns.** If `Glass` or `GlazeTotal` is not on
+**A list without the 2026-10-01 column.** If `GlazeTotal` is not on
 the list yet, the write that names it is refused (400); the office sends it
 again without that column, remembers the column for the session, says which
 one is missing on the board, and the rest of the feed carries on.
@@ -1363,8 +1365,8 @@ dashboard and never block on a retry loop.
 - Type a job number or a customer name into the header's search box to narrow
   the cards down (Switch person clears it again for the next person).
 - Pick their own name from `Station people` (and enter their PIN, if the
-  owner has given them one). The chosen name locks itself after ten minutes
-  without a tap, and there is a **Switch person** button in the header.
+  owner has given them one). The chosen name stays until somebody presses the
+  **Switch person** button in the header (no idle lock since 2026-10-02).
 - Tap to record progress on **this tablet's own stage** (cutting or
   hotmelting — and tuff as well on the cutting tablet, where the job has any
   and the person holds it), per job, on
