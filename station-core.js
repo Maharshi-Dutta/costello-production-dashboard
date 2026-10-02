@@ -341,14 +341,26 @@ const PEOPLE_FIELDS_OFFICE = ["Title", "Station", "Stages", "Active"];
 const LOG_FIELDS = ["Title", "Station", "GlassType", "Stage", "From", "To", "Who", "At"];
 const CUSTOMER_MAX = 70;
 
-/* One tablet is passed between three people, so the name that is chosen has to
-   stop meaning anything by itself. Ten minutes without a tap and the picker
-   comes back. One constant, easy to change after the demo. */
-const PERSON_LOCK_MS = 600000;
-/* How often each screen looks for someone else's changes. Ten seconds is the
-   number the owner asked for: a tap on the floor is on the office screen
-   before anybody has finished saying what they just did. */
-const REFRESH_MS = 10000;
+/* How often each screen looks for someone else's changes. Five seconds since
+   2026-10-02 (it was ten): the stations read each other's lists directly, and
+   a tap on one tablet should be on the next before anybody walks over. */
+const REFRESH_MS = 5000;
+/* ... and for TICK_BURST_MS after this tablet's own tap, or after a poll that
+   brought a change, it looks every TICK_FAST_MS instead: work comes in runs.
+   The timer itself beats once a second and asks tickDue() each time. A turn
+   still running is never joined by a second one; one that has not come back
+   after TICK_STUCK_MS is given up on, so a reply that never arrives cannot
+   stop a tablet that is left on for weeks. */
+const TICK_FAST_MS = 2000;
+const TICK_BURST_MS = 20000;
+const TICK_BEAT_MS = 1000;
+const TICK_STUCK_MS = 300000;
+/** Is a turn of the clock due? `lastAt` is when the last one STARTED. A
+    quarter of a second of grace, because a one-second timer lands a few
+    milliseconds either side of the second. */
+function tickDue(now, lastAt, burstUntil) {
+  return now - lastAt >= (now < burstUntil ? TICK_FAST_MS : REFRESH_MS) - 250;
+}
 /* How far back the office reads the log to begin with. The list is never
    deleted from, so after a year it is thousands of lines of last spring: the
    window and the drawer both only ever look at recent work. */
@@ -944,6 +956,18 @@ function glassTabs(items, finishedHere) {
   return out;
 }
 
+/** Is this job's cutting ahead of its hotmelting - glass cut and waiting for
+    the hotmelter? */
+const cutAhead = g => !!g && stNum(g.cut, 0) > stNum(g.hotmelt, 0);
+/** "Cut first" on the hotmelting tablet (2026-10-02): those cards first, the
+    order inside each group exactly as it was. Off, the cards as given. */
+function cutFirst(cards, on) {
+  if (!on) return cards || [];
+  const ahead = [], rest = [];
+  (cards || []).forEach(g => (cutAhead(g) ? ahead : rest).push(g));
+  return ahead.concat(rest);
+}
+
 /** Search across both tabs (owner's decision 3, 2026-09-24): which tab to show
     for a query, and how many matches the other tab holds. The tab you are on
     wins if it has a match; if only the other does, that one is shown; `more`
@@ -1090,13 +1114,6 @@ function pinOk(person, entered) {
   const want = stTxt(person && person.pin).trim();
   if (!want) return true;
   return want === stTxt(entered).trim();
-}
-/** Has the chosen name gone stale? The tablet is passed around, so a name that
-    has not tapped anything for PERSON_LOCK_MS stops meaning anybody. */
-function personExpired(lastTapAt, now, lockMs) {
-  const t = stNum(lastTapAt, 0);
-  if (!t) return true;
-  return (stNum(now, Date.now()) - t) >= stNum(lockMs, PERSON_LOCK_MS);
 }
 
 /* ---- the writes one tap makes ----------------------------------------------
@@ -2252,7 +2269,8 @@ const ST = {
   STATION_FIELDS, FEEDER_FIELDS, FLOOR_FIELDS, PEOPLE_FIELDS, LOG_FIELDS,
   SEED_FIELDS, FEEDER_WRITES, GLASS_TYPE, TOTAL_TYPES,
   OFFICE_CLEAR_FIELDS, officeClearFields, floorWorkToClear, clearWords, clearWarning,
-  PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, PERSON_LOCK_MS, REFRESH_MS, LOG_DAYS, logSince,
+  PEOPLE_FIELDS_OFFICE, CUSTOMER_MAX, REFRESH_MS, LOG_DAYS, logSince,
+  TICK_FAST_MS, TICK_BURST_MS, TICK_BEAT_MS, TICK_STUCK_MS, tickDue,
   COMMENT_LIST, COMMENT_FIELDS, COMMENT_MAX, COMMENT_POLL_MS,
   COMMENT_MISSING_FLOOR, COMMENT_MISSING_OFFICE, COMMENT_UNREACHABLE, COMMENT_CHECKING,
   COMMENT_EMPTY_FLOOR, COMMENT_EMPTY_OFFICE, COMMENT_UNSENT, COMMENT_KEPT,
@@ -2271,7 +2289,7 @@ const ST = {
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
   glassTabs, tabSearch, GLASS_GONE, fabOfJob: glassFabOf, glassWaiting,
   stageLeft, heldStages, jobLefts, boardLefts, applyTap, boardDiff, mergeDelta,
-  stationPeople, canStage, pinOk, personExpired,
+  stationPeople, canStage, pinOk, cutAhead, cutFirst,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast
 };
 if (typeof window !== "undefined") window.ST = ST;

@@ -40,7 +40,16 @@ let sessionId = null;          // workbook session: keeps the file warm server-s
 
 async function initAuth() {
   await app().initialize();
-  const res = await app().handleRedirectPromise();
+  let res = null;
+  try { res = await app().handleRedirectPromise(); }
+  catch (e) {
+    /* a tablet's own renewal redirect (stationRenew, below) that came back
+       with an error must not stop the page starting: the account is still in
+       the cache, and the page then shows its "Sign in again" button. Any other
+       page, and any other time, this throws exactly as it always has. */
+    if (!renewTried()) throw e;
+    console.warn("[graph] the automatic sign-in renewal came back with an error:", (e && e.errorCode) || (e && e.message) || e);
+  }
   if (res && res.account) account = res.account;
   if (!account) {
     const all = app().getAllAccounts();
@@ -56,11 +65,69 @@ async function initAuth() {
 async function signIn(scopes) {
   const res = await app().loginPopup({ scopes: scopes || SCOPES, prompt: "select_account" });
   account = res.account;
+  renewFailed = false;
   return account;
 }
 
 function signOut() {
   return app().logoutPopup({ account: account });
+}
+
+/* ---- a floor tablet renews its own sign-in (2026-10-02) ---------------------
+   docs/specs/2026-10-02-stations-see-each-other.md, section 7. The renewal
+   token of a browser app lasts a day, so a tablet left on overnight met "the
+   sign-in has expired" most mornings. A STATION PAGE - one that has called
+   CW.stationRenew(idle) - now makes one automatic attempt first, when the
+   silent renewal fails with an interaction-required error:
+
+     1. ssoSilent, in a hidden frame, with the account's own login hint;
+     2. if Microsoft answers that one "interaction required", ONE full-page
+        acquireTokenRedirect with prompt=none - no typing, as long as the
+        browser still holds the Microsoft session.
+
+   Both name THIS PAGE's own address as the redirect URI, which must be
+   registered for the app in Entra beside the bare origin. Step 2 only ever
+   follows a step 1 that Microsoft answered THROUGH that address - an address
+   that is not registered gets a timeout instead and no redirect - so a tablet
+   can never be left on a Microsoft error page, or on the site's root.
+
+   IT CANNOT LOOP: the time of the redirect is written to sessionStorage
+   before the page leaves (no sessionStorage, no redirect), and there is no
+   second one inside RENEW_HOLD_MS whatever comes back - nothing takes the mark
+   off early. A page whose attempt failed does not try again until somebody
+   has signed in by hand. And it never leaves while a tap is queued unsent:
+   `idle()` is the page's own "nothing is owed", the same condition its reload
+   on a new build waits for. When any of it fails, the page shows the "Sign in
+   again" button it always has. */
+const RENEW_KEY = "cw_renewtried";
+const RENEW_HOLD_MS = 3600000;
+let renewIdle = null;                 // set by a station page; null on the office page
+let renewing = null, renewFailed = false;
+function stationRenew(idle) { renewIdle = typeof idle === "function" ? idle : null; }
+/** Has this tab made its renewal redirect within the hour? */
+function renewTried() {
+  try { return Date.now() - Number(sessionStorage.getItem(RENEW_KEY) || 0) < RENEW_HOLD_MS; }
+  catch (e) { return false; }
+}
+const needsInteraction = e => !!e && e.errorCode !== "consent_required" &&
+  (e.name === "InteractionRequiredAuthError" || /interaction_required|login_required/.test(String(e.errorCode || "")));
+async function silentToken(scopes) {
+  return (await app().acquireTokenSilent({ scopes: scopes, account: account })).accessToken;
+}
+async function renewSignIn(scopes) {
+  const req = { scopes: scopes, loginHint: account.username,
+                redirectUri: window.location.origin + (window.location.pathname || "") };
+  try {
+    const r = await app().ssoSilent(req);
+    if (r && r.account) account = r.account;
+  } catch (e) {
+    let idle = false;
+    try { idle = !!renewIdle(); } catch (x) {}
+    if (!needsInteraction(e) || renewTried() || !idle) throw e;
+    sessionStorage.setItem(RENEW_KEY, String(Date.now()));   // throws where there is none: then no redirect
+    await app().acquireTokenRedirect(Object.assign({ prompt: "none" }, req));
+    throw e;                                           // the page is on its way out
+  }
 }
 
 let tokenOverride = null;     // rehearsal harness only: a token without the sign-in library
@@ -71,9 +138,18 @@ async function token(scopes, quiet) {
   if (!account) throw new Error("not signed in");
   scopes = scopes || SCOPES;
   try {
-    const r = await app().acquireTokenSilent({ scopes: scopes, account: account });
-    return r.accessToken;
+    return await silentToken(scopes);
   } catch (e) {
+    /* a floor tablet tries to renew by itself, once, before anybody is asked
+       to tap anything (stationRenew, below). Every concurrent request shares
+       the one attempt. The office page never registers and never gets here. */
+    if (renewIdle && !renewFailed && needsInteraction(e)) {
+      renewing = renewing || renewSignIn(scopes).then(() => true, () => false)
+        .then(ok => { renewing = null; renewFailed = !ok; return ok; });
+      if (await renewing) {
+        try { return await silentToken(scopes); } catch (x) { /* as a failure has always been answered */ }
+      }
+    }
     if (quiet) throw new Error("permission needed: " + ((e && e.errorCode) || (e && e.message) || "consent"));
     const r = await app().acquireTokenPopup({ scopes: scopes, account: account });
     return r.accessToken;
@@ -140,10 +216,22 @@ async function headers(extra, path) {
    That one arrives as a 400, so it needs handling separately from server
    errors: drop the stale session, open a fresh one, and try again. */
 let openingSession = false;
+/* Throttling (2026-10-02). A 429 or a 503 that names its wait in Retry-After
+   is waited out for as long as it asks (never more than RETRY_AFTER_MAX_S),
+   not on this file's own schedule; and while that wait is in force every other
+   LIST call waits for it too rather than firing into the same limit - one
+   shared back-off for the account's list traffic. A little jitter, so thirteen
+   tablets told "ten seconds" do not all come back in the same millisecond.
+   Workbook calls keep their own waits and never queue behind it. */
+const RETRY_AFTER_MAX_S = 60;
+let listBackoffUntil = 0;
+const waitMs = ms => new Promise(s => setTimeout(s, ms));
 
 async function call(method, path, body, asBuffer, more) {
   let lastStatus = 0, lastText = "", sessionRetried = false;
+  const isList = needsListScope(path);
   for (let a = 0; a < 5; a++) {
+    if (isList && listBackoffUntil > Date.now()) await waitMs(listBackoffUntil - Date.now());
     /* a Blob (a photo for the Sales photos library) is sent as it is */
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
     const ct = body ? { "Content-Type": raw ? (body.type || "application/octet-stream") : "application/json" } : null;
@@ -167,7 +255,13 @@ async function call(method, path, body, asBuffer, more) {
       continue;
     }
     if ([429, 500, 503, 504].indexOf(r.status) >= 0) {
-      await new Promise(s => setTimeout(s, 2000 + a * 2500));
+      const asked = (r.status === 429 || r.status === 503) && r.headers && r.headers.get
+        ? Number(r.headers.get("Retry-After")) : 0;
+      if (asked > 0) {
+        const ms = Math.min(asked, RETRY_AFTER_MAX_S) * 1000 + Math.random() * 500;
+        if (isList) listBackoffUntil = Math.max(listBackoffUntil, Date.now() + ms);
+        await waitMs(ms);
+      } else await waitMs(2000 + a * 2500);
       continue;
     }
     break;
@@ -1674,7 +1768,7 @@ function stationSiteMoves(which) {
 
 
 window.CW = {
-  initAuth, signIn, signOut, token, findFile, openSession, lastModified,
+  initAuth, signIn, signOut, stationRenew, token, findFile, openSession, lastModified,
   downloadWorkbook, setFill, clearFill, setValues, rowForJob, A1, serialised,
   ensureLogSheet, appendLog, LOG_SHEET,
   ensureViewsSheet, saveAssignment, clearAssignment, VIEWS_SHEET,
@@ -1692,6 +1786,8 @@ window.CW = {
   /* tests only: forget which dashboard sheets have been seen, so the creation
      branch of the ensure*Sheet functions can be exercised again */
   _resetSheetMemo() { logReady = null; viewsReady = null; progressReady = null; alertsReady = null; },
+  /* tests only: let go of a Retry-After wait, and of a failed renewal */
+  _clearBackoff() { listBackoffUntil = 0; renewFailed = false; renewing = null; },
   /* tests only: forget the list ids found so far */
   _resetListIds() { Object.keys(listIdMemo).forEach(k => delete listIdMemo[k]); salesDriveMemo = null; },
   /* tests only: which scopes a path is asked for - the same call headers()

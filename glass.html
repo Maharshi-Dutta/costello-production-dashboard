@@ -56,31 +56,63 @@
 
   /* ---- the bar across the top ---- */
   /* Two rows, each an unwrapping flex line (2026-09-24, as welding.html). Only
-     #search grows, and only #whois (ellipsis) and #gtotal (wraps inside its
-     own pill) may shrink,
+     #search grows, and only #gtotal (wraps inside its own pill) and, after it,
+     #whois (ellipsis) may shrink,
      so the header is the same two rows at 700 px and at 1100 px and can never
      become three. A phone (<=520 px) is allowed to wrap - see the rule at the
-     bottom. The theme switch sits on row one (the name gives way to it with
-     an ellipsis) because row two carries End of day on the cutting page, and
-     with three-digit tab counts it did not fit at 700 px otherwise. */
+     bottom. The theme switch sits on row one because row two carries End of
+     day (and Cut first on the hotmelting page), and with three-digit tab
+     counts it did not fit at 700 px otherwise. */
   header.top { position:sticky; top:0; z-index:30; background:var(--brand); color:var(--onbrand);
                padding:9px 16px; display:flex; flex-direction:column; gap:8px }
   .toprow { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; min-width:0 }
   .brand { font-family:"Barlow Condensed",sans-serif; font-size:24px; font-weight:700;
            text-transform:uppercase; white-space:nowrap; flex:none }
-  #whois { font-size:14.5px; font-weight:600; color:var(--onbrand);
-           background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
+  /* WHO IS SIGNED IN, with Switch right beside it (2026-10-02). There is no
+     idle lock any more, so the name on screen is the name every tap is logged
+     under: it is the brightest thing in the row, the name comes first in the
+     pill, and it is the LAST thing to give way - #gtotal shrinks (and wraps
+     inside its own pill) long before the ellipsis reaches the name. */
+  #whois { font-size:15.5px; font-weight:700; color:var(--onbrand);
+           background:var(--brand-2); border:1px solid var(--onbrand); border-radius:24px;
            padding:7px 14px; min-height:38px; display:flex; align-items:center;
-           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 6 auto }
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:0 1 auto }
   /* the ellipsis needs a block to live in: the pill is a flex box */
   #whois { display:block; line-height:22px; min-width:80px }
   #whois:empty { display:none }
-  #switchbtn, #stagebtn, #daybtn { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
+  /* the stages they hold on this tablet follow the name where there is room.
+     Under 1000 px the brand already says which tablet this is, so the pill is
+     the name alone and does not shrink at all - any shrink, however small,
+     puts an ellipsis on it - up to a width the rest of the row can always
+     spare (measured at 700 and 801 px with the capsule showing and a
+     four-digit count beside it). The row's "tablet" break moved from 900 to
+     1000 px with Switch: at full size it no longer fitted under that. */
+  #whois::after { content:" · " attr(data-stages); font-weight:500 }
+  @media (max-width:1000px){
+    #whois { flex:none; max-width:180px }
+    #whois::after { content:none }
+  }
+  @media (max-width:800px){
+    #whois { max-width:118px }
+    /* no capsule in the row: its room is the name's */
+    .toprow:has(#gwait[hidden]) #whois { max-width:172px }
+  }
+  #switchbtn, #stagebtn, #daybtn, #cutfirst { background:var(--brand-2); color:var(--onbrand); border:1px solid var(--brand-line);
                border-radius:24px; min-height:44px; padding:0 13px; font-size:14px; font-weight:600;
                white-space:nowrap; flex:none }
+  /* "Cut first: on/off", the hotmelting tablet only (2026-10-02): the jobs
+     whose cutting is ahead of their hotmelting come first. Lit when on. */
+  #cutfirst.on { background:var(--onbrand); color:var(--brand) }
   /* which of the two glass tablets this is. Tapped rarely and by the office,
      so it sits quietly beside the name rather than competing with it. */
   #stagebtn { font-weight:500; color:#a8a49a }
+  /* ... and at tablet-portrait widths it is only its arrow: the brand beside
+     it already says the stage, and the room goes to the name. The words stay
+     in the button for a screen reader. */
+  @media (max-width:1000px){
+    #stagebtn { font-size:0; padding:0 15px }
+    #stagebtn::after { content:"▾"; font-size:14px }
+  }
   /* the search box: a job number or a customer name, narrowing the cards as it
      is typed. In the header, so redrawing the board never takes the caret. */
   /* 16px exactly: anything smaller and iOS zooms the whole page in when the
@@ -112,39 +144,39 @@
   #gtabs button.on { background:var(--onbrand); color:var(--brand) }
   #gtotal { font-size:14.5px; font-weight:600; color:var(--onbrand);
             background:var(--brand-2); border:1px solid var(--brand-line); border-radius:24px;
-            padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:.1; line-height:1.35; min-width:0;
+            padding:7px 14px; min-height:40px; flex:0 1 auto; flex-shrink:100; line-height:1.35; min-width:min-content;
             display:flex; align-items:center; justify-content:center }
   /* "N waiting on glass": the jobs fabrication has finished and the person
      signed in has not (2026-10-01). Only there when N > 0; a tap shows only
      those cards, a second tap clears it. The page writes only the number; the
      words are the ::after, as many as the width has room for, and the
-     aria-label always says all of it: "N waiting on glass" above 900 px,
+     aria-label always says all of it: "N waiting on glass" above 1000 px,
      "N waiting" to 800 px, and from there down the number over a small "waiting",
      two lines in a fixed-width pill. It never shrinks; #gtotal beside it is
-     the one that gives way, and #whois keeps its 80 px. The red is the gate's
-     own: the header is dark in both themes. */
+     the one that gives way, and the name in #whois stays whole. The red is the
+     gate's own: the header is dark in both themes. */
   #gwait { background:var(--brand-2); color:#f07a72; border:1px solid #f07a72; border-radius:24px;
            min-height:44px; padding:0 11px; font-size:14px; font-weight:700; line-height:1.15;
            white-space:nowrap; flex:none }
   #gwait::after { content:" waiting on glass" }
-  @media (max-width:900px){ #gwait::after { content:" waiting" } }
+  @media (max-width:1000px){ #gwait::after { content:" waiting" } }
   @media (max-width:800px){
     #gwait { padding:0 8px }
     #gwait::after { content:"\A waiting"; white-space:pre; font-size:10.5px; font-weight:600 }
-    #gtotal { padding:7px 10px }
+    #gtotal, #whois { padding:7px 10px }
   }
   #gwait.on { background:#f07a72; color:#17171a }
   #upd { font-size:12px; color:#a8a49a; margin-left:auto; white-space:nowrap; flex:none }
   #themebtn, #outbtn { background:transparent; color:#a8a49a; border:1px solid var(--brand-line);
                        border-radius:5px; min-height:44px; padding:0 10px; font-size:13px;
                        white-space:nowrap; flex:none }
-  /* under 900 px the "updated" line gives its room to the name and the
+  /* under 1000 px the "updated" line gives its room to the name and the
      number: the tablet's own failure line (#soft) still says when a read
      could not be made */
-  @media (max-width:900px){ #upd { display:none } }
+  @media (max-width:1000px){ #upd { display:none } }
   #themebtn { margin-left:auto }
   #upd + #themebtn { margin-left:0 }
-  @media (max-width:900px){ #upd + #themebtn { margin-left:auto } }
+  @media (max-width:1000px){ #upd + #themebtn { margin-left:auto } }
   @media (max-width:520px){
     /* a phone is not the device this page is for: here the rows may wrap
        rather than push the page sideways */
@@ -383,6 +415,7 @@
     <span class="brand" id="brand">Glass station</span>
     <button id="stagebtn" hidden></button>
     <span id="whois"></span>
+    <button id="switchbtn" hidden>Switch</button>
     <span id="gtotal" hidden></span>
     <button id="gwait" aria-pressed="false" hidden></button>
     <span id="upd"></span>
@@ -393,7 +426,7 @@
     <span id="gtabs" role="tablist" hidden>
       <button id="tabfloor" role="tab" aria-selected="true">On floor</button><button id="tabfin" role="tab" aria-selected="false">Finished</button>
     </span>
-    <button id="switchbtn" hidden>Switch person</button>
+    <button id="cutfirst" aria-pressed="false" hidden>Cut first: off</button>
     <button id="daybtn" hidden>End of day</button>
     <button id="outbtn">Sign out</button>
   </div>

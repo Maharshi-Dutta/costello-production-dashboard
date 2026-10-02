@@ -123,7 +123,9 @@ when the job is finished on the sheet). A job whose fabrication is done while
 the signed-in person's own stage still has glass left (`ST.glassWaiting`: the
 card's own "N left", tuff owed for a tuff holder; not a job the office has
 locked, not one that has left In production) gets a red badge, and the header
-a capsule "N waiting on glass" that toggles a filter. No sort change; the
+a capsule that toggles a filter: it reads "N waiting on glass" above 1000 px,
+"N waiting" down to 800 px and the number over a small "waiting" below that
+(the full words are always its aria-label). No sort change; the
 filter is not remembered and clears where the search clears.
 It is a **separate lookup** — `CW.stationSite("floor")`, its own site id and
 token in `GFAB` — and never touches the glass lists' pin, token or problem

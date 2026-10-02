@@ -35,7 +35,7 @@ let QUERY = "", TAB = "floor", PRESEARCH = null, TYPED = false;
 let PERSON = null, LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
 let HINT = {};                           // job -> { group, at }: a tap on somebody else's line
-let refreshT = null, retryT = null, buildT = null, peopleT = null, lockT = null;
+let retryT = null, buildT = null, peopleT = null;
 let flushing = false;
 const DELTA_OFF_MS = 300000;
 let DELTA_OFF = 0;
@@ -44,12 +44,14 @@ const deltaOff = () => !!(DELTA_OFF && Date.now() - DELTA_OFF < DELTA_OFF_MS);
 try { if (localStorage.getItem(TAB_KEY) === "finished") TAB = "finished"; } catch (e) {}
 const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {} };
 
-/* ---- who is on the station ---- */
+/* ---- who is on the station ----
+   No idle lock (owner, 2026-10-02): the name stays, across reloads and new
+   builds, until somebody presses Switch or the person leaves `Station people`.
+   Eligibility follows whoever was picked last. */
 function loadPerson() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(PERSON_KEY) || "null"); } catch (e) { raw = null; }
   if (!raw || !raw.name) return;
-  if (ST.personExpired(raw.at, Date.now(), ST.PERSON_LOCK_MS)) return;
   const hit = PEOPLE.find(p => p.name === raw.name);
   if (!hit) return;
   PERSON = hit; LAST_TAP = Number(raw.at) || Date.now();
@@ -75,11 +77,6 @@ function pickPerson(p) {
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false; HINT = {};
   clearSearch(); savePerson(); render();
-}
-function lockIfIdle() {
-  if (!PERSON) return;
-  if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  PERSON = null; HINT = {}; clearSearch(); savePerson(); render();
 }
 const who = () => (PERSON ? PERSON.name : "");
 const mayDo = group => F.fbEligible(PERSON, group);
@@ -375,6 +372,7 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
+    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue(); render(); flushQueue();
     return true;
   } catch (e) {
@@ -410,6 +408,7 @@ function tap(id, part, delta) {
   if (value == null || value === rec[part]) return;
   delete LOST[String(rec.job).trim().toUpperCase()];
   queueTap(rec, part, value);
+  TICK.burst();
   render();
   flushQueue();
 }
@@ -460,43 +459,60 @@ function setView(v) {
 }
 
 /* ---- Part B: the assignments list ------------------------------------------
-   Read every tick with the board. ASSIGN_OK: null not read yet, true read,
-   false the list is not there - and then this page behaves exactly as Part A
-   (eligible = may tap) and says so in the footer. The page's ONLY write to
-   this list is a Requested row for the person signed in (Take). */
+   Read every tick with the board - since 2026-10-02 by delta, through the
+   shared read-only reader (STU.stuListReader), not the whole list each time.
+   ASSIGN_OK: null not read yet, true read, false the list is not there - and
+   then this page behaves exactly as Part A (eligible = may tap) and says so in
+   the footer. ONLY a list that is positively not there is `false`: a refusal,
+   a blip, or a first read that has not answered leaves the last state, which
+   for a page that has read nothing yet is null - the gate stays shut
+   (HISTORY B32). The page's ONLY write to this list is a Requested row for
+   the person signed in (Take), and it does not go through the reader. */
 let ASSIGN_ROWS = [], IDX = {}, ASSIGN_OK = null;
 const assignOpts = () => ({ siteId: SITEID, fields: F.FB_ASSIGN_FIELDS });
+/* retried on the next turn after a failure: this list gates the taps */
+const ASG = STU.stuListReader({ site: F.FAB.site, list: F.FB_ASSIGN_LIST, fields: F.FB_ASSIGN_FIELDS,
+                                retryMs: ST.REFRESH_MS - 500, tag: "[fabrication]" });
+/** Answers whether the assignments moved. */
 async function readAssign() {
-  if (!SITEID) return;
-  try {
-    /* ponytail: a full read every tick; move to delta if the list grows past a few thousand rows */
-    const items = await CW.listItems(F.FB_ASSIGN_LIST, assignOpts());
-    if (items == null) { ASSIGN_OK = false; ASSIGN_ROWS = []; IDX = {}; return; }
-    ASSIGN_ROWS = F.fbAssignRows(items); IDX = F.fbAssignIndex(ASSIGN_ROWS); ASSIGN_OK = true;
-  } catch (e) {
-    if (CW.isMissing && CW.isMissing(e)) { ASSIGN_OK = false; ASSIGN_ROWS = []; IDX = {}; }
-    /* anything else: keep the last read, the gate does not flap on a blip */
-  }
+  const moved = await ASG.read();
+  if (ASG.items) {
+    if (moved || ASSIGN_OK !== true) { ASSIGN_ROWS = F.fbAssignRows(ASG.items); IDX = F.fbAssignIndex(ASSIGN_ROWS); }
+    ASSIGN_OK = true;
+  } else if (ASG.missing) { ASSIGN_OK = false; ASSIGN_ROWS = []; IDX = {}; }
+  /* anything else: keep the last read, the gate does not flap on a blip */
+  return moved;
 }
 const listOn = () => ASSIGN_OK === true;
 /* three states, failing closed: see fbCanTap (review P1) */
 const mayTap = (rec, part) => !rec.sheetDone && F.fbCanTap(PERSON, rec.group, part, IDX, ASSIGN_OK, rec.job);
 const mayAct = (rec, part, act) =>
   F.fbActAllowed(PERSON, IDX, ASSIGN_OK, rec.job, rec.group, part, rec[part + "Total"], act);
+/* TAKING[k]: 1 while the request is being sent; then the time it was sent, and
+   for TAKE_HOLD_MS a second Take on that line is refused - a delta read can
+   run a turn behind the write, and the row just added must not be asked for
+   twice in the gap before it shows as "requested". */
+const TAKE_HOLD_MS = 15000;
 let TAKING = {};
 async function take(id, part) {
   const rec = recordById(id);
   if (!rec || !PERSON || !listOn() || rec.sheetDone || !F.fbEligible(PERSON, rec.group, part)) return;
   touch();
   const k = rec.job + "|" + rec.group + "|" + part;
+  if (TAKING[k] > 1 && Date.now() - TAKING[k] >= TAKE_HOLD_MS) delete TAKING[k];
   if (TAKING[k] || F.fbRequested(IDX, PERSON, rec.job, rec.group, part)) return;
   const free = Math.max(0, rec[part + "Total"] - F.fbAssignedSum(IDX, rec.job, rec.group, part));
   const body = F.fbRequestFields(rec.job, rec.group, part, PERSON.name, free, new Date().toISOString());
   if (!body || !(free > 0)) return;
   TAKING[k] = 1; render();
-  try { await CW.listAdd(F.FB_ASSIGN_LIST, body, assignOpts()); await readAssign(); }
-  catch (e) { SOFT = "that request could not be sent — try again"; console.warn("[fabrication] take failed:", (e && e.message) || e); }
-  delete TAKING[k];
+  try {
+    await CW.listAdd(F.FB_ASSIGN_LIST, body, assignOpts());
+    TAKING[k] = Date.now(); TICK.burst();
+    await readAssign();
+  } catch (e) {
+    delete TAKING[k];
+    SOFT = "that request could not be sent — try again"; console.warn("[fabrication] take failed:", (e && e.message) || e);
+  }
   render();
 }
 
@@ -947,13 +963,16 @@ async function checkBuild() {
     if (latest !== BUILD_NOW && !Object.keys(QUEUE).length && !Object.keys(LOGQ).length) location.reload(true);
   } catch (e) {}
 }
+/** One turn of the clock (STU.stuTicker: every five seconds, every two for a
+    while after a tap or a change, never two turns at once). */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
-  await readAssign();
+  if (await readAssign()) TICK.burst();
   await pollList();
   if (await NOTES.poll()) render();
 }
+const TICK = STU.stuTicker(tickOnce);
 
 /* ---- the page ---- */
 async function start() {
@@ -996,18 +1015,17 @@ async function start() {
   await readList();
   await NOTES.read();
   await flushQueue();
-  if (refreshT) clearInterval(refreshT);
-  refreshT = setInterval(tickOnce, ST.REFRESH_MS);
+  TICK.start();
   if (peopleT) clearInterval(peopleT);
   peopleT = setInterval(readPeople, PEOPLE_MS);
-  if (lockT) clearInterval(lockT);
-  lockT = setInterval(lockIfIdle, 15000);
   if (buildT) clearInterval(buildT);
   checkBuild(); buildT = setInterval(checkBuild, BUILD_MS);
 }
 
 (async function boot() {
   STU.stuApplyTheme(STU.stuThemeNow());
+  /* an expired sign-in renews itself when it can - never while a tap is owed */
+  if (CW.stationRenew) CW.stationRenew(() => !Object.keys(QUEUE).length && !Object.keys(LOGQ).length);
   $("#signinbtn").onclick = async () => {
     try { await CW.signIn(CW.LIST_SCOPES); await start(); }
     catch (e) { STU.stuGate(true, "Sign-in failed:\n" + ((e && e.message) || e)); }

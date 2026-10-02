@@ -20,8 +20,9 @@
 
    It is used on a shared tablet, signed in once with a shared station account
    and then passed between three people for weeks. So: the person picks their
-   name (and their PIN) before they can move anything, the name locks itself
-   after ten quiet minutes, the stages somebody does not hold are greyed rather
+   name (and their PIN) before they can move anything, the name stays until
+   somebody presses Switch (since 2026-10-02 there is no idle lock: every tap
+   is logged under whoever was picked last), the stages somebody does not hold are greyed rather
    than hidden, every tap shows on screen at once and is owed rather than
    awaited, the owed writes survive a reload in localStorage, and nothing on
    this page can open a modal or a consent popup while somebody is holding a
@@ -32,6 +33,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const PERSON_KEY = "cw_person";          // who is on the station right now, and when they last tapped
+const CUTFIRST_KEY = "cw_glasscutfirst"; // the hotmelting tablet's "Cut first" switch, this device's own
 const STAGE_KEY = "cw_stationstage";     // which stage THIS tablet is - the device's own, not the person's
 const QUEUE_KEY = "cw_stationq";         // counter writes this tablet owes
 const LOGQ_KEY = "cw_stationlogq";       // log lines this tablet owes
@@ -70,12 +72,17 @@ function setWait(on) {
   if (WAITONLY) { if (TAB !== "floor") { WAITTAB = TAB; TAB = "floor"; } }
   else { if (WAITTAB) TAB = WAITTAB; WAITTAB = null; }
 }
+/* "Cut first" (2026-10-02), on the hotmelting tablet only: the jobs whose
+   cutting is ahead of their hotmelting come first on On floor. Off unless
+   somebody turns it on; remembered on the device, like the tab. */
+let CUTFIRST = false;
+try { CUTFIRST = localStorage.getItem(CUTFIRST_KEY) === "1"; } catch (e) {}
 let PERSON = null;              // the person who picked their name
-let LAST_TAP = 0;               // when they last touched anything, for the lock
+let LAST_TAP = 0;               // when they last touched anything
 let PINFOR = null;              // the person whose PIN is being asked for
 let PINTYPED = "";
 let PINBAD = false;
-let refreshT = null, retryT = null, buildT = null, peopleT = null, lockT = null;
+let retryT = null, buildT = null, peopleT = null;
 let flushing = false;
 /* A list that will not serve a delta at all must not be asked for one six
    times a minute: it is marked off for five minutes and polled the plain way
@@ -148,15 +155,15 @@ const pagePeople = () => PEOPLE.filter(p => myStages(p).length > 0);
 
 /* ---- who is on the station --------------------------------------------------
    The name is not a login: it says which stages the steppers will move and it
-   is what goes into the log. It is kept with the time of the last tap, because
-   that pair is what the ten-minute lock reads. */
+   is what goes into the log. THERE IS NO IDLE LOCK (owner, 2026-10-02): the
+   name stays, across reloads and new builds, until somebody presses Switch,
+   the tablet is made the other stage, or the person leaves `Station people`.
+   What that costs is said in the brief: a tap is logged under whoever was
+   picked last. */
 function loadPerson() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(PERSON_KEY) || "null"); } catch (e) { saved = null; }
   if (!saved || !saved.name) return;
-  if (ST.personExpired(saved.at, Date.now(), ST.PERSON_LOCK_MS)) return;   // gone stale while the tablet slept
-  /* a stamp from the future - a clock change, an edited localStorage - would
-     otherwise keep the name unlocked for as long as it is ahead by */
   LAST_TAP = Math.min(Number(saved.at) || 0, Date.now());
   /* the stages come from the list, never from storage: an edit to
      localStorage must not be able to hand somebody a stage they do not hold -
@@ -170,11 +177,11 @@ function savePerson() {
     else localStorage.removeItem(PERSON_KEY);
   } catch (e) {}
 }
-/** Every tap pushes the lock back. */
+/** Somebody is working the screen: the stamp kept beside the name. */
 function touch() { LAST_TAP = Date.now(); savePerson(); }
 /** The box belongs to whoever was just holding the tablet: the next person must
     not be handed a board narrowed - or a tab moved - by somebody else's search.
-    Called on a switch (and so on the idle lock, which switches) and on a pick. */
+    Called on a switch and on a pick. */
 function clearSearch() {
   QUERY = "";
   if (PRETAB) { TAB = PRETAB; saveTab(); }
@@ -196,13 +203,6 @@ function switchPerson() {
      it is, and comes back when they pick their name again. */
   DAY.reset();
   savePerson(); render();
-}
-/** The lock. Checked on a timer as well as on every draw, because a tablet
-    left alone is exactly the case it exists for. */
-function lockIfIdle() {
-  if (!PERSON) return;
-  if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  switchPerson();
 }
 /** What goes in CutBy / HotmeltBy / DoneBy and in the log's Who. */
 function who() { return PERSON ? PERSON.name : ""; }
@@ -641,75 +641,40 @@ const DAY = STU.stuDaySheet({
 
    IT IS KEPT APART FROM THE GLASS LISTS. That list is in the `Floor stations`
    site and the glass lists are pinned to the workbook's own (ST.GLASS.site).
-   So this asks CW.stationSite("floor") - graph.js's other pinned channel, with
-   its own cached id, miss clock and move counter - and keeps what it answers
-   in GFAB, never in SITEID. Its token is GFAB.token, never TOKEN. Nothing here
-   calls trouble(), sets PROBLEM or SOFT, or forgets the glass site: a
-   fabrication list that cannot be read costs the cards one muted line and the
-   glass page nothing else.
+   Since 2026-10-02 the read itself is the shared reader every station page
+   uses (STU.stuListReader in station-ui.js): it asks CW.stationSite("floor") -
+   graph.js's other pinned channel, with its own cached id, miss clock and move
+   counter - and keeps what it answers in GFAB, never in SITEID. Its token is
+   GFAB.token, never TOKEN. Nothing here calls trouble(), sets PROBLEM or SOFT,
+   or forgets the glass site: a fabrication list that cannot be read costs the
+   cards one muted line and the glass page nothing else.
 
-   A read that fails is not tried again for a minute (GFAB_RETRY_MS). A page
-   loaded without fabrication-core.js has no such feature and asks nothing. */
-const GFAB_RETRY_MS = 60000;
+   A read that fails is not tried again for a minute. A page loaded without
+   fabrication-core.js has no such feature and asks nothing. */
 const GFAB_FIELDS = ["Title", "Job", "Group", "GroupSeq", "Seq", "Section", "Active", "OnSheet",
                      "Frames", "Sashes", "Transoms", "FramesDone", "SashesDone", "TransomsDone"];
-const GFAB = { site: null, token: null, items: null, map: {}, offAt: 0, busy: false, read: false };
+const GFAB = typeof FABC === "undefined" ? null
+  : STU.stuListReader({ site: FABC.FB_SITE, list: FABC.FB_LIST, fields: GFAB_FIELDS });
+let GFABMAP = {};               // job -> ST.fabOfJob's answer, from the last read
+let GFABSIG = "";               // ... and what the cards were last told, to say when it moved
 /** Read what moved. Answers true when what the cards draw has changed. Never
     throws, and never touches anything the glass lists use. */
 async function readFab() {
-  /* ONE READ AT A TIME (review, 2026-10-02). The tick does not wait for the
-     last one, and two replies landing out of order could put a delta page of
-     three changed rows where the whole list was. */
-  if (typeof FABC === "undefined" || GFAB.busy) return false;
-  if (GFAB.offAt && Date.now() - GFAB.offAt < GFAB_RETRY_MS) return false;
-  GFAB.busy = true;
-  const was = JSON.stringify([GFAB.read, !!GFAB.items, GFAB.map]);
-  try {
-    const site = await CW.stationSite(FABC.FB_SITE);
-    if (site !== GFAB.site) { GFAB.site = site; GFAB.token = null; }   // a token only means anything in its own site
-    /* merge or replace is decided by the token the request WENT OUT with */
-    const tok = GFAB.token;
-    const d = site ? await CW.listDelta(FABC.FB_LIST,
-      { siteId: site, fields: GFAB_FIELDS, token: tok || undefined }) : null;
-    if (d == null) {                     // no such site for this account, or no such list in it
-      GFAB.items = null; GFAB.token = null; GFAB.offAt = Date.now();
-    } else {
-      GFAB.items = tok ? ST.mergeDelta(GFAB.items || [], d.items)
-        : d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
-      if (d.next) GFAB.token = d.next;
-      GFAB.offAt = 0;
-    }
-  } catch (e) {
-    console.warn("[station] fabrication could not be read:", (e && e.message) || e);
-    const stale = !!(CW.isDeltaResync && CW.isDeltaResync(e));
-    GFAB.token = null;
-    /* a token gone stale is not a failure: enumerate again on the next turn.
-       Anything else waits a minute. ONLY "not there" (404) and "not for you"
-       (403) take the line away; every other failure - offline, throttled, a
-       bad gateway - keeps the last read, as the board does. */
-    if (!stale) {
-      GFAB.offAt = Date.now();
-      const gone = !!(CW.isMissing && CW.isMissing(e));
-      if (gone || (CW.isRefused && CW.isRefused(e))) GFAB.items = null;
-      /* the FLOOR channel's cached id, never the glass one's */
-      if (gone && CW.forgetStationSite) CW.forgetStationSite(false, FABC.FB_SITE);
-    }
-  } finally {
-    GFAB.busy = false;
-  }
-  GFAB.read = true;
+  if (!GFAB || !(await GFAB.read())) return false;
   const map = {};
   if (GFAB.items) FABC.fbOfficeBoard(GFAB.items).forEach(c => { map[c.job] = ST.fabOfJob(c.groups); });
-  GFAB.map = map;
-  return JSON.stringify([GFAB.read, !!GFAB.items, GFAB.map]) !== was;
+  const sig = JSON.stringify([!!GFAB.items, map]);
+  const moved = sig !== GFABSIG;
+  GFABMAP = map; GFABSIG = sig;
+  return moved;
 }
 /** One job's fabrication: null (no such feature on this page, or the first
     read has not answered yet - no line at all), { state: "off" } (the list
     cannot be read), or ST.fabOfJob's answer. */
 function fabOf(job) {
-  if (typeof FABC === "undefined" || !GFAB.read) return null;
+  if (!GFAB || !GFAB.ready) return null;
   if (!GFAB.items) return { state: "off" };
-  return GFAB.map[FABC.fbKey(job)] || { state: "none" };
+  return GFABMAP[FABC.fbKey(job)] || { state: "none" };
 }
 /** Fabrication done, and the person signed in still has glass to do on it. */
 const waitingOn = g => !!PERSON && ST.glassWaiting(g, fabOf(g.job), myStages(PERSON));
@@ -830,7 +795,7 @@ async function readList() {
   }
 }
 
-/** The ten-second poll: only what moved. A token that has gone stale (Graph
+/** The poll, on TICK's clock: only what moved. A token that has gone stale (Graph
     answers 410 with a resync code) is not a failure - it means read the list
     and start again, which is exactly what readList() does. */
 /** Have the floor's lists moved to another site since the last pass? A delta
@@ -854,6 +819,7 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
+    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     dropBlocked();
     render();
@@ -899,6 +865,7 @@ function tap(id, stage, delta) {
   /* queued first, drawn second: boardNow() lays the queue over the list, so
      the new number is on screen before the write has left the tablet */
   queueTap(row, job, stage, value);
+  TICK.burst();
   render();
   flushQueue();
 }
@@ -990,6 +957,18 @@ function stepHtml(g, stage, label) {
     '</div>';
 }
 
+/** The hotmelting tablet's look at the cutting bench (2026-10-02): how much of
+    this job is cut, and how much of its tuff is done where it has any. Greyed
+    like a stage that is not yours, with no button in it - there is nothing
+    here to tap, and tap() refuses another tablet's stage whatever is drawn.
+    Both counts are on the row this page already reads: no new read. */
+function seenHtml(g) {
+  if (PAGE_STAGE !== "hotmelt") return "";
+  return '<div class="step locked seen"><span class="stepl tab">' +
+    esc("Cut " + g.cut + "/" + g.total + (g.tuffTotal > 0 ? " · Tuff " + g.tuff + "/" + g.tuffTotal : "")) +
+    '</span></div>';
+}
+
 /** Everything inside one card. The card element itself is kept between draws
     (see paintBoard), so only this string is ever rebuilt.
 
@@ -1023,7 +1002,7 @@ function cardInner(g) {
       '<span class="cnum tab">' + esc(ST.glassWords(g.total) +
           (g.tuffTotal > 0 ? " · " + g.tuffTotal + " tuff" : "")) + '</span>' +
     '</div>' +
-    '<div class="steps">' + stages.map(s => stepHtml(g, s[0], s[1])).join("") + '</div>' +
+    '<div class="steps">' + stages.map(s => stepHtml(g, s[0], s[1])).join("") + seenHtml(g) + '</div>' +
     fabLineHtml(g) +
     /* "glass", not "job": since 2026-09-21 the tuff stepper beside it is still
        live under this line, and a word that said otherwise would be wrong */
@@ -1285,11 +1264,14 @@ function render() {
     sg.style.display = PAGE_STAGE ? "" : "none";
     sg.textContent = PAGE_STAGE ? stageWords() + " ▾" : "";
   }
+  /* the name, and only the name, is the text: it is what every tap is logged
+     under, and it must not be what an ellipsis eats. The stages they hold here
+     ride in data-stages, which the stylesheet shows after it where there is room. */
   const hdr = $("#whois");
-  if (hdr) hdr.textContent = PERSON
-    ? PERSON.name + (myStages(PERSON).length
-        ? " · " + myStages(PERSON).map(ST.stageLabel).join(", ") : " · no stages")
-    : "";
+  if (hdr) {
+    hdr.textContent = PERSON ? PERSON.name : "";
+    hdr.dataset.stages = PERSON ? myStages(PERSON).map(ST.stageLabel).join(", ") || "no stages" : "";
+  }
   const sw = $("#switchbtn");
   if (sw) { sw.hidden = !PERSON; sw.style.display = PERSON ? "" : "none"; }
   /* the end-of-day button: only on a stage whose definition has a day sheet,
@@ -1314,7 +1296,16 @@ function render() {
      counted here, before the tabs are drawn, because the filter letting go
      can put the board back on the tab it came from */
   const waitN = now ? now.tabs.floor.concat(now.tabs.finished).filter(waitingOn).length : 0;
-  if (now && !waitN && GFAB.items) setWait(false);
+  if (now && !waitN && GFAB && GFAB.items) setWait(false);
+  /* "Cut first": the hotmelting tablet's own switch, with the board */
+  const cf = $("#cutfirst");
+  if (cf) {
+    const on = boarding && PAGE_STAGE === "hotmelt";
+    cf.hidden = !on; cf.style.display = on ? "" : "none";
+    cf.className = CUTFIRST ? "on" : "";
+    cf.setAttribute("aria-pressed", CUTFIRST ? "true" : "false");
+    cf.textContent = "Cut first: " + (CUTFIRST ? "on" : "off");
+  }
   const tabsEl = $("#gtabs");
   if (tabsEl) { tabsEl.hidden = !boarding; tabsEl.style.display = boarding ? "" : "none"; }
   [["#tabfloor", "floor", "On floor"], ["#tabfin", "finished", "Finished"]].forEach(([s, t, label]) => {
@@ -1407,7 +1398,9 @@ function render() {
 
   /* the search box narrows the board and never becomes it: an empty box is
      every card, and a box nothing matches says so rather than looking broken */
-  const board = shownCards(now.tabs[TAB], QUERY);
+  /* ... and "Cut first" only re-orders what is left: On floor, hotmelting page */
+  const board = ST.cutFirst(shownCards(now.tabs[TAB], QUERY),
+    CUTFIRST && PAGE_STAGE === "hotmelt" && TAB === "floor");
   if (!board.length) {
     LIST = null; NODES = {}; BOARD_PREV = null; QSIG = {}; PSIG = "";
     host.innerHTML = '<div class="msg">' +
@@ -1467,7 +1460,7 @@ function wireBoard(host) {
   host.addEventListener("click", ev => {
     /* anything at all on the board is a hand on the tablet, including a button
        that will not move because it is somebody else's stage or already at the
-       total: the ten-minute lock must not fire under a working hand */
+       total */
     touch();
     let el = ev.target;
     for (let i = 0; el && i < 5; i++) {
@@ -1546,8 +1539,9 @@ async function checkBuild() {
   } catch (e) { /* offline or blocked - the board is what matters */ }
 }
 
-/** One turn of the ten-second clock. A named function rather than a closure
-    inside setInterval, so a test can take exactly one turn of it. */
+/** One turn of the clock (STU.stuTicker: every five seconds, every two for a
+    while after a tap or a change, never two turns at once). A named function,
+    so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   /* a people list that has not answered yet is retried on the same clock: one
@@ -1556,7 +1550,7 @@ async function tickOnce() {
   if (!PEOPLE_READ) await readPeople();
   await pollList();
   /* fabrication's list, read only, on the same clock; it cannot fail loudly */
-  if (await readFab()) render();
+  if (await readFab()) { TICK.burst(); render(); }
   /* the note channel keeps its own counsel: it only asks the list anything
      while somebody has a composer open, and never more often than
      ST.COMMENT_POLL_MS. A tablet nobody is writing on sends no request for it
@@ -1564,6 +1558,7 @@ async function tickOnce() {
      board. */
   if (await NOTES.poll()) render();
 }
+const TICK = STU.stuTicker(tickOnce);
 
 /* ---- the page ---- */
 function showGate(on, err) {
@@ -1619,8 +1614,15 @@ async function start() {
   });
   const mb = $("#more");
   if (mb) mb.onclick = () => {
-    TAB = TAB === "floor" ? "finished" : "floor";
+    /* the person's own choice of tab, as a tap on the tab itself is */
+    TAB = TAB === "floor" ? "finished" : "floor"; WAITTAB = null;
     try { window.scrollTo(0, 0); } catch (e) {}
+    touch(); render();
+  };
+  const cfb = $("#cutfirst");
+  if (cfb) cfb.onclick = () => {
+    CUTFIRST = !CUTFIRST;
+    try { localStorage.setItem(CUTFIRST_KEY, CUTFIRST ? "1" : "0"); } catch (e) {}
     touch(); render();
   };
   const gwb = $("#gwait");
@@ -1643,8 +1645,7 @@ async function start() {
      on a stage whose definition has a sheet */
   if (DAY.sheet()) await DAY.read();
   await flushQueue();                            // taps owed from a previous visit
-  if (refreshT) clearInterval(refreshT);
-  refreshT = setInterval(tickOnce, ST.REFRESH_MS);
+  TICK.start();
   if (peopleT) clearInterval(peopleT);
   peopleT = setInterval(() => {
     readPeople();
@@ -1652,14 +1653,15 @@ async function start() {
        a day sheet moves once a day and a target less often than that */
     if (DAY.sheet()) DAY.read().then(() => { if (DAY.shown) render(); }, () => {});
   }, PEOPLE_MS);
-  if (lockT) clearInterval(lockT);
-  lockT = setInterval(lockIfIdle, 15000);
   if (buildT) clearInterval(buildT);
   checkBuild(); buildT = setInterval(checkBuild, BUILD_MS);
 }
 
 (async function boot() {
   applyTheme(themeNow());
+  /* an expired sign-in is renewed without anybody tapping, when it can be -
+     and never by leaving the page while a tap is still owed */
+  if (CW.stationRenew) CW.stationRenew(() => !owingWrites());
   $("#signinbtn").onclick = async () => {
     try { await CW.signIn(CW.LIST_SCOPES); await start(); }
     catch (e) { showGate(true, "Sign-in failed:\n" + ((e && e.message) || e)); }

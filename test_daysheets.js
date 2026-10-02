@@ -665,12 +665,12 @@ const daySheetRow = (day, who, c, o, id) => item(Object.assign(
   /* ... and Person A's writing is not lost: it is theirs, and it comes back */
   vm.runInContext("PERSON = { name: 'Person A', stages: ['cut'] }; DAY.draft = null;", cut);
   assert.strictEqual(S("DAY.draftNow().counts.Clear"), "11", "and theirs comes back when they do");
-  /* the ten-minute idle lock goes through switchPerson, so it closes it too */
-  S("DAY.open(); LAST_TAP = Date.now() - ST.PERSON_LOCK_MS - 1000; lockIfIdle();");
-  assert.strictEqual(S("DAY.shown"), false, "and a tablet left alone closes the sheet as well");
+  /* Switch closes it (there is no idle lock since 2026-10-02) */
+  S("DAY.open(); switchPerson();");
+  assert.strictEqual(S("DAY.shown"), false, "and Switch closes the sheet as well");
   vm.runInContext("PERSON = PEOPLE.find(p => p.name === 'Person A'); DAY.draft = null;", cut);
   S("DAY.clearDraft(); DAY.draft = null;");
-  pass("D2: a draft belongs to one person; switching person, or the idle lock, closes the sheet");
+  pass("D2: a draft belongs to one person; switching person closes the sheet");
 
   /* ===== D7: unreachable is not missing =====
      A sheet typed out at the end of a shift on a tablet that cannot reach

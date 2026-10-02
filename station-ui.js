@@ -8,10 +8,11 @@
    here so the third station (PA Lam) is a definition and a renderer and not a
    third copy of a page.
 
-   NOTHING IN HERE TOUCHES A WORKBOOK. Apart from the end-of-day sheet at the
-   bottom (2026-09-28), which reads and appends to the floor's own day-sheet
-   list, it is strings, a localStorage key for a theme, and two wiring
-   helpers; nothing here touches Graph or a list. Every identifier is
+   NOTHING IN HERE TOUCHES A WORKBOOK. Apart from the end-of-day sheet
+   (2026-09-28), which reads and appends to the floor's own day-sheet list,
+   and the read-only list reader and the poll clock at the bottom
+   (2026-10-02), it is strings, a localStorage key for a theme, and two wiring
+   helpers; nothing else here touches Graph or a list. Every identifier is
    prefixed `stu`/`STU` so that a page which loads this file beside another
    station's script cannot collide with it - browser scripts share one global
    lexical scope, and a collision there is a page that does not start.
@@ -159,7 +160,7 @@ function stuWirePicker(host, o) {
      stage()    this page's stage key
      who()      the person signed in, "" for nobody
      siteId()   the site the station's lists live in, null until resolved
-     touch()    push the idle lock back
+     touch()    somebody is working the screen (the page's own stamp)
      render()   redraw the page
      flush()    set the page's own write queue going (it calls .flush())
      keys       { q, draft } - localStorage keys, one pair PER PAGE so two
@@ -600,9 +601,149 @@ function stuDaySheet(cfg) {
   return D;
 }
 
+/* ---- another station's list, READ ONLY --------------------------------------
+   2026-10-02 (docs/specs/2026-10-02-stations-see-each-other.md, section 5):
+   one owner per fact, and everybody who needs the fact reads the owner's list.
+   This is that read, written once - it began as the glass page's look at
+   `Fabrication station` (2026-10-01) and is the same code for every page.
+
+     const R = STU.stuListReader({ site: "own" | "floor", list: "Glass station",
+                                   fields: [...], tag: "[glazing]" });
+     if (await R.read()) render();        // in the page's tickOnce, and once,
+                                          // NOT awaited, before its first paint
+     R.ready     false until the first read has answered: say "checking"
+     R.items     the list's rows [{ id, fields }], or null - NOT AVAILABLE
+                 (no such site or list, 403, 404). Never read null as "nothing
+                 done" or "ready".
+     R.changed   did the last read change anything (it is what read() answers)
+     R.missing   items are null because the list is positively not there (as
+                 against refused, or not answered yet)
+
+   It holds the list by CW.listDelta on a token of its own, one read in the air
+   at a time, and whether a reply is merged or replaces the list is decided by
+   the token the request WENT OUT with. A 410 costs a fresh enumeration on the
+   next turn. Only 403 and 404 take the rows away (a 404 also forgets that
+   channel's cached site); anything else - offline, throttled, a bad gateway -
+   keeps the last good read. After a failure it does not ask again for
+   `retryMs` (a minute unless the page says otherwise). A list that refuses
+   delta outright is read the plain way for five minutes, as the boards do.
+
+   IT HAS NO WRITE PATH, and it keeps nothing outside the object it answers:
+   its site comes from CW.stationSite(cfg.site) and is never the page's own
+   SITEID, its token is never the page's TOKEN, and it cannot take a board
+   away. Two readers on one page share nothing.                             */
+const STU_READ_RETRY_MS = 60000;
+const STU_DELTA_OFF_MS = 300000;
+function stuListReader(cfg) {
+  const tag = cfg.tag || "[station]";
+  const retry = cfg.retryMs == null ? STU_READ_RETRY_MS : cfg.retryMs;
+  const R = { items: null, ready: false, changed: false, missing: false,
+              busy: false, site: null, token: null, offAt: 0, deltaOffAt: 0 };
+  const is = (k, e) => !!(CW[k] && CW[k](e));
+  /* the list will not serve a delta at all - not a stale token (410), not a
+     refusal or a missing list, and not a throttle, which graph.js also hands
+     back as a 4xx from the delta endpoint */
+  const noDelta = e => is("isDeltaRestart", e) && !is("isDeltaResync", e) && !is("isMissing", e) &&
+    !is("isRefused", e) && !/->\s*429\b/.test((e && e.message) || "");
+  R.read = async function () {
+    if (R.busy) return false;
+    if (R.offAt && Date.now() - R.offAt < retry) return false;
+    R.busy = true;
+    const had = R.items != null;
+    let moved = false;
+    try {
+      const site = await CW.stationSite(cfg.site);
+      if (site !== R.site) { R.site = site; R.token = null; R.deltaOffAt = 0; }   // a token only means anything in its own site
+      const opts = { siteId: site, fields: cfg.fields };
+      /* merge or replace is decided by the token the request WENT OUT with */
+      const tok = R.token;
+      let plain = !!(R.deltaOffAt && Date.now() - R.deltaOffAt < STU_DELTA_OFF_MS);
+      let d = null;
+      if (site && !plain) {
+        try { d = await CW.listDelta(cfg.list, Object.assign({ token: tok || undefined }, opts)); }
+        catch (e) {
+          if (!noDelta(e)) throw e;
+          R.deltaOffAt = Date.now(); plain = true;
+          console.warn(tag + " “" + cfg.list + "” refused a delta; reading it the plain way for five minutes");
+        }
+      }
+      if (site && plain) {
+        const all = await CW.listItems(cfg.list, opts);
+        d = all && { items: all, next: null };
+      }
+      if (d == null) {                     // no such site for this account, or no such list in it
+        R.items = null; R.token = null; R.missing = !!site; R.offAt = Date.now();
+      } else {
+        if (tok && !plain) {
+          moved = d.items.length > 0;
+          R.items = ST.mergeDelta(R.items || [], d.items);
+        } else {
+          const was = JSON.stringify(R.items);
+          R.items = d.items.filter(x => !x.removed).map(x => ({ id: x.id, fields: x.fields }));
+          moved = JSON.stringify(R.items) !== was;
+        }
+        if (plain) R.token = null; else if (d.next) R.token = d.next;
+        R.missing = false; R.offAt = 0;
+      }
+    } catch (e) {
+      console.warn(tag + " “" + cfg.list + "” could not be read:", (e && e.message) || e);
+      R.token = null;
+      /* a token gone stale is not a failure: enumerate again on the next turn.
+         Anything else waits. ONLY "not there" (404) and "not for you" (403)
+         take the rows away; every other failure keeps the last read. */
+      if (!is("isDeltaResync", e)) {
+        R.offAt = Date.now();
+        const gone = is("isMissing", e);
+        if (gone || is("isRefused", e)) { R.items = null; R.missing = gone; }
+        /* this reader's own channel, never the page's board's */
+        if (gone && CW.forgetStationSite) CW.forgetStationSite(false, cfg.site);
+      }
+    } finally {
+      R.busy = false;
+    }
+    R.changed = !R.ready || had !== (R.items != null) || moved;
+    R.ready = true;
+    return R.changed;
+  };
+  return R;
+}
+
+/* ---- the clock every station page polls on ----------------------------------
+   2026-10-02. One timer, beating once a second, and ST.tickDue says whether a
+   turn is due: every ST.REFRESH_MS, or every ST.TICK_FAST_MS for a while after
+   burst() - which a page calls on its own tap and on a poll that brought a
+   change. A TURN NEVER STARTS WHILE THE LAST ONE IS STILL RUNNING: a slow
+   reply costs skipped turns, not a pile of them. No pause and no visibility
+   check - a tablet polls all the time.
+
+     const TICK = STU.stuTicker(tickOnce);     // tickOnce: the page's own turn
+     TICK.start();                             // in start(), in setInterval's place
+     TICK.burst();                             // on a tap, on a change seen      */
+function stuTicker(fn) {
+  const T = { busy: false, lastAt: 0, until: 0, timer: null };
+  T.burst = () => { T.until = Date.now() + ST.TICK_BURST_MS; };
+  /** One turn now, unless one is in the air. Answers whether it ran. */
+  T.turn = async function () {
+    if (T.busy && Date.now() - T.lastAt < ST.TICK_STUCK_MS) return false;
+    T.busy = true; T.lastAt = Date.now();
+    const mine = T.lastAt;
+    try { await fn(); }
+    catch (e) { console.warn("[station] a turn of the clock failed:", (e && e.message) || e); }
+    finally { if (T.lastAt === mine) T.busy = false; }
+    return true;
+  };
+  T.start = function () {
+    if (T.timer) clearInterval(T.timer);
+    T.lastAt = Date.now();
+    T.timer = setInterval(() => { if (ST.tickDue(Date.now(), T.lastAt, T.until)) T.turn(); }, ST.TICK_BEAT_MS);
+  };
+  return T;
+}
+
 const STU = {
-  STU_THEME_KEY, STU_DAY_REFUSE_MAX,
-  stuEsc, stuAgo, stuThemeNow, stuApplyTheme, stuGate, stuPickerHtml, stuWirePicker, stuDaySheet
+  STU_THEME_KEY, STU_DAY_REFUSE_MAX, STU_READ_RETRY_MS,
+  stuEsc, stuAgo, stuThemeNow, stuApplyTheme, stuGate, stuPickerHtml, stuWirePicker, stuDaySheet,
+  stuListReader, stuTicker
 };
 if (typeof window !== "undefined") window.STU = STU;
 else if (typeof globalThis !== "undefined") globalThis.STU = STU;

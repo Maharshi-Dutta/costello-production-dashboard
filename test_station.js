@@ -586,9 +586,11 @@ const person = (name, stages, pin, active, station) =>
       assert.ok(f.toLowerCase().indexOf(bad.toLowerCase()) < 0, "no list may carry " + bad)));
   pass("no column of any of the three lists is a phone, eircode, county, price, comment or product");
 
-  assert.strictEqual(ST.PERSON_LOCK_MS, 600000, "ten minutes, one constant");
-  assert.strictEqual(ST.REFRESH_MS, 10000, "and ten seconds, likewise");
-  pass("the lock and the poll are one constant each, at the numbers the owner asked for");
+  assert.strictEqual(ST.PERSON_LOCK_MS, undefined, "there is no idle lock any more (owner, 2026-10-02)");
+  assert.strictEqual(ST.personExpired, undefined);
+  assert.deepStrictEqual([ST.REFRESH_MS, ST.TICK_FAST_MS, ST.TICK_BURST_MS], [5000, 2000, 20000],
+    "five seconds, and two for twenty after a tap or a change");
+  pass("the poll is one constant, at the numbers the owner asked for; the idle lock is gone");
 
   /* ================= 2. the slice ================= */
   const jobs = [
@@ -1364,13 +1366,17 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(ST.pinOk(ppl[1], " 1234 "), true, "trimmed, because a pad can add nothing else");
   pass("a PIN is asked for only where the column is filled in, and then it must match exactly");
 
+  /* the clock (2026-10-02): due every five seconds, every two inside a burst,
+     and the burst ends by itself */
   const T0 = 1757325600000;
-  assert.strictEqual(ST.personExpired(T0, T0 + 599999, 600000), false, "under ten minutes: still them");
-  assert.strictEqual(ST.personExpired(T0, T0 + 600000, 600000), true, "ten minutes: locked");
-  assert.strictEqual(ST.personExpired(T0, T0 + 900000, 600000), true);
-  assert.strictEqual(ST.personExpired(0, T0, 600000), true, "and nobody chosen is nobody");
-  assert.strictEqual(ST.personExpired(null, T0), true);
-  pass("the chosen name locks itself after ten quiet minutes, and a missing one is already locked");
+  assert.strictEqual(ST.tickDue(T0 + 4000, T0, 0), false, "four seconds after the last turn: not yet");
+  assert.strictEqual(ST.tickDue(T0 + 5000, T0, 0), true, "five: due");
+  assert.strictEqual(ST.tickDue(T0 + 4800, T0, 0), true, "a one-second timer landing a touch early still counts");
+  assert.strictEqual(ST.tickDue(T0 + 1000, T0, T0 + 20000), false, "in a burst, one second is not two");
+  assert.strictEqual(ST.tickDue(T0 + 2000, T0, T0 + 20000), true, "the burst starts: two seconds is due");
+  assert.strictEqual(ST.tickDue(T0 + 21000, T0 + 19000, T0 + 20000), false, "and ends: after twenty it is five again");
+  assert.strictEqual(ST.tickDue(T0 + 24000, T0 + 19000, T0 + 20000), true);
+  pass("tickDue: five seconds, two inside a burst, back to five when the burst is over");
 
   /* ================= 8. the writes one tap makes ================= */
   const tf = ST.tapFields("cut", 5, "Person A", "2026-09-08T15:00:00.000Z");
@@ -3466,7 +3472,8 @@ const person = (name, stages, pin, active, station) =>
   S("pickPerson(PEOPLE.find(p => p.name === 'Person A'))");
   assert.strictEqual(S("PERSON.name"), "Person A");
   assert.ok(mem.cw_person.indexOf("Person A") > 0, "kept on this tablet, with the time of the tap");
-  assert.strictEqual(EL["#whois"].textContent, "Person A · Cutting", "and the header says so");
+  assert.deepStrictEqual([EL["#whois"].textContent, EL["#whois"].dataset.stages], ["Person A", "Cutting"],
+    "and the header says so: the name is the text, the stages ride beside it");
   pass("picking a name with no PIN goes straight in, and the header shows the name and the stages");
 
   /* what a stepper row says is still to do, read off the row of the stage it
@@ -3770,7 +3777,7 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(/data-stage="cut" data-act="1">\+<\/button>/.test(bh), "cutting is theirs on this tablet");
   assert.ok(bh.indexOf('data-stage="hotmelt"') < 0,
     "and the hotmelting they also hold is not drawn here: it belongs to the other tablet");
-  assert.strictEqual(EL["#whois"].textContent, "Person B · Cutting",
+  assert.deepStrictEqual([EL["#whois"].textContent, EL["#whois"].dataset.stages], ["Person B", "Cutting"],
     "and the header names only what this page is for");
   pass("the right PIN lets that person in, and the page draws its own stage of what they hold");
 
@@ -3785,25 +3792,33 @@ const person = (name, stages, pin, active, station) =>
   assert.strictEqual(hl.body.fields.Who, "Person B");
   pass("the second person's own writes carry their own name, on their own log line");
 
-  /* ---- the lock ---- */
-  S("LAST_TAP = Date.now() - 601000; lockIfIdle();");
-  assert.strictEqual(S("PERSON"), null, "ten quiet minutes and the name means nobody");
+  /* ---- NO IDLE LOCK (owner, 2026-10-02) ----
+     The name stays through any amount of quiet: a day of it, a turn of the
+     clock, a redraw. Only Switch (and a removal from the list, and a change of
+     stage - both tested elsewhere) brings the picker back. */
+  assert.strictEqual(S("typeof lockIfIdle"), "undefined", "there is no lock function left to call");
+  assert.ok(!/setInterval\(lockIfIdle|personExpired/.test(src("station.js") + src("welding.js") +
+    src("glazing.js") + src("fabrication.js")), "on any of the four tablet pages");
+  S("LAST_TAP = Date.now() - 86400000; savePerson(); render();");
+  await S("tickOnce()");
+  assert.strictEqual(S("PERSON.name"), "Person B", "a day without a tap, and a turn of the clock: still them");
+  assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") < 0, "and no picker");
+  assert.deepStrictEqual([EL["#whois"].textContent, EL["#switchbtn"].hidden], ["Person B", false],
+    "the name is in the header, with Switch beside it");
+  S("switchPerson()");
+  assert.strictEqual(S("PERSON"), null, "Switch is what lets the name go");
   assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0);
-  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); LAST_TAP = Date.now() - 60000; lockIfIdle();");
-  assert.ok(S("PERSON") !== null, "one quiet minute is not ten");
-  S("LAST_TAP = Date.now() - 601000;");
+  S("PERSON = PEOPLE.find(p => p.name === 'Person A'); touch();");
   ITEMS[0].fields.Cut = 0;
   await S("readList()");
-  S("touch(); tap('900', 'cut', 1);");
+  S("tap('900', 'cut', 1);");
   await settle(60);
-  S("lockIfIdle()");
-  assert.ok(S("PERSON") !== null, "and a tap pushes the lock back");
   S("if (retryT) { clearTimeout(retryT); retryT = null; }");
-  pass("the chosen name locks itself after ten minutes without a tap, and every tap postpones it");
+  pass("no idle lock: the chosen name stays through any quiet, and only Switch returns to the picker");
 
   /* AMENDMENT 9: a stepper already at the total, and a button that is somebody
-     else's, are both somebody working the screen - the lock must not fire
-     under their hand */
+     else's, are both somebody working the screen - the stamp kept with the
+     name moves under their hand */
   ITEMS[0].fields.Cut = 6;
   S("QUEUE = {}; LOGQ = {}; PERSON = PEOPLE.find(p => p.name === 'Person A');");
   await S("readList()");
@@ -3812,14 +3827,14 @@ const person = (name, stages, pin, active, station) =>
   S("tap('900', 'cut', 1)");
   await settle(40);
   assert.strictEqual(writes().length, 0, "nothing to write: the counter was already at the total");
-  assert.ok(S("Date.now() - LAST_TAP") < 5000, "but the lock was pushed back all the same");
+  assert.ok(S("Date.now() - LAST_TAP") < 5000, "but it counted as a hand on the tablet all the same");
   S("LAST_TAP = Date.now() - 599000; render();");
   EL["#board"].fire("click", { stopPropagation() {},
     target: { disabled: true, dataset: { id: "900", stage: "glazed", act: "1" } } });
   await settle(20);
   assert.strictEqual(writes().length, 0, "a disabled button still writes nothing");
   assert.ok(S("Date.now() - LAST_TAP") < 5000, "and reaching for it counted as activity too");
-  pass("a tap at the clamp and a tap on somebody else's stage both push the ten-minute lock back");
+  pass("a tap at the clamp and a tap on somebody else's stage both count as somebody working the screen");
 
   /* OWNER DECISION 3's search box, on the tablet itself */
   S("LAST_TAP = Date.now(); QUERY = ''; render();");
@@ -3997,21 +4012,34 @@ const person = (name, stages, pin, active, station) =>
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() + 86400000 });
   S("PERSON = null; LAST_TAP = 0; loadPerson();");
   assert.ok(S("LAST_TAP") <= Date.now(), "a stamp from tomorrow is clamped to now");
-  S("LAST_TAP = LAST_TAP - 601000; lockIfIdle();");
-  assert.strictEqual(S("PERSON"), null, "so the lock can still reach it");
-  pass("a clock change or an edited stamp cannot hold the tablet unlocked past ten minutes");
+  pass("a clock change or an edited stamp puts no time in the future on the tablet");
 
-  mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() - 601000 });
+  /* A RELOAD KEEPS THE PERSON (2026-10-02), however long ago they last tapped:
+     an auto-reload on a new build, or the tablet woken on Monday morning */
+  mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() - 7 * 86400000 });
   S("PERSON = null; loadPerson();");
-  assert.strictEqual(S("PERSON"), null, "a stale name in storage is not a name");
+  assert.strictEqual(S("PERSON.name"), "Person B", "a week-old name in storage is still the name");
+  mem.cw_person = JSON.stringify({ name: "Nobody On The List", at: Date.now() });
+  S("PERSON = null; loadPerson();");
+  assert.strictEqual(S("PERSON"), null, "but a name that is not in `Station people` is nobody");
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() });
   S("PERSON = null; loadPerson();");
-  assert.strictEqual(S("PERSON.name"), "Person B", "a fresh one is picked up again");
+  /* ... and somebody taken off the list while signed in goes back to the picker */
+  const keptPeople = PEOPLEITEMS.slice();
+  PEOPLEITEMS = PEOPLEITEMS.filter(p => p.fields.Title !== "Person B");
+  await S("readPeople()");
+  assert.strictEqual(S("PERSON"), null, "removed from `Station people`: the picker comes back");
+  assert.ok(EL["#board"].innerHTML.indexOf("Who are you?") > 0);
+  PEOPLEITEMS = keptPeople;
+  await S("readPeople()");
+  mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now() });
+  S("PERSON = null; loadPerson();");
+  assert.strictEqual(S("PERSON.name"), "Person B");
   mem.cw_person = JSON.stringify({ name: "Person B", at: Date.now(), stages: ["tuff"] });
   S("PERSON = null; loadPerson();");
   assert.deepStrictEqual(S("PERSON.stages"), ["cut", "hotmelt"],
     "and the stages come from the LIST, never from storage anybody can edit");
-  pass("the chosen name survives a reload only while it is fresh, and its stages always come from SharePoint");
+  pass("the chosen name survives a reload however old, leaves with the list row, and its stages always come from SharePoint");
 
   /* ---- AMENDMENT 3: a waiting tap is re-based, never sent flat ----
      A tap is owed as a number, and a number only means something against what
@@ -4354,7 +4382,8 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(/id="themebtn"/.test(gs));
   pass("the tablet is dark by default with a switch in the header, saved on the device");
 
-  assert.ok(/id="switchbtn"/.test(gs) && />Switch person</.test(gs), "the Switch person button is in the header");
+  assert.ok(/<span id="whois"><\/span>\s*<button id="switchbtn" hidden>Switch<\/button>/.test(gs),
+    "the Switch button is in the header, right beside the name (2026-10-02: no idle lock, so it is the only way out)");
   assert.ok(gs.indexOf("min-height:64px") > 0, "the picker's buttons are 64 px");
   assert.ok(gs.indexOf(".pk { min-height:56px") > 0, "and the PIN pad's are 56");
   assert.ok(/\.sbtn \{ width:56px; height:56px/.test(gs), "the steppers are 56, as the owner asked");
@@ -4916,7 +4945,53 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(hcard.indexOf('data-stage="cut"') < 0, "the cutting one is not: that is the other tablet");
   assert.ok(hcard.indexOf('data-stage="tuff"') < 0,
     "and tuff is the cutter's, even on a job that has tuff on it");
-  assert.strictEqual((hcard.match(/<div class="step[ "]/g) || []).length, 1, "one stepper row, and one only");
+  assert.strictEqual((hcard.match(/<div class="step">/g) || []).length, 1, "one stepper row, and one only");
+  /* HOTMELT SEES CUT AND TUFF (2026-10-02): read only, greyed, nothing to tap */
+  assert.ok(hcard.indexOf('<div class="step locked seen"><span class="stepl tab">Cut 6/6 · Tuff 0/4</span></div>') > 0,
+    "the cutting count and the tuff count are on the hotmelting card, greyed");
+  assert.ok(!/<button[^>]*data-stage="(cut|tuff)"/.test(hcard), "with no button for either");
+  reset();
+  SH("tap('800', 'cut', 1); tap('800', 'tuff', 1);");
+  await settle(40);
+  assert.deepStrictEqual([SH("Object.keys(QUEUE).length"), writes().length], [0, 0],
+    "and tap() refuses the other tablet's stages whatever is drawn");
+  assert.strictEqual(S("seenHtml(boardNow()[0] || { cut: 1, total: 2 })"), "", "the cutting tablet has no such line");
+  assert.ok(SH("seenHtml({ cut: 3, total: 6, tuff: 0, tuffTotal: 0 })").indexOf("Cut 3/6</span>") > 0,
+    "a job with no tuff says nothing about tuff");
+  pass("the hotmelting card shows Cut a/t and Tuff n/m, read only: no button, and a tap on them is refused");
+
+  /* "CUT FIRST": off by default, remembered on the device, hotmelting page and
+     On floor only; the cards whose cutting is ahead of their hotmelting first,
+     the order otherwise as it was */
+  const cf = (job, cut, hot) => ({ job: job, cut: cut, hotmelt: hot, total: 6 });
+  const cfs = [cf("A", 0, 0), cf("B", 4, 2), cf("C", 6, 6), cf("D", 6, 0), cf("E", 2, 2)];
+  assert.deepStrictEqual([ST.cutAhead(cfs[1]), ST.cutAhead(cfs[2]), ST.cutAhead(cfs[0]), ST.cutAhead(null)],
+    [true, false, false, false], "ahead means more cut than hotmelted - not merely some cut");
+  assert.strictEqual(ST.cutFirst(cfs, false), cfs, "off: the cards as given");
+  assert.deepStrictEqual(ST.cutFirst(cfs, true).map(g => g.job), ["B", "D", "A", "C", "E"],
+    "on: the ahead ones first, each group in the order it had");
+  assert.deepStrictEqual(cfs.map(g => g.job), ["A", "B", "C", "D", "E"], "and the list it was given is not re-ordered");
+  ITEMS.push(item({ Title: "R7000", Job: "R7000", Customer: "Customer Zero", GlassType: "GLASS", Total: 5,
+                    TuffTotal: 0, Seq: 0, Active: "Yes", OfficeDone: "No", Cut: 0, Hotmelt: 0, Tuff: 0 }, "799"));
+  await SH("readList()");
+  assert.deepStrictEqual([SH("CUTFIRST"), EL["#cutfirst"].hidden, EL["#cutfirst"].textContent],
+    [false, false, "Cut first: off"], "the switch is on the hotmelting page, off until somebody turns it on");
+  assert.strictEqual(SH("BOARD_PREV.map(g => g.job).join(',')"), "R7000,R7001", "off: sheet order");
+  SH("document.querySelector('#cutfirst').onclick = null; start();");
+  await settle(60);
+  EL["#cutfirst"].onclick();
+  assert.deepStrictEqual([mem.cw_glasscutfirst, EL["#cutfirst"].textContent, EL["#cutfirst"].attrs["aria-pressed"]],
+    ["1", "Cut first: on", "true"], "turned on, said so, and remembered on this tablet");
+  assert.strictEqual(SH("BOARD_PREV.map(g => g.job).join(',')"), "R7001,R7000",
+    "on: the job that is cut and waiting for the hotmelter comes first");
+  assert.strictEqual(vm.runInContext("CUTFIRST", newStation()), true, "and a reload of the page keeps it");
+  S("render()");
+  assert.strictEqual(EL["#cutfirst"].hidden, true, "the cutting tablet has no such switch");
+  EL["#cutfirst"].onclick();
+  assert.strictEqual(mem.cw_glasscutfirst, "0");
+  ITEMS.pop();
+  await SH("readList()");
+  pass("Cut first: pure order, off by default, per tablet, hotmelting page only");
   assert.strictEqual(EL["#gtotal"].textContent, "Hotmelting 4 left",
     "and the header counts this page's stage down, over the whole board");
   assert.strictEqual(SH("boardNow()[0].finished"), false,
@@ -5247,6 +5322,207 @@ const person = (name, stages, pin, active, station) =>
   assert.ok(!FCALLS.some(c => /^OTHER:list(Patch|Add|Upsert|Delete)/.test(c) || c === "forget:own"),
     "with no write and no forgetting of the glass site");
   pass("a tick with the fabrication list refusing still does the glass poll, and leaves glass alone");
+
+  /* ================= 15e. the shared reader, the clock, throttling, renewal (2026-10-02) =================
+     docs/specs/2026-10-02-stations-see-each-other.md, sections 5-7. The reader's
+     first read, merge, one-in-flight, 403 / 404 / 410 / 429 are 15d above - the
+     glass page's fabrication read IS the shared reader. Here: what 15d cannot
+     reach. */
+  const fabDelta = fakeCW.listDelta, fabItems = fakeCW.listItems;
+  let rMode = "nodelta";
+  fakeCW.listDelta = async (name, o) => {
+    FCALLS.push("delta:" + name + ":" + o.siteId + ":" + (o.token || ""));
+    if (name === "List B") return { items: [{ id: "1", fields: { Title: "b" }, removed: false }], next: "tb" };
+    if (rMode === "gone") return null;
+    /* what graph.js makes of a list that will not serve a delta at all */
+    throw new Error("delta must be restarted: GET /sites/x/lists/y/items/delta -> 400 {\"error\":{\"code\":\"invalidRequest\"}}");
+  };
+  fakeCW.listItems = async (name, o) => { FCALLS.push("items:" + name + ":" + o.siteId); return [{ id: "7", fields: { Title: "a" } }]; };
+  SF("var RA = STU.stuListReader({ site: 'own', list: 'List A', fields: ['Title'] });" +
+     "var RB = STU.stuListReader({ site: 'floor', list: 'List B', fields: ['Title'] });");
+  assert.deepStrictEqual([SF("RA.ready"), SF("RA.items")], [false, null], "before its first read a reader knows nothing");
+  FCALLS.length = 0;
+  assert.strictEqual(await SF("RA.read()"), true);
+  assert.deepStrictEqual(FCALLS, ["site:own", "delta:List A:" + FSITE + ":", "items:List A:" + FSITE],
+    "a list that refuses delta outright is read the plain way instead of never being read");
+  assert.deepStrictEqual([SF("RA.items.length"), SF("RA.token"), SF("RA.ready"), SF("RA.missing")], [1, null, true, false]);
+  FCALLS.length = 0;
+  assert.strictEqual(await SF("RA.read()"), false, "the same rows again are not a change");
+  assert.deepStrictEqual(FCALLS, ["site:own", "items:List A:" + FSITE], "and delta is not asked again inside five minutes");
+  assert.strictEqual(await SF("RB.read()"), true);
+  assert.deepStrictEqual([SF("RB.items[0].fields.Title"), SF("RB.token"), SF("RB.site"), SF("RA.items[0].fields.Title"),
+    SF("RA.token"), SF("RA.site")], ["b", "tb", "FLOORSITE", "a", null, FSITE],
+    "two readers on one page share nothing: rows, token and site are each their own");
+  rMode = "gone"; SF("RA.deltaOffAt = 0;");
+  assert.strictEqual(await SF("RA.read()"), true, "the rows going away is a change to draw");
+  assert.deepStrictEqual([SF("RA.items"), SF("RA.missing"), SF("RA.ready")], [null, true, true],
+    "a list that is not there is null - not available - and never an empty, 'nothing done' list");
+  assert.ok(!/list(Patch|Add|Upsert|Delete)|\"(POST|PATCH|DELETE)\"/.test(SF("String(STU.stuListReader)")),
+    "and the reader has no write path at all");
+  fakeCW.listDelta = fabDelta; fakeCW.listItems = fabItems;
+  pass("the shared reader: plain-read fallback, two instances apart, not available is null, no write path");
+
+  /* THE CLOCK: one turn at a time, a burst after a tap or a change, and every
+     page on it */
+  SF("var __n = 0, __go = null; var __T = STU.stuTicker(() => { __n++; return new Promise(r => { __go = r; }); });");
+  const turn1 = SF("__T.turn()");
+  assert.strictEqual(await SF("__T.turn()"), false, "a turn never starts while the last one is still running");
+  assert.strictEqual(SF("__n"), 1);
+  SF("__go()");
+  assert.strictEqual(await turn1, true);
+  const turn2 = SF("__T.turn()"); SF("__go()");
+  assert.deepStrictEqual([await turn2, SF("__n"), SF("__T.busy")], [true, 2, false], "and the next one runs once it has finished");
+  SF("__T.busy = true; __T.lastAt = Date.now() - ST.TICK_STUCK_MS - 1;");
+  const turn3 = SF("__T.turn()"); SF("__go()");
+  assert.strictEqual(await turn3, true, "a turn that never came back does not stop the clock for ever");
+  SF("__T.until = 0; __T.burst();");
+  assert.ok(SF("__T.until - Date.now()") > 19000 && SF("__T.until - Date.now()") <= 20000, "burst() is twenty seconds of the fast rate");
+  ["station.js", "welding.js", "glazing.js", "fabrication.js"].forEach(f => {
+    assert.ok(/const TICK = STU\.stuTicker\(tickOnce\);/.test(src(f)) && /\n  TICK\.start\(\);/.test(src(f)) &&
+              !/setInterval\(tickOnce/.test(src(f)), f + " polls on the shared clock, not on a setInterval of its own");
+    assert.ok(/queueTap\([^;]*\);\r?\n  TICK\.burst\(\);/.test(src(f)), f + ": the tablet's own tap starts a burst");
+    assert.ok(/if \(d\.items\.length\) TICK\.burst\(\);/.test(src(f)), f + ": and so does a poll that brought a change");
+  });
+  SF("ITEMS = " + JSON.stringify([item({ Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6,
+    TuffTotal: 4, Seq: 1, Active: "Yes", OfficeDone: "No", Cut: 6, Hotmelt: 2, Tuff: 0 }, "800")]) +
+    "; TOKEN = 'tk'; siteMoved(); TICK.until = 0;");
+  await SF("pollList()");
+  assert.strictEqual(SF("TICK.until"), 0, "a poll that brought nothing starts no burst");
+  SF("tap('800', 'tuff', 1)");
+  assert.ok(SF("TICK.until") > Date.now() + 19000, "a tap does");
+  await settle(60);
+  SF("QUEUE = {}; LOGQ = {}; if (retryT) { clearTimeout(retryT); retryT = null; }");
+  pass("the clock: no overlapping turns, a stuck turn is given up on, a burst after a tap or a change, all four pages on it");
+
+  /* THROTTLING: Retry-After is obeyed (capped at a minute), and while it is in
+     force the other LIST calls wait for it too. Workbook calls do not join it. */
+  {
+    const realFetch = global.fetch, realTimeout = global.setTimeout;
+    const waits = [];
+    let answers = [];
+    global.setTimeout = (fn, ms) => { waits.push(Math.round(ms)); return realTimeout(fn, 0); };
+    global.fetch = async url => {
+      const a = answers.shift() || { status: 200 };
+      return { ok: a.status < 400, status: a.status, headers: { get: h => (h === "Retry-After" ? a.after || null : null) },
+               text: async () => "{\"value\":[]}" };
+    };
+    const lpath = { siteId: FSITE, fields: ["Title"] };
+    try {
+      CW._clearBackoff();
+      answers = [{ status: 429, after: "7" }];
+      await CW.listItems("Glass station", lpath);
+      assert.ok(waits[0] >= 7000 && waits[0] <= 7500, "a 429 naming seven seconds is waited out for seven, plus a little jitter: " + waits);
+      /* the fake timer returns at once, so the seven seconds are still running:
+         another list call, with no 429 of its own, waits for them first */
+      waits.length = 0;
+      await CW.listItems("Station people", lpath);
+      assert.ok(waits.length > 0 && waits.every(w => w > 6000 && w <= 7500),
+        "and another list call waits for the same back-off instead of firing into it: " + waits);
+      CW._clearBackoff(); waits.length = 0;
+      answers = [{ status: 503, after: "600" }];
+      await CW.listItems("Glass station", lpath);
+      assert.ok(waits[0] >= 60000 && waits.every(w => w <= 60500), "never more than a minute, whatever is asked: " + waits);
+      CW._clearBackoff(); waits.length = 0;
+      answers = [{ status: 429 }];
+      await CW.listItems("Glass station", lpath);
+      assert.deepStrictEqual(waits, [2000], "no Retry-After: the schedule it always had");
+      waits.length = 0;
+      answers = [{ status: 429, after: "9" }];
+      await CW.setFill("Production", "A1", "#FFFFFF").catch(() => {});
+      waits.length = 0;
+      await CW.listItems("Glass station", lpath);
+      assert.deepStrictEqual(waits, [], "a throttled workbook call does not hold the list calls back");
+    } finally {
+      global.fetch = realFetch; global.setTimeout = realTimeout; CW._clearBackoff();
+    }
+  }
+  pass("throttling: Retry-After obeyed and capped, one shared back-off for list calls, the workbook path apart");
+
+  /* SIGN-IN RENEWAL: a station page tries ssoSilent, then ONE full-page
+     redirect with prompt=none - never twice, never with a tap owed, never on
+     the office page, and only when Microsoft answered through this page's own
+     address. */
+  {
+    const calls = [];
+    const need = code => Object.assign(new Error(code), { name: "InteractionRequiredAuthError", errorCode: code });
+    let silent = "fail", sso = "fail", redirectBack = null;
+    const sess = {};
+    global.sessionStorage = { getItem: k => (k in sess ? sess[k] : null), setItem: (k, v) => { sess[k] = String(v); },
+                              removeItem: k => { delete sess[k]; } };
+    global.msal = { PublicClientApplication: function () {
+      return {
+        initialize: async () => {},
+        handleRedirectPromise: async () => { if (redirectBack) throw redirectBack; return null; },
+        getAllAccounts: () => [{ username: "station@example.test" }],
+        acquireTokenSilent: async () => { calls.push("silent"); if (silent === "fail") throw need("interaction_required"); return { accessToken: "S" }; },
+        ssoSilent: async r => {
+          calls.push("sso:" + r.loginHint + ":" + r.redirectUri);
+          if (sso === "fail") throw need("login_required");
+          if (sso === "timeout") throw Object.assign(new Error("timeout"), { name: "BrowserAuthError", errorCode: "monitor_window_timeout" });
+          silent = "ok"; return { accessToken: "S", account: { username: "station@example.test" } };
+        },
+        acquireTokenRedirect: async r => { calls.push("redirect:" + r.prompt + ":" + r.loginHint + ":" + r.redirectUri); },
+        loginPopup: async () => ({ account: { username: "station@example.test" } }),
+        acquireTokenPopup: async () => { calls.push("popup"); return { accessToken: "P" }; }
+      };
+    } };
+    window.location.pathname = "/glass.html";
+    const PAGE = "http://localhost/glass.html";
+    let idle = true;
+    const quiet = () => CW.token(CW.LIST_SCOPES, true).then(t => t, e => "ERR " + e.message);
+    try {
+      CW._setToken(null);
+      await CW.initAuth();
+      /* the office page: nothing registered, exactly as it has always been */
+      CW.stationRenew(null);
+      assert.strictEqual(await quiet(), "ERR permission needed: interaction_required");
+      assert.deepStrictEqual(calls, ["silent"], "a page that is not a station page makes no renewal attempt at all");
+      /* a station page, and the hidden attempt works */
+      CW.stationRenew(() => idle);
+      calls.length = 0; sso = "ok";
+      assert.strictEqual(await quiet(), "S");
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE, "silent"],
+        "ssoSilent with the account's login hint, and nobody is asked to tap anything");
+      /* the hidden attempt needs interaction: ONE redirect, prompt=none */
+      silent = "fail"; sso = "fail"; calls.length = 0;
+      assert.strictEqual(await quiet(), "ERR permission needed: interaction_required",
+        "what the page sees is what it always saw: its Sign in again button is the fallback");
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE, "redirect:none:station@example.test:" + PAGE]);
+      assert.ok(Number(sess.cw_renewtried) > 0, "and the redirect is marked before the page leaves");
+      calls.length = 0;
+      await quiet(); await quiet();
+      assert.deepStrictEqual(calls, ["silent", "silent"], "a page whose attempt failed does not try again on every request");
+      /* the page comes back still unsigned (a reload: fresh memory, same tab) */
+      CW._clearBackoff(); calls.length = 0;
+      await quiet();
+      assert.deepStrictEqual(calls, ["silent", "sso:station@example.test:" + PAGE],
+        "back from the redirect and still unsigned: NO second redirect - it cannot loop");
+      redirectBack = need("login_required");
+      await CW.initAuth();                       // must not throw: the page starts and shows its button
+      delete sess.cw_renewtried;
+      await assert.rejects(CW.initAuth(), /login_required/, "any other time, a redirect error stops the start as it always did");
+      redirectBack = null;
+      /* a tap is owed: no redirect */
+      CW._clearBackoff(); calls.length = 0; idle = false;
+      await quiet();
+      assert.ok(!calls.some(c => c.indexOf("redirect") === 0) && sess.cw_renewtried === undefined,
+        "never a redirect while a tap is queued unsent");
+      /* the hidden attempt timed out - this page's address is not registered */
+      CW._clearBackoff(); calls.length = 0; idle = true; sso = "timeout";
+      await quiet();
+      assert.ok(!calls.some(c => c.indexOf("redirect") === 0),
+        "and none when Microsoft did not answer through this page's own address");
+      assert.ok(!calls.some(c => c === "popup"), "a quiet call never opens a popup, through any of it");
+    } finally {
+      CW.stationRenew(null); CW._clearBackoff(); CW._setToken(() => "t");
+      delete window.location.pathname; delete global.msal;
+    }
+    ["station.js", "welding.js", "glazing.js", "fabrication.js"].forEach(f =>
+      assert.ok(/CW\.stationRenew\(\(\) => !/.test(src(f)), f + " registers, with its own 'nothing is owed'"));
+    assert.ok(src("app.js").indexOf("stationRenew") < 0 && src("sales.js").indexOf("stationRenew") < 0,
+      "and the office and Sales pages do not");
+  }
+  pass("sign-in renewal: ssoSilent, then one prompt=none redirect; no loop, no redirect with a tap owed, office untouched");
 
   /* ================= 16. what the station page cannot do ================= */
   const stationSrc = src("station.js"), glassSrc = src("glass.html"), coreSrc = src("station-core.js");

@@ -63,7 +63,7 @@ try { READYFIRST = localStorage.getItem(READY_KEY) === "1"; } catch (e) {}
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
-let refreshT = null, retryT = null, buildT = null, peopleT = null, lockT = null;
+let retryT = null, buildT = null, peopleT = null;
 let flushing = false;
 const DELTA_OFF_MS = 300000;
 let DELTA_OFF = 0;
@@ -72,13 +72,13 @@ const deltaOff = () => !!(DELTA_OFF && Date.now() - DELTA_OFF < DELTA_OFF_MS);
 /* ---- who is on the station -------------------------------------------------
    The name is not a login. It decides nothing about permission - the station
    account's own access does that - and everything about whose name goes into
-   the log. Ten minutes without a tap and the picker comes back, because the
-   tablet is passed around. */
+   the log. There is no idle lock (owner, 2026-10-02): the name stays, across
+   reloads and new builds, until somebody presses Switch or the person leaves
+   `Station people`. A tap is logged under whoever was picked last. */
 function loadPerson() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(PERSON_KEY) || "null"); } catch (e) { raw = null; }
   if (!raw || !raw.name) return;
-  if (ST.personExpired(raw.at, Date.now(), ST.PERSON_LOCK_MS)) return;
   const hit = PEOPLE.find(p => p.name === raw.name);
   if (!hit) return;
   PERSON = hit; LAST_TAP = Number(raw.at) || Date.now();
@@ -102,11 +102,6 @@ function pickPerson(p) { PERSON = p; PINFOR = null; PINTYPED = ""; PINBAD = fals
 function switchPerson() {
   PERSON = null; PINFOR = null; PINTYPED = ""; PINBAD = false;
   clearSearch(); savePerson(); render();
-}
-function lockIfIdle() {
-  if (!PERSON) return;
-  if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  PERSON = null; clearSearch(); savePerson(); render();
 }
 function who() { return PERSON ? PERSON.name : ""; }
 /* One stage here, so anybody signed in holds it. canStage is still asked - a
@@ -498,6 +493,7 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
+    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     render();
     flushQueue();
@@ -532,6 +528,7 @@ function tap(id, delta, part) {
   /* queued first, drawn second: boardNow() lays the queue over the list, so the
      new number is on screen before the write has left the tablet */
   queueTap(rec, value, part);
+  TICK.burst();
   render();
   flushQueue();
 }
@@ -965,14 +962,16 @@ async function checkBuild() {
   } catch (e) { /* offline or blocked - the board is what matters */ }
 }
 
-/** One turn of the ten-second clock. A named function rather than a closure
-    inside setInterval, so a test can take exactly one turn of it. */
+/** One turn of the clock (STU.stuTicker: every five seconds, every two for a
+    while after a tap or a change, never two turns at once). A named function,
+    so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
   await pollList();
   if (await NOTES.poll()) render();
 }
+const TICK = STU.stuTicker(tickOnce);
 
 /* ---- the page ---- */
 async function start() {
@@ -1022,18 +1021,17 @@ async function start() {
      retype the first shift's note */
   await NOTES.read();
   await flushQueue();                            // taps owed from a previous visit
-  if (refreshT) clearInterval(refreshT);
-  refreshT = setInterval(tickOnce, ST.REFRESH_MS);
+  TICK.start();
   if (peopleT) clearInterval(peopleT);
   peopleT = setInterval(readPeople, PEOPLE_MS);
-  if (lockT) clearInterval(lockT);
-  lockT = setInterval(lockIfIdle, 15000);
   if (buildT) clearInterval(buildT);
   checkBuild(); buildT = setInterval(checkBuild, BUILD_MS);
 }
 
 (async function boot() {
   STU.stuApplyTheme(STU.stuThemeNow());
+  /* an expired sign-in renews itself when it can - never while a tap is owed */
+  if (CW.stationRenew) CW.stationRenew(() => !Object.keys(QUEUE).length && !Object.keys(LOGQ).length);
   $("#signinbtn").onclick = async () => {
     try { await CW.signIn(CW.LIST_SCOPES); await start(); }
     catch (e) { STU.stuGate(true, "Sign-in failed:\n" + ((e && e.message) || e)); }

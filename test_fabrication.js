@@ -651,6 +651,57 @@ const pass = m => { n++; console.log("  ok  " + m); };
   assert.strictEqual(T("ASSIGN_OK"), null, "a first read that fails is not 'missing': still unknown");
   pass("P1 the tablet gate: unknown locks, missing is Part A, read uses the index, a blip keeps the last good read");
 
+  /* 2026-10-02: the assignments come by DELTA through the shared reader
+     (STU.stuListReader), not a full read every tick - and the gate still
+     fails closed until the list has really been read (HISTORY B32). */
+  {
+    const AC = [];
+    let aMode = "refused", aFeed = give(2);
+    const blip = tctx.CW.listItems;
+    tctx.CW.listDelta = async (name, o) => {
+      AC.push(name + ":" + (o.token || ""));
+      if (aMode === "refused") throw new Error("GET /sites/s/lists/x -> 403 {\"error\":{\"code\":\"accessDenied\"}}");
+      if (aMode === "missing") return null;
+      return { items: aFeed.map(x => ({ id: x.id, fields: x.fields || {}, removed: !!x.removed })), next: "tok" + AC.length };
+    };
+    tctx.CW.isRefused = e => /-> 403/.test((e && e.message) || "");
+    tctx.CW.isDeltaRestart = () => false;
+    tctx.CW.listItems = async () => { AC.push("FULL"); return []; };
+    const again = () => T("ASG.offAt = 0; readAssign()");
+    setAssign(null);
+    T("ASG.items = null; ASG.token = null; ASG.ready = false; ASG.deltaOffAt = 0;");   // a reader that has read nothing
+    await again();
+    assert.deepStrictEqual([T("ASSIGN_OK"), T("mayTap(recordById('1'), 'frames')")], [null, false],
+      "a first read that is REFUSED is not 'missing': unknown, and the gate stays shut");
+    aMode = "ok";
+    await again();
+    assert.deepStrictEqual([T("ASSIGN_OK"), T("mayTap(recordById('1'), 'frames')")], [true, true], "read: the index decides");
+    assert.strictEqual(AC[AC.length - 1], T("FABC.FB_ASSIGN_LIST") + ":", "the first read is one enumeration");
+    aFeed = [{ id: "9", removed: true }];
+    await again();
+    assert.ok(/:tok\d+$/.test(AC[AC.length - 1]), "and every read after it is a delta on the reader's own token");
+    assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), false, "a row taken away in a delta page closes the line");
+    aFeed = give(2);
+    await again();
+    assert.strictEqual(T("mayTap(recordById('1'), 'frames')"), true, "and one given back opens it");
+    aMode = "refused";
+    await again();
+    assert.deepStrictEqual([T("ASSIGN_OK"), T("mayTap(recordById('1'), 'frames')")], [true, true],
+      "a refusal after a good read keeps the last good index: the gate does not flap");
+    aMode = "missing";
+    await again();
+    assert.strictEqual(T("ASSIGN_OK"), false, "only a list that is positively not there is Part A");
+    assert.ok(AC.indexOf("FULL") < 0, "and the whole list is never read the plain way while delta is served");
+    assert.ok(src("fabrication.js").indexOf("CW.listItems(F.FB_ASSIGN_LIST") < 0, "no full read of it is left in the page");
+    tctx.CW.listItems = blip; tctx.CW.isDeltaRestart = () => true;
+    tctx.CW.listDelta = async () => { throw new Error("no"); };
+  }
+  /* no idle lock (owner, 2026-10-02): a reload keeps the person, however old the stamp */
+  tmem.cw_fabperson = JSON.stringify({ name: "Person A", at: Date.now() - 7 * 86400000 });
+  T("PERSON = null; loadPerson();");
+  assert.deepStrictEqual([T("PERSON.name"), T("typeof lockIfIdle")], ["Person A", "undefined"]);
+  pass("assignments by delta, failing closed until read; the person survives a reload and there is no idle lock");
+
   /* P2: holding 2 of 10, All and None are refused with the hint; + works */
   setAssign(true, give(2));
   T("QUEUE = {}; HINT = {}; tap('1', 'frames', 'all')");

@@ -18,7 +18,8 @@
    It is used on the same shared tablet as the glass page, signed in once with
    the same shared station account and then passed between people for weeks. So:
    the person picks their name (and their PIN) before they can move anything,
-   the name locks itself after ten quiet minutes, every tap shows on screen at
+   the name stays until somebody presses Switch (no idle lock since
+   2026-10-02), every tap shows on screen at
    once and is owed rather than awaited, the owed writes survive a reload in
    localStorage, and nothing on this page can open a modal or a consent popup
    while somebody is holding a frame.
@@ -59,7 +60,7 @@ let TYPED = false;              // the box changed since the last board draw
 let PERSON = null;
 let LAST_TAP = 0;
 let PINFOR = null, PINTYPED = "", PINBAD = false;
-let refreshT = null, retryT = null, buildT = null, peopleT = null, lockT = null;
+let retryT = null, buildT = null, peopleT = null;
 let flushing = false;
 const DELTA_OFF_MS = 300000;
 let DELTA_OFF = 0;
@@ -71,13 +72,13 @@ const saveTab = () => { try { localStorage.setItem(TAB_KEY, TAB); } catch (e) {}
 /* ---- who is on the station -------------------------------------------------
    The name is not a login. It decides nothing about permission - the station
    account's own access does that - and everything about whose name goes into
-   the log. Ten minutes without a tap and the picker comes back, because the
-   tablet is passed around. */
+   the log. There is no idle lock (owner, 2026-10-02): the name stays, across
+   reloads and new builds, until somebody presses Switch or the person leaves
+   `Station people`. A tap is logged under whoever was picked last. */
 function loadPerson() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(PERSON_KEY) || "null"); } catch (e) { raw = null; }
   if (!raw || !raw.name) return;
-  if (ST.personExpired(raw.at, Date.now(), ST.PERSON_LOCK_MS)) return;
   const hit = PEOPLE.find(p => p.name === raw.name);
   if (!hit) return;
   PERSON = hit; LAST_TAP = Number(raw.at) || Date.now();
@@ -103,11 +104,6 @@ function switchPerson() {
   /* the day sheet closes with the person: the next name must not be shown the
      last one's half-typed number (it stays in storage under whose it is) */
   clearSearch(); DAY.reset(); savePerson(); render();
-}
-function lockIfIdle() {
-  if (!PERSON) return;
-  if (!ST.personExpired(LAST_TAP, Date.now(), ST.PERSON_LOCK_MS)) return;
-  PERSON = null; clearSearch(); DAY.reset(); savePerson(); render();
 }
 function who() { return PERSON ? PERSON.name : ""; }
 /* One stage here, so anybody signed in holds it. canStage is still asked -
@@ -534,6 +530,7 @@ async function pollList() {
     ITEMS = ST.mergeDelta(ITEMS, d.items);
     if (d.next) TOKEN = d.next;
     READY = true; SOFT = ""; LASTREAD = Date.now();
+    if (d.items.length) TICK.burst();     // something moved: look again sooner for a while
     rebaseQueue();
     render();
     flushQueue();
@@ -568,6 +565,7 @@ function tap(id, part, delta) {
   /* queued first, drawn second: boardNow() lays the queue over the list, so the
      new number is on screen before the write has left the tablet */
   queueTap(rec, part, value);
+  TICK.burst();
   render();
   flushQueue();
 }
@@ -1017,14 +1015,16 @@ async function checkBuild() {
   } catch (e) { /* offline or blocked - the board is what matters */ }
 }
 
-/** One turn of the ten-second clock. A named function rather than a closure
-    inside setInterval, so a test can take exactly one turn of it. */
+/** One turn of the clock (STU.stuTicker: every five seconds, every two for a
+    while after a tap or a change, never two turns at once). A named function,
+    so a test can take exactly one turn of it. */
 async function tickOnce() {
   render();
   if (!PEOPLE_READ) await readPeople();
   await pollList();
   if (await NOTES.poll()) render();
 }
+const TICK = STU.stuTicker(tickOnce);
 
 /* ---- the page ---- */
 async function start() {
@@ -1072,22 +1072,21 @@ async function start() {
   /* the day sheets, once: whether today's is already saved */
   await DAY.read();
   await flushQueue();                            // taps owed from a previous visit
-  if (refreshT) clearInterval(refreshT);
-  refreshT = setInterval(tickOnce, ST.REFRESH_MS);
+  TICK.start();
   if (peopleT) clearInterval(peopleT);
   /* anybody else's sheets ride the ten-minute clock: a sheet moves once a day */
   peopleT = setInterval(() => {
     readPeople();
     DAY.read().then(() => { if (DAY.shown) render(); }, () => {});
   }, PEOPLE_MS);
-  if (lockT) clearInterval(lockT);
-  lockT = setInterval(lockIfIdle, 15000);
   if (buildT) clearInterval(buildT);
   checkBuild(); buildT = setInterval(checkBuild, BUILD_MS);
 }
 
 (async function boot() {
   STU.stuApplyTheme(STU.stuThemeNow());
+  /* an expired sign-in renews itself when it can - never while a tap is owed */
+  if (CW.stationRenew) CW.stationRenew(() => !Object.keys(QUEUE).length && !Object.keys(LOGQ).length);
   $("#signinbtn").onclick = async () => {
     try { await CW.signIn(CW.LIST_SCOPES); await start(); }
     catch (e) { STU.stuGate(true, "Sign-in failed:\n" + ((e && e.message) || e)); }
