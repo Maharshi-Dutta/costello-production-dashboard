@@ -941,11 +941,15 @@ Five columns (`Glass`, `GlazeTotal`, `GlazeDone`, `GlazeBy`, `GlazeAt`) added to
 
 Independent reviews: two on the filter (0 blockers, 2 minor, fixed); one on glass and door glazing (0 blockers, 7 minor, 5 fixed, 2 documented in the spec). `Modified` confirmed selectable on the live lists by a read-only probe. Suites: fabrication 34, pages 6/6, rest unchanged. Rigs: `fab_check` 19/19, `fab_view_check` 20/20, `fab_glass_check` 12/12, `fab_check_b` 16/16.
 
-### C/2026-10-0X — to be filled at ship
+### C/2026-10-02 (second ship) — build 20261002-1313
 
-Stations see each other (A44, B37, B38, note [[stations-see-each-other]]), branch
-`cross-station-direct-read`. The manager adds commits, build number and suite
-counts here when it ships.
+Stations see each other (A44, B37, B38, note [[stations-see-each-other]]), branch `cross-station-direct-read`: the two unpushed branches `glass-sees-fabrication` and `glazing-ready-chips` merged in, then `00128c2` (shared reader, hotmelt sees cut and Tuff, no idle lock, 5 s tick, assignments by delta, `Retry-After`, sign-in renewal), `6058852` (glazing and fabrication tablets read the other stations' lists, the office stops the three status feeds, office polls together), `f0ab890` (fix pass), `314d114` (burst removed, docs), then the build stamp.
+
+No list or column was created. The `Glass` and `Fabrication` columns of `Glazing station` now hold yes/no facts off the sheet; the first office load after the ship writes them onto every row once. `Glass` on `Fabrication station` is unread and unwritten.
+
+Two independent reviews, 0 blockers, 4 major, about 15 minor; one fix pass, then the burst removed after the rig still measured the welding account over its request limit. Suites: pages 6/6, station 289, glazing 69, fabrication 37, welding 66, glasscolour 73, john 30, rest unchanged. Rig `cross_check.js` 43/43 on stubbed lists (150 ms a call): a tap shows on another tablet in about 1 to 3 s, 5.2 s at worst, and on the office board in about 1 to 2.5 s, 5.3 s at worst; with the office closed the chips still update. Requests a minute, idle / every tablet tapping each 10 s: glass account 84 / 138, welding account (one welding and nine fabrication tablets) 336 / 516, office 100 / 134.
+
+Not proven before the ship: the automatic sign-in renewal (needs the four tablet page addresses registered as redirect addresses, then two days on a real tablet) and real throttling.
 
 ---
 
