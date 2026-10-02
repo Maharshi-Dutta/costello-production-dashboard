@@ -959,6 +959,46 @@ function tabSearch(tabs, tab, q, filter) {
   return { tab: here, other: other, more: a ? b : 0 };
 }
 
+/* ---- the glass tablets see fabrication (2026-10-01) -------------------------
+   docs/specs/2026-10-01-glass-sees-fabrication.md. Read only, tablet only. The
+   two are named glass* here, not fab*: this file is also loaded beside app.js,
+   which owns the fab and FAB_ names. ST exports them as fabOfJob / glassWaiting. */
+/** One job's fabrication, summed over its product groups. `groups` is that
+    job's records as fabrication-core reads them (FABC.fbCards(...)[n].groups).
+    Only `lines` is counted - never `extra`, where door glazing lives.
+    state: "none" no fabrication rows · "notstarted" · "progress" · "done"
+    (every line full, or the job is finished on the sheet: `sheet`).
+    parts: { frames: {done,total}, ... }, only parts with a total above 0. */
+function glassFabOf(groups) {
+  const parts = {};
+  let done = 0, total = 0, sheet = false;
+  (groups || []).forEach(r => {
+    if (!r) return;
+    if (r.sheetDone) sheet = true;
+    (r.lines || []).forEach(l => {
+      const t = Math.max(0, Math.round(stNum(l && l.total, 0)));
+      if (!(t > 0)) return;
+      const d = stClamp(l.done, t);
+      const p = parts[l.part] || (parts[l.part] = { done: 0, total: 0 });
+      p.done += d; p.total += t; done += d; total += t;
+    });
+  });
+  if (!(total > 0)) return { state: "none", sheet: false, parts: {} };
+  return { state: sheet || done >= total ? "done" : done > 0 ? "progress" : "notstarted",
+           sheet: sheet, parts: parts };
+}
+/** Fabrication is done and this person's own glass is not: the job to do
+    first. `stages` are the stages the person holds on this tablet. "Not
+    complete" is the card's own "N left" (stageLeft), and tuffOwed for tuff.
+    Only a job still In production waits, and a glass stage the office has
+    locked (OfficeDone) is not this person's to finish - tuff is outside the
+    lock, as everywhere. */
+function glassWaiting(job, fab, stages) {
+  if (!job || !job.active || !fab || fab.state !== "done") return false;
+  return heldStages(stages).some(k => k === TUFF_STAGE ? tuffOwed(job)
+    : !job.officeDone && stageLeft(job, k) > 0);
+}
+
 /** One job's record whatever its Active is, or null. The office drawer uses
     this rather than the board: a job that has been delivered is off the
     floor's screen, but what the floor recorded on it is still worth reading,
@@ -2229,7 +2269,7 @@ const ST = {
   inProduction, sectionInProduction, glassTotal, tuffTotal, officeSeed, officeComplete,
   glassSlice, feederFields, seedFields, feedPlan, sliceHash,
   jobBoard, jobRecord, jobRecords, jobKey: stKey, boardFilter, glassWords, leftWords,
-  glassTabs, tabSearch, GLASS_GONE,
+  glassTabs, tabSearch, GLASS_GONE, fabOfJob: glassFabOf, glassWaiting,
   stageLeft, heldStages, jobLefts, boardLefts, applyTap, boardDiff, mergeDelta,
   stationPeople, canStage, pinOk, personExpired,
   floorOnly, tapFields, logFields, logRows, logFilter, logCounts, logLast

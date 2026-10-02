@@ -112,6 +112,24 @@ deterrent on a shared device, not security; the real boundary is site
 membership. Graph has no push; 10 s delta polling is the real-time mechanism.
 Jobs reach the floor only while an office dashboard is open.
 
+**The glass tablets see fabrication (2026-10-01,
+[spec](specs/2026-10-01-glass-sees-fabrication.md)).** Tablet only, read only.
+`glass.html` loads `fabrication-core.js`, and `station.js` (`readFab`) reads
+the `Fabrication station` list by delta on the board's own ten-second clock.
+Each card gets one line under its counters, summed over the job's product
+groups (`ST.fabOfJob`, fed `FABC.fbOfficeBoard`'s records; door glazing is not
+counted): not started (muted), in progress (lavender), done (purple, or green
+when the job is finished on the sheet). A job whose fabrication is done while
+the signed-in person's own stage still has glass left (`ST.glassWaiting`: the
+card's own "N left", tuff owed for a tuff holder; not a job the office has
+locked, not one that has left In production) gets a red badge, and the header
+a capsule "N waiting on glass" that toggles a filter. No sort change; the
+filter is not remembered and clears where the search clears.
+It is a **separate lookup** — `CW.stationSite("floor")`, its own site id and
+token in `GFAB` — and never touches the glass lists' pin, token or problem
+state. If the site or list cannot be read every card says "Fabrication: not
+available" and it is asked again a minute later; glass works as before.
+
 ## See also
 
 - [[export]] — previous: export to Excel / PDF

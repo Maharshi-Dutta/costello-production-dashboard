@@ -301,7 +301,7 @@ const stationFetch = async (url, init) => {
 /** `search` is the query string this fake device was opened with - the page
     reads `location.search` for `?stage=` (2026-09-21). Omitted is a plain
     `glass.html`, which is what every test before that feature assumed. */
-function newStation(search) {
+function newStation(search, fab) {
   const sb = {
     console: console, setTimeout: setTimeout, clearTimeout: clearTimeout,
     setInterval: () => 0, clearInterval: clearInterval,
@@ -312,6 +312,10 @@ function newStation(search) {
   };
   sb.globalThis = sb;
   vm.createContext(sb);
+  /* since 2026-10-01 glass.html also loads fabrication-core.js, before these
+     two. Only section 15d asks for it (`fab`): every older test runs the page
+     without, where the feature is off and sends no request. */
+  if (fab) vm.runInContext(src("fabrication-core.js"), sb, { filename: "fabrication-core.js" });
   /* glass.html loads station-ui.js before station.js (the day sheet lives there) */
   vm.runInContext(src("station-ui.js"), sb, { filename: "station-ui.js" });
   vm.runInContext(src("station.js"), sb, { filename: "station.js" });
@@ -5019,6 +5023,230 @@ const person = (name, stages, pin, active, station) =>
   SQ("if (retryT) { clearTimeout(retryT); retryT = null; }");
   delete mem.cw_stationq;
   pass("a `glazed` tap queued by an old build is dropped on replay: no request, no error, no data touched");
+
+  /* ================= 15d. THE GLASS TABLETS SEE FABRICATION (2026-10-01) ==========
+     docs/specs/2026-10-01-glass-sees-fabrication.md. Read only: one line per
+     card from the `Fabrication station` list, a badge and a filter for the jobs
+     fabrication has finished and this person has not. */
+  const FBC = require("./fabrication-core.js");
+  const fbRow = (title, f, id) => item(Object.assign({ Title: title, Job: title.split("|")[0],
+    Group: title.split("|")[1], Section: "In production", Active: "Yes", OnSheet: "Yes" }, f), id);
+  const fabOne = rows => { const c = FBC.fbOfficeBoard(rows)[0]; return ST.fabOfJob(c ? c.groups : []); };
+  assert.deepStrictEqual(ST.fabOfJob([]), { state: "none", sheet: false, parts: {} }, "no rows: none");
+  assert.strictEqual(fabOne([fbRow("R1|PVC DOOR", { Frames: 2, Sashes: 2 }, 1)]).state, "notstarted");
+  let fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 2, Sashes: 2, SashesDone: 1 }, 1),
+                   fbRow("R1|CASEMENT WINDOWS", { Frames: 3, FramesDone: 1, Transoms: 0, TransomsDone: 0,
+                                                  GlazeTotal: 5, GlazeDone: 5 }, 2)]);
+  assert.strictEqual(fo.state, "progress");
+  assert.deepStrictEqual(fo.parts, { frames: { done: 3, total: 5 }, sashes: { done: 1, total: 2 } },
+    "summed across the job's two groups; a part with total 0 is left out; door glazing is not a part");
+  fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 2, GlazeTotal: 2, GlazeDone: 0 }, 1)]);
+  assert.strictEqual(fo.state, "done", "every line full is done - door glazing, in `extra`, is not counted");
+  assert.strictEqual(fo.sheet, false);
+  fo = fabOne([fbRow("R1|PVC DOOR", { Frames: 2, FramesDone: 0, Section: "Ready to fit", Active: "No" }, 1)]);
+  assert.deepStrictEqual([fo.state, fo.sheet], ["done", true], "a finished section on the sheet gives done");
+  pass("fabOfJob: none / not started / in progress / done, summed over groups, zero parts out, finished section done");
+
+  const gRec = f => ST.jobBoard([item(Object.assign({ Title: "R1", Job: "R1", Total: 6, TuffTotal: 0,
+    Cut: 0, Hotmelt: 0, Tuff: 0, Seq: 1, Active: "Yes", OfficeDone: "No" }, f), 1)])[0];
+  const FDONE = { state: "done" }, FPROG = { state: "progress" };
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), FDONE, ["cut"]), true, "fab done, cutting not complete");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), FPROG, ["cut"]), false, "fab not done: nothing waits");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2 }), { state: "off" }, ["cut"]), false, "nor when it cannot be read");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, Hotmelt: 0 }), FDONE, ["cut"]), false,
+    "a cutter whose cutting is complete is not waiting, though hotmelting is not done");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, Hotmelt: 0 }), FDONE, ["hotmelt"]), true, "the hotmelter is");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, TuffTotal: 4, Tuff: 1 }), FDONE, ["cut", "tuff"]), true,
+    "tuff owed counts for somebody who holds the tuff counter");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 6, TuffTotal: 4, Tuff: 1 }), FDONE, ["cut"]), false,
+    "and not for somebody who does not");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2, OfficeDone: "Yes" }), FDONE, ["cut"]), false,
+    "glass the office has locked is not this person's to finish");
+  assert.strictEqual(ST.glassWaiting(gRec({ Cut: 2, Active: "No" }), FDONE, ["cut"]), false,
+    "and a job that has left In production is not waiting");
+  pass("glassWaiting: only fab done AND this person's own stage not complete; tuff owed for a tuff holder");
+
+  /* the page: its own lookup of the floor site, never the glass one's */
+  mem.cw_stationstage = "cut";
+  delete mem.cw_stationq; delete mem.cw_stationlogq; delete mem.cw_person;
+  /* a page without fabrication-core.js (every sandbox above) has no such feature */
+  reset();
+  assert.strictEqual(S("fabOf('R7001')"), null);
+  assert.strictEqual(await S("readFab()"), false);
+  assert.strictEqual(S("fabLineHtml({ job: 'R7001' })"), "", "it draws no line");
+  assert.strictEqual(REQ.length, 0, "and asks nothing");
+  const sbF = newStation("", true);
+  const SF = code => vm.runInContext(code, sbF);
+  await settle();
+  const FCALLS = [];
+  let fabMode = "refused", fabFeed = [], fabGate = null, fabNoNext = false;
+  const fakeCW = Object.assign(Object.create(CW), {
+    stationSite: async which => { FCALLS.push("site:" + which); return which === "floor" ? "FLOORSITE" : FSITE; },
+    forgetStationSite: (look, which) => { FCALLS.push("forget:" + which); },
+    listDelta: async (name, o) => {
+      FCALLS.push("delta:" + name + ":" + o.siteId + ":" + (o.token || ""));
+      if (name !== "Fabrication station") return { items: [], next: "glass2" };     // the glass list's own poll
+      if (fabGate) await fabGate;                                                   // a slow reply, held by the test
+      if (fabMode === "refused") throw new Error("GET /sites/FLOORSITE/lists -> 403 {\"error\":{\"code\":\"accessDenied\"}}");
+      if (fabMode === "missing") throw new Error("GET /sites/FLOORSITE/lists -> 404 {\"error\":{\"code\":\"itemNotFound\"}}");
+      /* what graph.js makes of any 4xx from the delta endpoint */
+      if (fabMode === "throttled") throw new Error("delta must be restarted: GET /sites/FLOORSITE/lists -> 429 {\"error\":{\"code\":\"activityLimitReached\"}}");
+      return { items: fabFeed.map(x => ({ id: x.id, fields: x.fields, removed: !!x.removed })),
+               next: fabNoNext ? null : "tok" + FCALLS.length };
+    }
+  });
+  ["listItems", "listPatch", "listAdd", "listUpsert", "listDelete"].forEach(k => {
+    fakeCW[k] = async name => { FCALLS.push("OTHER:" + k + ":" + name); return null; };
+  });
+  sbF.CW = fakeCW;
+  SF("SITEID = " + JSON.stringify(FSITE) + "; TOKEN = 'tk'; READY = true; PEOPLE_READ = true; QUEUE = {}; LOGQ = {};");
+  SF("ITEMS = " + JSON.stringify([
+    item({ Title: "R7001", Job: "R7001", Customer: "Customer One", Total: 6, TuffTotal: 4, Seq: 1,
+           Active: "Yes", OfficeDone: "No", Cut: 4, Hotmelt: 2, Tuff: 0 }, "800"),
+    item({ Title: "R7002", Job: "R7002", Customer: "Customer Two", Total: 3, TuffTotal: 0, Seq: 2,
+           Active: "Yes", OfficeDone: "No", Cut: 0, Hotmelt: 0, Tuff: 0 }, "801")]) + ";");
+  SF("PEOPLE = [{ name: 'Person A', stages: ['cut'], pin: '' }, { name: 'Person T', stages: ['cut', 'tuff'], pin: '' }];");
+  SF("PERSON = PEOPLE[0]; LAST_TAP = Date.now(); render();");
+  const fHtml = () => SF("Object.keys(NODES).map(k => NODES[k].innerHTML).join('')");
+  assert.strictEqual(SF("Object.keys(NODES).length"), 2);
+  assert.ok(fHtml().indexOf("Fabrication") < 0 && SF("fabOf('R7001')") === null,
+    "until the first read has answered a card carries no fabrication line at all - not 'not available'");
+
+  assert.strictEqual(await SF("readFab()"), true, "the first answer, even a refusal, is a change to draw");
+  SF("render()");
+  assert.deepStrictEqual(FCALLS, ["site:floor", "delta:Fabrication station:FLOORSITE:"],
+    "it asks for the FLOOR site, and the list in it - and nothing else");
+  assert.strictEqual((fHtml().match(/Fabrication: not available/g) || []).length, 2,
+    "a list that will not be read (403) says so, muted, on every card");
+  assert.ok(fHtml().indexOf('class="fabl"') > 0 && fHtml().indexOf("fwait") < 0, "with no colour and no badge");
+  assert.strictEqual(EL["#gwait"].hidden, true, "and no capsule");
+  assert.deepStrictEqual([SF("SITEID"), SF("TOKEN"), SF("PROBLEM"), SF("SOFT"), SF("READY")], [FSITE, "tk", "", "", true],
+    "and the glass page's own site, token and state are exactly as they were");
+  assert.ok(fHtml().indexOf('data-stage="cut"') > 0, "the steppers are still there");
+  await SF("readFab()");
+  assert.strictEqual(FCALLS.length, 2, "and it is not asked again inside the minute: no retry storm");
+  SF("GFAB.offAt = 0;"); fabMode = "missing"; FCALLS.length = 0;
+  await SF("readFab()");
+  assert.deepStrictEqual(FCALLS.filter(c => c.indexOf("forget") === 0), ["forget:floor"],
+    "a 404 forgets the FLOOR channel's cached site and never the glass one's");
+  assert.strictEqual(SF("fabOf('R7001').state"), "off");
+  pass("the fabrication list unreadable: 'Fabrication: not available', glass untouched, no retry storm");
+
+  fabMode = "ok"; FCALLS.length = 0; SF("GFAB.offAt = 0;");
+  fabFeed = [fbRow("R7001|CASEMENT WINDOWS", { Frames: 4, FramesDone: 4, Sashes: 4, SashesDone: 1 }, "900")];
+  assert.strictEqual(await SF("readFab()"), true, "a read that changes a line says so");
+  SF("render()");
+  assert.ok(fHtml().indexOf('<div class="fabl f-progress">Fabrication: in progress · Frames 4/4 · Sashes 1/4</div>') > 0);
+  assert.strictEqual((fHtml().match(/class="fabl/g) || []).length, 1, "a job with no fabrication rows has no line");
+  const q2 = SF("qState(boardNow()[1])");
+  fabFeed = [fbRow("R7001|CASEMENT WINDOWS", { Frames: 4, FramesDone: 4, Sashes: 4, SashesDone: 4 }, "900")];
+  assert.strictEqual(await SF("readFab()"), true);
+  assert.ok(/^delta:Fabrication station:FLOORSITE:tok\d+$/.test(FCALLS[FCALLS.length - 1]),
+    "the second pass is a delta on its own token");
+  assert.strictEqual(SF("TOKEN"), "tk", "which is not the glass list's token");
+  assert.ok(SF("qState(boardNow()[0])").indexOf('"done"') > 0, "the line is in the card's signature");
+  assert.strictEqual(SF("qState(boardNow()[1])"), q2, "and the other card's signature has not moved");
+  SF("render()");
+  assert.ok(fHtml().indexOf('<div class="fabl f-done">Fabrication: done · Frames 4/4 · Sashes 4/4</div>') > 0);
+  assert.strictEqual((fHtml().match(/FABRICATION DONE — GLASS WAITING/g) || []).length, 1,
+    "fabrication done and two still to cut: the badge, on that card only");
+  /* the page writes the number; the stylesheet adds the words that fit */
+  assert.deepStrictEqual([EL["#gwait"].hidden, EL["#gwait"].textContent], [false, "1"]);
+  pass("the line in each state, the badge and the capsule; a fabrication tap moves one card's signature");
+
+  /* A DELTA PAGE IS ONLY WHAT MOVED: it is merged, and the other jobs keep
+     their fabrication. Job numbers are matched through fbKey on both sides. */
+  const fState = j => SF("fabOf(" + JSON.stringify(j) + ").state");
+  fabFeed = [fbRow("R7002|PVC DOOR", { Frames: 2, FramesDone: 1 }, "901"),
+             fbRow("R-7003|PVC DOOR", { Job: "R-7003", Frames: 2 }, "902")];
+  assert.strictEqual(await SF("readFab()"), true);
+  assert.deepStrictEqual([fState("R7001"), fState("R7002")], ["done", "progress"],
+    "a page carrying only the changed rows leaves the other job's fabrication intact");
+  assert.strictEqual(fState(" r-7003 "), "notstarted", "case, spaces and punctuation in a job number still match");
+  fabFeed = [{ id: "901", fields: {}, removed: true }];
+  await SF("readFab()");
+  assert.deepStrictEqual([fState("R7001"), fState("R7002")], ["done", "none"], "a removed row goes, and only that row");
+  const tokWas = SF("GFAB.token");
+  fabNoNext = true; fabFeed = [];
+  await SF("readFab()");
+  assert.strictEqual(SF("GFAB.token"), tokWas, "a reply with no deltaLink keeps the token it had");
+  fabNoNext = false;
+  /* a throttled poll (any 4xx that is not 403 / 404) keeps the last read */
+  fabMode = "throttled";
+  assert.strictEqual(await SF("readFab()"), false);
+  assert.deepStrictEqual([fState("R7001"), SF("GFAB.offAt > 0")], ["done", true],
+    "a failure that is not a refusal keeps the last read, and waits its minute");
+  fabMode = "ok"; SF("GFAB.offAt = 0;");
+  await SF("readFab()");                                   // a fresh enumeration is the whole list
+  fabFeed = [fbRow("R7001|CASEMENT WINDOWS", { Frames: 4, FramesDone: 4, Sashes: 4, SashesDone: 4 }, "900")];
+  SF("GFAB.token = null;"); await SF("readFab()");
+  /* TWO READS AT ONCE (review blocker): the second is refused while the first
+     is in the air, and the reply is merged or replaced by the token it WENT
+     OUT with - here a delta page of one changed row, with the token gone by
+     the time it lands */
+  let letGo; fabGate = new Promise(r => { letGo = r; });
+  fabFeed = [fbRow("R7002|PVC DOOR", { Frames: 2, FramesDone: 2 }, "901")];
+  FCALLS.length = 0;
+  const r1 = SF("readFab()");
+  await settle(5);
+  assert.strictEqual(await SF("readFab()"), false, "a read in the air refuses a second one");
+  SF("GFAB.token = null;");
+  letGo(); fabGate = null;
+  await r1;
+  assert.strictEqual(FCALLS.filter(c => c.indexOf("delta:Fabrication") === 0).length, 1, "one request, not two");
+  assert.deepStrictEqual([fState("R7001"), fState("R7002"), SF("GFAB.items.length"), SF("GFAB.busy")],
+    ["done", "done", 2, false], "the one changed row was merged in: the list was not replaced by it");
+  fabFeed = [{ id: "901", fields: {}, removed: true }];
+  await SF("readFab()");
+  pass("fabrication deltas: merged, removed, token kept, a throttle keeps the last read, overlapping reads cannot replace the list");
+
+  SF("setWait(true); render();");
+  assert.strictEqual(SF("Object.keys(NODES).join(',')"), "R7001", "the filter shows only the waiting cards");
+  assert.strictEqual(EL["#gwait"].className, "on");
+  SF("QUERY = 'R7002'; render();");
+  assert.ok(EL["#board"].innerHTML.indexOf("No job waiting on glass") > 0, "and works with the search box");
+  SF("clearSearch(); render();");
+  assert.strictEqual(SF("WAITONLY"), false, "it is cleared where the search is cleared");
+  assert.strictEqual(SF("Object.keys(NODES).length"), 2);
+  /* cutting complete: Person A (cut only) is no longer waiting; Person T, who
+     holds the tuff counter, still is - the job owes tuff */
+  /* turned on from Finished it goes to On floor; turned off it goes back, and
+     the jump is never what gets remembered */
+  SF("TAB = 'finished'; saveTab(); setWait(true); saveTab();");
+  assert.deepStrictEqual([SF("TAB"), mem.cw_glasstab], ["floor", "finished"], "the jump to On floor is not saved");
+  SF("onSearch('R7'); onSearch('');");
+  assert.strictEqual(mem.cw_glasstab, "finished", "not even by a search begun and cleared under the filter");
+  SF("setWait(false);");
+  assert.strictEqual(SF("TAB"), "finished", "and turning the filter off puts the person back where they were");
+  SF("TAB = 'floor'; saveTab();");
+  /* a read that cannot be made does NOT drop the filter, and the capsule stays to tap */
+  SF("setWait(true); var keepItems = GFAB.items; GFAB.items = null; render();");
+  assert.deepStrictEqual([SF("WAITONLY"), EL["#gwait"].hidden], [true, false],
+    "an unavailable read leaves the filter on, with the capsule still there to turn it off");
+  SF("GFAB.items = keepItems; render();");
+  assert.strictEqual(SF("WAITONLY"), true);
+  /* cutting complete: Person A (cut only) is no longer waiting; Person T, who
+     holds the tuff counter, still is - the job owes tuff */
+  SF("ITEMS[0].fields.Cut = 6; render();");
+  assert.deepStrictEqual([EL["#gwait"].hidden, SF("WAITONLY")], [true, false],
+    "with nothing left waiting on a good read the capsule goes and the filter lets go");
+  SF("PERSON = PEOPLE[1]; render();");
+  assert.strictEqual(EL["#gwait"].textContent, "1", "tuff owed keeps it waiting for a tuff holder");
+  assert.deepStrictEqual(FCALLS.filter(c => !/^(site:floor|delta:Fabrication station:FLOORSITE:)/.test(c)), [],
+    "over all of it: the floor site and a delta of the one list - no write, no other read, no glass-site call");
+  pass("the waiting filter: on, with search, cleared with it, back to its tab, kept through a bad read; and no write anywhere");
+
+  /* one whole turn of the clock with the fabrication list refusing: the glass
+     list is still polled, and nothing about the glass page says anything is wrong */
+  fabMode = "refused"; FCALLS.length = 0; SF("GFAB.offAt = 0;");
+  await SF("tickOnce()");
+  assert.ok(FCALLS.some(c => c.indexOf("delta:Glass station:" + FSITE) === 0), "the glass delta went out");
+  assert.ok(FCALLS.some(c => c.indexOf("delta:Fabrication station:FLOORSITE") === 0), "and so did fabrication's, refused");
+  assert.deepStrictEqual([SF("PROBLEM"), SF("SOFT"), SF("READY"), SF("SITEID"), SF("fabOf('R7001').state")],
+    ["", "", true, FSITE, "off"], "glass is as it was; fabrication alone reads not available");
+  assert.ok(!FCALLS.some(c => /^OTHER:list(Patch|Add|Upsert|Delete)/.test(c) || c === "forget:own"),
+    "with no write and no forgetting of the glass site");
+  pass("a tick with the fabrication list refusing still does the glass poll, and leaves glass alone");
 
   /* ================= 16. what the station page cannot do ================= */
   const stationSrc = src("station.js"), glassSrc = src("glass.html"), coreSrc = src("station-core.js");
